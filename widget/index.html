@@ -117,10 +117,16 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
 .you{align-self:flex-end;max-width:80%;background:var(--message-surface);
   border-radius:var(--radius);padding:9px 13px;white-space:pre-wrap;word-break:break-word}
 .bot{white-space:pre-wrap;word-break:break-word;line-height:1.7}
+.bot code{padding:1px 5px;border-radius:5px;background:var(--accent);
+  font:12.5px ui-monospace,SFMono-Regular,Consolas,monospace}
+.bot pre{margin:10px 0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--accent);overflow-x:auto;white-space:pre;
+  font:12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+.bot strong{font-weight:600}
 
 /* Tool calls: a thin list, never a stack of bubbles. A dozen of them must
    still read as one quiet paragraph of activity. */
-.acts{display:flex;flex-direction:column;margin:-6px 0}
+.acts{display:flex;flex-direction:column;margin:-6px 0 -6px -6px}
 .act{display:flex;align-items:center;gap:7px;width:100%;height:26px;padding:0 6px;
   border-radius:6px;font-size:13px;color:var(--muted-foreground);text-align:left;
   transition:background .1s}
@@ -272,6 +278,27 @@ function verdict(out) {
   };
 }
 
+// Minimal markdown. Escaping runs FIRST and everything after it operates on
+// text that can no longer contain markup, so a model that emits
+// `<img onerror=...>` renders as characters rather than executing. Nothing
+// here creates a link: model output is untrusted, and a clickable URL in it
+// is a phishing surface the reader did not ask for.
+function md(src) {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const fences = [];
+  let t = esc(src).replace(/```[a-z]*\n?([\s\S]*?)```/g, (_, c) => {
+    fences.push(c.replace(/\n$/, ""));
+    return "\u0000" + (fences.length - 1) + "\u0000";
+  });
+  t = t
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/^#{1,6}\s+(.+)$/gm, "<strong>$1</strong>")
+    .replace(/^\s*[-*]\s+(.+)$/gm, "• $1");
+  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => "<pre>" + fences[i] + "</pre>");
+}
+
 const el = (t, cls, txt) => {
   const e = document.createElement(t);
   if (cls) e.className = cls;
@@ -420,7 +447,13 @@ function render(msgs) {
       continue;
     }
     acts = null;
-    tl.appendChild(el("div", m.role === "user" ? "you" : "bot", m.text));
+    if (m.role === "user") {
+      tl.appendChild(el("div", "you", m.text));
+    } else {
+      const d = el("div", "bot");
+      d.innerHTML = md(m.text);
+      tl.appendChild(d);
+    }
   }
 }
 

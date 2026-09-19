@@ -103,3 +103,18 @@ The test is void, and says so, if any of these hold:
 
 The rubric above was committed before the supporting ops were written. Its
 git history is the evidence.
+
+## Results
+
+| Run | Score | What it says |
+|---|---|---|
+| 2026-09-19, model-driven, `ling-3.0-flash-vl:free` | **6/20** | Summary sheet, Dashboard sheet and a real PivotTable created; no table filled, no charts, memo untouched. Ended mid-job with no answer and no tool call. |
+| 2026-09-19, control (`control.txt`, scripted) | **14/14** artifacts and judgement | Every required operation is expressible and lands correctly. Per-site totals exact against ground truth. |
+
+The control is run with `score.ps1 -Control` and is deliberately scored out
+of 14: it has no transcript, so the six process checks do not apply to it,
+and totalling them from the last model run would report a number nobody
+earned. It is not a pass. It isolates one variable -- whether the harness can
+express the job at all -- from the other -- whether the model can drive it.
+
+On this evidence the binding constraint is the model, not the harness.

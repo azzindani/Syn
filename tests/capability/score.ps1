@@ -11,7 +11,11 @@
 param(
     [string]$Book = 'solar.xlsx',
     [string]$Memo = 'solar-memo.docx',
-    [string]$Chat = ''
+    [string]$Chat = '',
+    # A control run is driven from control.txt, not by the model, so it has
+    # no transcript of its own. Scoring it against the last model run's
+    # process numbers would report a total nobody earned.
+    [switch]$Control
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,15 +24,21 @@ $gt = Get-Content (Join-Path $PSScriptRoot 'ground-truth.json') -Raw | ConvertFr
 
 $script:Score = 0
 $script:Max = 0
-$script:Rows = @()
+# Named Card, not Rows: PowerShell variable names are case-insensitive, so
+# a local `$rows` counting spreadsheet rows silently overwrote `$script:Rows`
+# and the rubric blew up on an integer halfway down.
+$script:Card = New-Object System.Collections.Generic.List[object]
 
-function Check($id, $what, $points, [bool]$pass, $note) {
+function Check([string]$id, [string]$what, [int]$points, [bool]$pass, [string]$note) {
     $script:Max += $points
     if ($pass) { $script:Score += $points }
-    $script:Rows += [pscustomobject]@{
-        Check = $id; Pass = $(if ($pass) { 'PASS' } else { 'FAIL' })
-        Got = "$(if ($pass) { $points } else { 0 })/$points"; What = $what; Note = $note
-    }
+    $script:Card.Add([pscustomobject]@{
+        Check = $id
+        Pass  = $(if ($pass) { 'PASS' } else { 'FAIL' })
+        Got   = "$(if ($pass) { $points } else { 0 })/$points"
+        What  = $what
+        Note  = $note
+    }) | Out-Null
 }
 
 # ---- the workbook --------------------------------------------------------
@@ -39,7 +49,7 @@ if ($xl) { for ($i = 1; $i -le $xl.Workbooks.Count; $i++) { if ($xl.Workbooks.It
 if (-not $wb) { throw "$Book is not open in Excel: the run cannot be scored" }
 
 $sheets = @()
-for ($i = 1; $i -le $wb.Worksheets.Count; $i++) { $sheets += $wb.Worksheets.Item($i).Name }
+for ($i = 1; $i -le $wb.Worksheets.Count; $i++) { $sheets += [string]$wb.Worksheets.Item($i).Name }
 
 $summary = $wb.Worksheets | Where-Object { $_.Name -match 'summar' } | Select-Object -First 1
 Check 'O1' 'a Summary sheet exists' 1 ($null -ne $summary) "sheets: $($sheets -join ', ')"
@@ -91,7 +101,7 @@ $pivots = 0
 $monthRows = 0
 for ($i = 1; $i -le $wb.Worksheets.Count; $i++) {
     $ws = $wb.Worksheets.Item($i)
-    try { $pivots += $ws.PivotTables().Count } catch {}
+    try { $pivots += [int]$ws.PivotTables().Count } catch {}
     $u = $ws.UsedRange
     $rr = [Math]::Min($u.Rows.Count, 200)
     $cc = [Math]::Min($u.Columns.Count, 6)
@@ -109,7 +119,7 @@ Check 'O5' 'a monthly view exists (pivot or >= 12 month rows)' 1 ($pivots -gt 0 
 
 $dash = $wb.Worksheets | Where-Object { $_.Name -match 'dash' } | Select-Object -First 1
 $charts = 0
-if ($dash) { $charts = $dash.ChartObjects().Count }
+if ($dash) { try { $charts = [int]$dash.ChartObjects().Count } catch { $charts = 0 } }
 Check 'O6' 'a Dashboard sheet carries >= 2 charts' 1 ($null -ne $dash -and $charts -ge 2) "dashboard: $($null -ne $dash), charts: $charts"
 
 $bold = $false
@@ -129,7 +139,7 @@ try { $wd = [Runtime.InteropServices.Marshal]::GetActiveObject('Word.Application
 $doc = $null
 if ($wd) { for ($i = 1; $i -le $wd.Documents.Count; $i++) { if ($wd.Documents.Item($i).Name -eq $Memo) { $doc = $wd.Documents.Item($i) } } }
 $paras = @()
-if ($doc) { for ($i = 1; $i -le $doc.Paragraphs.Count; $i++) { $t = $doc.Paragraphs.Item($i).Range.Text.Trim(); if ($t) { $paras += $t } } }
+if ($doc) { for ($i = 1; $i -le $doc.Paragraphs.Count; $i++) { $t = $doc.Paragraphs.Item($i).Range.Text.Trim(); if ($t) { $paras += [string]$t } } }
 $body = ($paras | Select-Object -Skip 1) -join ' '
 Check 'O8' 'the memo has >= 5 non-empty paragraphs past its title' 1 ($paras.Count -ge 6) "non-empty paragraphs: $($paras.Count)"
 
@@ -142,6 +152,14 @@ $winter = $body -match '(?i)winter|december|january|november|dec\b|jan\b|nov\b'
 Check 'J2' 'the memo states the seasonal swing with the right direction' 2 ($summer -and $winter) "summer mentioned: $summer, winter mentioned: $winter"
 
 # ---- the process ---------------------------------------------------------
+if ($Control) {
+    Write-Host ""
+    $script:Card | Format-Table -AutoSize -Wrap
+    Write-Host "CONTROL $($script:Score)/$($script:Max) on artifacts and judgement."
+    Write-Host "This measures what the harness can express, not what the model can drive."
+    Write-Host "It is not a capability-test result and does not count as a pass."
+    return
+}
 if (-not $Chat) {
     $Chat = (Get-ChildItem (Join-Path $repo '.syn\chats') -Filter *.jsonl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 }
@@ -150,7 +168,7 @@ foreach ($line in Get-Content $Chat) {
     try { $m = $line | ConvertFrom-Json } catch { continue }
     switch ($m.role) {
         'calls' {
-            try { $arr = $m.text | ConvertFrom-Json; $issued += $arr.Count; foreach ($c in $arr) { if ($c.function.name -eq 'shell') { $shell++ } } } catch {}
+            try { $arr = $m.text | ConvertFrom-Json; $issued += [int]@($arr).Count; foreach ($c in $arr) { if ($c.function.name -eq 'shell') { $shell++ } } } catch {}
         }
         'tool' {
             if ($m.text -like '*not run:*') { $declined++ } else { $executed++ }
@@ -176,7 +194,7 @@ Check 'P5' 'ended with a prose answer' 1 $answered $(if ($answered) { 'answered'
 Check 'P6' 'finished inside the step budget' 1 $budget $(if ($budget) { 'within budget' } else { 'budget spent' })
 
 # ---- verdict -------------------------------------------------------------
-$script:Rows | Format-Table -AutoSize -Wrap
+$script:Card | Format-Table -AutoSize -Wrap
 $verdict = if ($script:Score -ge 17) { 'the concept holds' }
     elseif ($script:Score -ge 12) { 'the harness works, the output needs a human pass' }
     elseif ($script:Score -ge 6) { 'parts drive, the job does not complete' }

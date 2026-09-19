@@ -70,9 +70,19 @@ fn sweep(d: &Path) {
     }
 }
 
-/// The log most recently written to, which is the run currently saying
-/// something. A finished run stops touching its file, so an active one
-/// wins on mtime without needing to know which processes are alive.
+/// A CLI prints this many lines just by starting up -- the env receipt and
+/// the banner drain. A log that has never got past them belongs to a
+/// process that has not been asked to do anything.
+const BANNER_LINES: usize = 3;
+
+/// The run worth watching: the most recently written log that belongs to a
+/// process actually doing something.
+///
+/// Most-recent alone is not enough. A run waits on the provider between
+/// steps and is silent for up to a minute at a time, while a console that
+/// has just spawned its child writes a banner and nothing else. On mtime
+/// the idle newcomer beat the working run, and the page followed it into
+/// an empty file. A log still on its banner is not a run.
 pub fn newest() -> Option<PathBuf> {
     let mut best: Option<(SystemTime, PathBuf)> = None;
     for e in fs::read_dir(dir()).ok()?.flatten() {
@@ -81,11 +91,18 @@ pub fn newest() -> Option<PathBuf> {
             continue;
         }
         let Ok(t) = e.metadata().and_then(|m| m.modified()) else { continue };
+        if lines_in(&p) <= BANNER_LINES {
+            continue;
+        }
         if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
             best = Some((t, p));
         }
     }
     best.map(|(_, p)| p)
+}
+
+fn lines_in(p: &Path) -> usize {
+    fs::read_to_string(p).map(|t| t.lines().count()).unwrap_or(0)
 }
 
 /// Lines after `since`, and the new count. Reading the whole file each poll
@@ -150,6 +167,43 @@ mod tests {
         let (n, lines) = read_from(&p, 99);
         assert_eq!(n, 1);
         assert!(lines.is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_console_that_has_only_just_started_does_not_outrank_a_working_run() {
+        let d = std::env::temp_dir().join(format!("syn-live-c-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        // A run mid-job, silent for a moment while it waits on the provider.
+        let run = d.join("100.log");
+        fs::write(&run, "RECEIPT env
+RECEIPT hand
+STEP read: a
+STEP write: b
+STEP write: c
+").unwrap();
+        // A console child that has just spawned and done nothing since.
+        let idle = d.join("200.log");
+        fs::write(&idle, "RECEIPT env
+RECEIPT mark=m1
+").unwrap();
+        let mut best: Option<(SystemTime, PathBuf)> = None;
+        for e in fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            let t = e.metadata().unwrap().modified().unwrap();
+            if lines_in(&p) <= BANNER_LINES {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
+                best = Some((t, p));
+            }
+        }
+        assert_eq!(
+            best.map(|(_, p)| p),
+            Some(run),
+            "a log still on its startup banner must not win over a run doing work"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 

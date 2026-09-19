@@ -535,11 +535,6 @@ function showAsk(p) {
   $("askwhy").textContent = p.why ? "reason given: " + p.why : "";
 }
 
-// Watch from the moment the page opens. Whatever run is printing right
-// now is the one worth showing, whoever started it.
-tailTimer = setInterval(tail, 2000);
-void tail();
-
 async function refresh() {
   const out = await cli("chat msgs");
   const cur = (out.match(/chat=(\S+)/) || [])[1];
@@ -705,6 +700,11 @@ window.addEventListener("keydown", e => {
   }
   catch (e) { tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message)); }
   box.focus();
+  // Watch from the moment the page opens: whatever run is printing now is
+  // the one worth showing, whoever started it. Last, because it touches
+  // bindings declared further down and `let` has no hoisting to lean on.
+  tailTimer = setInterval(tail, 2000);
+  void tail();
 })();
 </script>
 </body></html>

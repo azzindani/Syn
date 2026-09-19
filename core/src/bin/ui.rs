@@ -386,4 +386,18 @@ mod tests {
         assert!(!PAGE.contains("__SYN_TOKEN__"));
         assert!(!PAGE.contains("X-Syn-Token"));
     }
+
+    #[test]
+    fn the_page_never_touches_a_binding_before_it_is_declared() {
+        // `let` does not hoist. A bootstrap line placed above its own
+        // declarations threw a ReferenceError while the script was still
+        // evaluating, which stops every line after it: the console came up
+        // completely blank, not merely without a progress strip. Cheap to
+        // check, and the failure it catches is total.
+        for (decl, use_) in [("let tailAt", "tailTimer = setInterval"), ("let tailSrc", "tailSrc =")] {
+            let d = PAGE.find(decl).unwrap_or_else(|| panic!("{decl} is gone from the page"));
+            let u = PAGE.rfind(use_).unwrap_or_else(|| panic!("{use_} is gone from the page"));
+            assert!(d < u, "{use_:?} runs before {decl:?} is initialised, which blanks the page");
+        }
+    }
 }

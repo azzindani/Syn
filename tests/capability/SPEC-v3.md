@@ -191,6 +191,11 @@ one who wrote both the engine and the scorer:
   own grouping says "Fall" where the fixture says "Autumn", so four
   correct totals scored zero.
 
+Two runs of the same model on the same task scored 19 and 10. Neither
+finished Excel, neither opened Word or PowerPoint, and both ended on an
+empty completion. A single run is not a measurement of a model; what these
+two establish together is the size of the gap, not its exact width.
+
 **The 19/100 above stands.** It was not re-scored under the repaired
 scorer, and it must not be: re-grading a recorded run after changing the
 grader is the thing the honesty conditions exist to prevent. The fixes
@@ -256,6 +261,7 @@ the boolean form fails the cast rather than the call.
 |---|---|---|
 | 2026-09-19, control (`load.txt`, scripted) | **90/90** artifacts and judgement | Every part of the job is expressible and lands correctly across all three applications. 217 operations, 37s. |
 | 2026-09-19, model-driven, `nemotron-3-ultra-550b:free` | **19/100** | Real Excel Table, four derived columns, a scorecard naming all 11 sites, four pivots, three named ranges. Then it ended the turn with no answer and no tool call, 45 calls in and well inside the budget. Word: 5 words. Deck: 0 slides. |
+| 2026-09-19, same model, repeat | **10/100** | Same brief, same fixture, repaired scorer, empty-turn nudge in place. Got nine calls in: the Table, and derived headers written one cell at a time. The nudge fired and it did carry on, then ended the same way. Word: 5 words. Deck: 0 slides. |
 | provider run | not yet run | |
 
 The control is run with `score-v3.ps1 -Control` and is deliberately scored

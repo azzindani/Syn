@@ -85,6 +85,47 @@ fn esc(s: &str) -> String {
     o
 }
 
+/// Strip `maxLength` out of a schema before it goes on the wire.
+///
+/// Some providers fold the tool schema into a sampling grammar and reject the
+/// whole request over a keyword they do not implement: `grammar rejected:
+/// tool "read" parameter schema: parameter "handle": unsupported schema
+/// keyword "maxLength"`. One harness across many models cannot lose a model
+/// to that, and the cap is worth more enforced here than declared there —
+/// `to_action` applies the same numbers to what actually comes back.
+fn wire_params(params: &str) -> String {
+    let mut out = String::with_capacity(params.len());
+    let mut rest = params;
+    while let Some(i) = rest.find("\"maxLength\":") {
+        let (head, tail) = rest.split_at(i);
+        // The comma belongs to the pair being removed, not to its neighbour.
+        out.push_str(head.strip_suffix(',').unwrap_or(head));
+        let digits = tail["\"maxLength\":".len()..].trim_start();
+        let n = digits.len() - digits.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        rest = &digits[n..];
+        // A pair that opened its object keeps the object's separator.
+        if out.ends_with('{') {
+            rest = rest.strip_prefix(',').unwrap_or(rest);
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The cap declared for one tool parameter, read back out of the schema so
+/// the wire form and the check can never drift apart.
+pub fn cap(tool: &str, key: &str) -> Option<usize> {
+    let params = spec(tool)?.params;
+    let at = params.find(&format!("\"{key}\":{{"))? + key.len() + 3;
+    let obj = balanced(params, at)?;
+    let n = obj.find("\"maxLength\":")? + "\"maxLength\":".len();
+    obj[n..].trim_start().trim_start_matches(|c: char| !c.is_ascii_digit())
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
 /// The `tools` array for an OpenAI-compatible request body.
 pub fn tools_json() -> String {
     let mut s = String::from("[");
@@ -96,7 +137,7 @@ pub fn tools_json() -> String {
             r#"{{"type":"function","function":{{"name":"{}","description":"{}","parameters":{}}}}}"#,
             t.name,
             esc(t.description),
-            t.params
+            wire_params(t.params)
         ));
     }
     s.push(']');
@@ -282,12 +323,30 @@ pub enum Action {
 /// hand sees them.
 pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
     let a = &tc.arguments;
-    let need = |k: &str| field(a, k).ok_or_else(|| format!("{}: missing required field {k}", tc.name));
+    // The cap the schema declares is enforced here, not by the provider: it
+    // no longer goes on the wire, and a provider was never the right place to
+    // hold a bound this side depends on.
+    let capped = |k: &str, v: String| -> Result<String, String> {
+        match cap(&tc.name, k) {
+            Some(max) if v.chars().count() > max => Err(format!(
+                "{}: {k} is {} characters, over the {max} the schema allows: send less, not more",
+                tc.name,
+                v.chars().count()
+            )),
+            _ => Ok(v),
+        }
+    };
+    let opt = |k: &str| field(a, k).map(|v| capped(k, v)).transpose();
+    let need = |k: &str| {
+        field(a, k)
+            .ok_or_else(|| format!("{}: missing required field {k}", tc.name))
+            .and_then(|v| capped(k, v))
+    };
 
     if tc.name == "shell" {
         return Ok(Action::Shell(ShellRequest {
             program: need("program")?,
-            args: field(a, "args").filter(|s| !s.is_empty()).map(|s| s.split('|').map(str::to_string).collect()).unwrap_or_default(),
+            args: opt("args")?.filter(|s| !s.is_empty()).map(|s| s.split('|').map(str::to_string).collect()).unwrap_or_default(),
             why: need("why")?,
         }));
     }
@@ -310,7 +369,7 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
                 .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
                 .collect(),
         }),
-        "export" => Call::Export(ExportArgs { format: need("format")?, path: field(a, "path"), sheet: field(a, "sheet") }),
+        "export" => Call::Export(ExportArgs { format: need("format")?, path: opt("path")?, sheet: opt("sheet")? }),
         "undo" => Call::Undo,
         "struct" => {
             let verb = need("verb")?;
@@ -320,14 +379,14 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
                 "addSheet" => StructArgs::AddSheet { name: need("name")? },
                 "createSlide" => StructArgs::CreateSlide {
                     title: need("title")?,
-                    bullets: field(a, "bullets").filter(|b| !b.is_empty()).map(|b| b.split('|').map(str::to_string).collect()).unwrap_or_default(),
+                    bullets: opt("bullets")?.filter(|b| !b.is_empty()).map(|b| b.split('|').map(str::to_string).collect()).unwrap_or_default(),
                 },
                 "transfer" => StructArgs::Transfer { from: need("from")?, selector: need("selector")?, title: need("title")? },
                 "invoke" => StructArgs::Invoke {
                     selector: need("selector")?,
                     // Default rather than reject: "press this" is the common
                     // case, and the closed enum above already bounds it.
-                    action: field(a, "action").filter(|s| !s.is_empty()).unwrap_or_else(|| "invoke".into()),
+                    action: opt("action")?.filter(|s| !s.is_empty()).unwrap_or_else(|| "invoke".into()),
                 },
                 other => return Err(format!("struct: unknown verb {other:?}: rejected, not guessed")),
             };
@@ -352,6 +411,53 @@ mod tests {
         assert_eq!(TOOLS.len(), 7, "six document ops plus shell");
         assert!(spec("read").is_some());
         assert!(spec("rm -rf").is_none());
+    }
+
+    #[test]
+    fn the_wire_schema_carries_no_max_length_but_the_cap_survives() {
+        // A provider that folds the schema into a grammar 400s the whole
+        // request over this keyword, which costs a model for a bound the
+        // provider was never enforcing anyway.
+        let wire = tools_json();
+        assert!(!wire.contains("maxLength"), "maxLength must not go on the wire");
+        // Stripping it must not damage the schema around it.
+        for t in TOOLS {
+            let w = wire_params(t.params);
+            assert!(w.contains("\"additionalProperties\":false"), "{} lost its close", t.name);
+            assert!(!w.contains(",,") && !w.contains("{,") && !w.contains(",}"), "{} has a stray comma: {w}", t.name);
+            assert_eq!(w.matches('{').count(), t.params.matches('{').count(), "{} lost a brace", t.name);
+        }
+        // And the number is still readable where it is now enforced.
+        assert_eq!(cap("read", "handle"), Some(200));
+        assert_eq!(cap("write", "values"), Some(8000));
+        assert_eq!(cap("read", "nosuchfield"), None);
+    }
+
+    #[test]
+    fn an_over_long_argument_is_refused_rather_than_truncated() {
+        let long = "x".repeat(201);
+        let tc = ToolCall {
+            id: "1".into(),
+            name: "read".into(),
+            arguments: format!(r#"{{"handle":"{long}","selector":"A1"}}"#),
+        };
+        let e = to_action(&tc).unwrap_err();
+        assert!(e.contains("over the 200"), "{e}");
+        // The optional fields are held to it too, not just the required ones.
+        let tc = ToolCall {
+            id: "2".into(),
+            name: "export".into(),
+            arguments: format!(r#"{{"handle":"excel:a.xlsx:S1","format":"summary","path":"{}"}}"#, "y".repeat(501)),
+        };
+        assert!(to_action(&tc).unwrap_err().contains("over the 500"));
+        // A value at the cap is fine: the bound is inclusive.
+        let ok = "z".repeat(200);
+        let tc = ToolCall {
+            id: "3".into(),
+            name: "read".into(),
+            arguments: format!(r#"{{"handle":"{ok}","selector":"A1"}}"#),
+        };
+        assert!(to_action(&tc).is_ok());
     }
 
     #[test]

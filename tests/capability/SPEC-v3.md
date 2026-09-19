@@ -191,10 +191,21 @@ one who wrote both the engine and the scorer:
   own grouping says "Fall" where the fixture says "Autumn", so four
   correct totals scored zero.
 
-Two runs of the same model on the same task scored 19 and 10. Neither
-finished Excel, neither opened Word or PowerPoint, and both ended on an
-empty completion. A single run is not a measurement of a model; what these
-two establish together is the size of the gap, not its exact width.
+Three runs, two models, 9 to 19 out of 100 against a control that scores
+90/90 on the same rubric and the same fixture. None finished Excel. None
+opened PowerPoint. Between them they found two ways for a run to end
+early, and neither is a missing capability:
+
+- twice, an empty completion with the budget barely touched;
+- once, prose narrating the plan before any work -- "I'll start by
+  exploring the dataset" -- which the loop accepted as the finished job.
+
+A note on P5, which run 3 passed. It scores "ended with a prose answer,
+not a stop", and a run that narrates its intention and quits earns those
+two points while doing nothing. That is a defect in the check. It is
+recorded here rather than repaired, because tightening a check after
+watching a run benefit from it is the same move as loosening one, and the
+two points are noise beside the gap they sit in. It belongs in v4.
 
 **The 19/100 above stands.** It was not re-scored under the repaired
 scorer, and it must not be: re-grading a recorded run after changing the
@@ -262,6 +273,7 @@ the boolean form fails the cast rather than the call.
 | 2026-09-19, control (`load.txt`, scripted) | **90/90** artifacts and judgement | Every part of the job is expressible and lands correctly across all three applications. 217 operations, 37s. |
 | 2026-09-19, model-driven, `nemotron-3-ultra-550b:free` | **19/100** | Real Excel Table, four derived columns, a scorecard naming all 11 sites, four pivots, three named ranges. Then it ended the turn with no answer and no tool call, 45 calls in and well inside the budget. Word: 5 words. Deck: 0 slides. |
 | 2026-09-19, same model, repeat | **10/100** | Same brief, same fixture, repaired scorer, empty-turn nudge in place. Got nine calls in: the Table, and derived headers written one cell at a time. The nudge fired and it did carry on, then ended the same way. Word: 5 words. Deck: 0 slides. |
+| 2026-09-19, `ling-3.0-flash-vl:free` | **9/100** | Asked for `qwen3.8-27b`, which was rate-limited on the first call, so the fallback chain ran it on ling instead. One successful operation, a read. Reached for `echo` and `python3`, both refused. Then answered "I'll start by exploring the dataset... in parallel" and the turn ended. |
 | provider run | not yet run | |
 
 The control is run with `score-v3.ps1 -Control` and is deliberately scored

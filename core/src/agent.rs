@@ -110,6 +110,12 @@ result. Never page through the rows adding them up yourself.";
 /// a model which has genuinely finished is not walked round the loop.
 const EMPTY_TURN_NUDGES: u32 = 1;
 
+/// How many times a run may be asked to start, after answering in prose
+/// without having done anything. Bounded like the empty-turn nudge, and
+/// for the same reason: a model that has genuinely nothing to do must be
+/// able to say so and be believed.
+const IDLE_ANSWER_NUDGES: u32 = 1;
+
 /// One run of the loop against one goal.
 #[derive(Debug)]
 pub struct Agent {
@@ -131,6 +137,12 @@ pub struct Agent {
     /// nothing at all. Bounded, because a model that has genuinely stopped
     /// must not be prodded round the loop until the budget is gone.
     empty_turns: u32,
+    /// Whether any tool has actually run. Prose ends the turn, which is
+    /// right when the work is done and wrong when none has started.
+    did_work: bool,
+    /// How many times this run has answered in prose without having done
+    /// anything, and been asked to begin.
+    idle_answers: u32,
 }
 
 impl Agent {
@@ -177,6 +189,8 @@ impl Agent {
             skipped: Vec::new(),
             surface: tools::surface_fingerprint(),
             empty_turns: 0,
+            did_work: false,
+            idle_answers: 0,
         }
     }
 
@@ -309,6 +323,25 @@ impl Agent {
                 }
                 return Step::Stopped("the model ended the turn with no answer and no tool call".into());
             }
+            // Prose ends the turn. That is right when the work is done and
+            // wrong when none has started: a run answered "I'll start by
+            // exploring the dataset, in parallel" after one read, and the
+            // loop accepted it as the finished job. The system prompt
+            // already forbids narrating the next step; this is the loop not
+            // taking the bait when it is ignored.
+            //
+            // Only when nothing has run at all. A model that has done the
+            // work and is reporting it must be believed the first time, and
+            // one that genuinely has nothing to do must be able to say so.
+            if !self.did_work && self.idle_answers < IDLE_ANSWER_NUDGES {
+                self.idle_answers += 1;
+                self.msgs.push(Msg::Assistant(text));
+                self.msgs.push(Msg::User(
+                    "Nothing has been done yet, so that reply ended the turn before the work started. Do not describe what you are about to do: call the tool instead. If there is genuinely nothing to do, say why."
+                        .into(),
+                ));
+                return Step::Refused("answered in prose before doing anything: asked it to begin".into());
+            }
             self.msgs.push(Msg::Assistant(text.clone()));
             return Step::Answered(text);
         }
@@ -405,6 +438,7 @@ impl Agent {
                     Ok(Some(out)) => {
                         let detail = describe(&out);
                         self.observe(&tc.id, &Self::fenced(&detail));
+                        self.did_work = true;
                         Step::Ran { tool, detail }
                     }
                     Ok(None) => {
@@ -447,6 +481,7 @@ impl Agent {
                 let _ = relay.emit(&self.session, "step.done", "shell", detail.clone());
                 self.observe(&p.call_id, &shell::observation(&out));
                 self.decline_skipped(&held, "the run stopped at the approval before reaching it");
+                self.did_work = true;
                 Step::Ran { tool: "shell".into(), detail }
             }
             Err(e) => {
@@ -575,6 +610,44 @@ mod tests {
     }
 
     #[test]
+    fn narrating_the_plan_before_doing_anything_does_not_end_the_run() {
+        let (mut relay, mut runner, _s, _h) = world();
+        // A run answered "I'll start by exploring the dataset, in parallel"
+        // after a single read, and the loop took it as the finished job.
+        // The system prompt already forbids narrating the next step; this
+        // is the loop not taking the bait when that is ignored.
+        let narration = "I'll start by exploring the dataset, then build the workbook.";
+        let mut brain = FakeBrain::new(&[prose_reply(narration), prose_reply(narration)]);
+        let mut a = agent("build the review");
+        match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
+            Step::Refused(why) => assert!(why.contains("before doing anything"), "{why}"),
+            other => panic!("prose before any work should not end the run, got {other:?}"),
+        }
+        // Asked once, then believed, exactly like the empty turn.
+        match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
+            Step::Answered(t) => assert_eq!(t, narration),
+            other => panic!("a second prose reply must be accepted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_run_that_did_the_work_is_believed_the_first_time() {
+        let (mut relay, mut runner, _s, h) = world();
+        // The nudge must never make a finished run explain itself twice.
+        let read = call_reply("read", &format!(r#"{{"handle":"{h}","selector":"Sheet1"}}"#));
+        let mut brain = FakeBrain::new(&[read, prose_reply("Done: the sheet is 2 by 2.")]);
+        let mut a = agent("read it");
+        assert!(matches!(
+            a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()),
+            Step::Ran { .. }
+        ));
+        match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
+            Step::Answered(t) => assert!(t.starts_with("Done"), "{t}"),
+            other => panic!("work was done, so the answer stands: {other:?}"),
+        }
+    }
+
+    #[test]
     fn the_nudge_never_speaks_for_the_model() {
         let (mut relay, mut runner, _s, _h) = world();
         let mut brain = FakeBrain::new(&[prose_reply("")]);
@@ -643,8 +716,16 @@ mod tests {
     #[test]
     fn prose_ends_the_turn() {
         let (mut relay, mut runner, _s, _h) = world();
-        let mut brain = FakeBrain::new(&[prose_reply("the sheet is 2 by 2")]);
+        // Prose is still how a turn ends. What changed is that a run which
+        // has not done anything yet gets asked once whether it meant to
+        // start, because answering before beginning is how a capability run
+        // finished after a single read.
+        let mut brain = FakeBrain::new(&[prose_reply("the sheet is 2 by 2"), prose_reply("the sheet is 2 by 2")]);
         let mut a = agent("how big");
+        assert!(matches!(
+            a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()),
+            Step::Refused(_)
+        ));
         match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
             Step::Answered(t) => assert_eq!(t, "the sheet is 2 by 2"),
             other => panic!("{other:?}"),

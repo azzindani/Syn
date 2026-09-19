@@ -47,9 +47,32 @@ pub fn begin() {
     }
 }
 
+/// This log is a record of work happening, not of everything the console
+/// says. The page asks its child for the chat list and a transcript every
+/// time it loads, and mirroring those answers put two hundred lines of
+/// `MSG {...}` JSON into the progress strip and kept the file's mtime
+/// fresh forever, so a run looked permanently in progress.
+///
+/// Progress is what a person watching would want to see: the steps, the
+/// refusals, the answer, and the receipts of real operations.
+fn is_progress(line: &str) -> bool {
+    // Bulk answers to the page's own queries, not work.
+    if line.starts_with("MSG ") || line.starts_with("CHAT ") || line.starts_with("SLOT ") || line.starts_with("WIRE ") {
+        return false;
+    }
+    // The console's own framing sentinel, one per request.
+    if line.starts_with("RECEIPT mark=") {
+        return false;
+    }
+    !line.trim().is_empty()
+}
+
 /// Mirror one line. Flushed immediately: a watcher reading a half-written
 /// buffer is the whole failure mode this is meant to avoid.
 pub fn append(line: &str) {
+    if !is_progress(line) {
+        return;
+    }
     let Ok(mut g) = SINK.lock() else { return };
     let Some(f) = g.as_mut() else { return };
     let _ = writeln!(f, "{line}");
@@ -205,6 +228,34 @@ RECEIPT mark=m1
             "a log still on its startup banner must not win over a run doing work"
         );
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn page_chatter_is_not_progress() {
+        // Loading the console asks its child for the slot table, the wiring,
+        // the chat list and a whole transcript. None of that is a run, and
+        // mirroring it drowned the progress strip and left the log's mtime
+        // permanently fresh, so every console looked busy.
+        for noise in [
+            r#"MSG {"role":"tool","id":"call-1","text":"..."}"#,
+            r#"CHAT {"id":"c1789831309-7488"}"#,
+            r#"SLOT {"slot":"Luna","task":"skim"}"#,
+            r#"WIRE excel -> synhand-excel"#,
+            "RECEIPT mark=m23",
+            "   ",
+        ] {
+            assert!(!is_progress(noise), "{noise:?} is not work happening");
+        }
+        for real in [
+            "STEP write: filled data!I2:I258424 (258,423 cells) from =YEAR(D2)",
+            "REFUSED shell: \"python3\" is not on the allowlist",
+            "STOPPED the model ended the turn with no answer and no tool call",
+            "ANSWER I built the scorecard and the dashboard.",
+            "ERROR live app refused the op",
+            "RECEIPT say model=x open=3",
+        ] {
+            assert!(is_progress(real), "{real:?} is exactly what a watcher wants to see");
+        }
     }
 
     #[test]

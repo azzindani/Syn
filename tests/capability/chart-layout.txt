@@ -1,0 +1,9 @@
+hand synhand-excel excel
+attach excel solar.xlsx data
+live excel:solar.xlsx:data
+sheet excel:solar.xlsx:data Layout
+chart excel:solar.xlsx:data column Scorecard!A1:B12 Layout!A1:H16 legend=0;gridlines=0;yTitle=kWh Total output by site
+chart excel:solar.xlsx:data line Monthly!C1:C109 Layout!A18:H33 legend=0;xTitle=Month;yTitle=kWh Monthly output 2015-2023
+chart excel:solar.xlsx:data column Profiles!D1:E25 Layout!A35:H50 legend=0;xTitle=Hour;yTitle=kWh Generation by hour of day
+chart excel:solar.xlsx:data pie Profiles!A1:B5 Layout!J1:Q16 dataLabels=1 Share of output by season
+chart excel:solar.xlsx:data bar Scorecard!A1:B12 Layout!J18:Q33 legend=0;gridlines=0 Sites ranked by output

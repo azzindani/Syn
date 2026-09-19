@@ -41,12 +41,12 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "format",
         description: "Cosmetic style only: font, fill, bold, size, color. Does NOT change values or structure. Unknown style keys are rejected, never ignored.",
-        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"selector":{"type":"string","maxLength":200},"style":{"type":"string","maxLength":500,"description":"key=value pairs joined by ; e.g. bold=1;size=12"}},"required":["handle","selector","style"],"additionalProperties":false}"#,
+        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"selector":{"type":"string","maxLength":200},"style":{"type":"string","maxLength":500,"description":"key=value pairs joined by ; e.g. bold=1;size=12;fill=#1F4E79;color=#FFFFFF. Keys: bold, italic, size, font, color, fill (six-digit hex), numberFormat, width, autofit, autofitSheet, wrap, merge, border, align (left/center/right), freeze (freezes the window above and left of the selector)"}},"required":["handle","selector","style"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "struct",
         description: "Structural change to a document: insertParagraph, insertTable, addSheet, createSlide, transfer, invoke, pivot, chart. `addSheet` makes a new worksheet. `pivot` summarises a range into a new table: rows/cols are column HEADER NAMES from the source, values is the header to aggregate. It groups by a column's values exactly as they are and cannot group dates into months, so for a monthly view either total with SUMIFS or pivot on a column that already holds the month. Its destination sheet must exist: addSheet first. `chart` draws over a range and anchors it on a sheet. `table` turns a range into a real Excel Table that sorts and filters. `name` names a range. `conditional` shades a range by its values. `slicer` adds a filter control wired to a pivot, so build the pivot first. `transfer` moves typed data between handles with provenance recorded. `invoke` presses a control. table, name, conditional, slicer, pivot, chart and invoke need a LIVE handle and do nothing on a document model. Unknown verbs are rejected.",
-        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer","invoke","pivot","chart","table","name","conditional","slicer"]},"text":{"type":"string","maxLength":8000},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by , rows by ; — for pivot: the header name to run down the rows"},"name":{"type":"string","maxLength":200},"title":{"type":"string","maxLength":300},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle"},"selector":{"type":"string","maxLength":200},"action":{"type":"string","enum":["invoke","click","toggle","select","expand","collapse","focus"],"description":"for invoke: what to do to the control"},"source":{"type":"string","maxLength":200,"description":"for pivot and chart: the source range, e.g. data!A1:H258424"},"cols":{"type":"string","maxLength":200,"description":"for pivot: the header name to run across the columns, or empty for none"},"values":{"type":"string","maxLength":200,"description":"for pivot: the header name to total"},"at":{"type":"string","maxLength":200,"description":"for pivot and chart: where to put it, e.g. Dashboard!A1"},"kind":{"type":"string","enum":["line","bar","column","pie"],"description":"for chart: which chart to draw"},"rule":{"type":"string","maxLength":100,"description":"for conditional: dataBar, colorScale, iconSet, top10, greaterThan=N or lessThan=N"}},"required":["handle","verb"],"additionalProperties":false}"#,
+        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer","invoke","pivot","chart","table","name","conditional","slicer","pageBreak","contents","pageNumbers","picture"]},"text":{"type":"string","maxLength":8000,"description":"for insertParagraph: the prose. For pageNumbers: text to sit beside the number in the footer. For picture: the image file path"},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by | rows by ; — for pivot: the header name to run down the rows"},"name":{"type":"string","maxLength":200,"description":"for addSheet/table/name/slicer: what to call it. For insertParagraph and insertTable: the Word style, e.g. Heading 1, Title, Quote. For pageBreak: page or section. For picture: the width in points"},"title":{"type":"string","maxLength":300},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle"},"selector":{"type":"string","maxLength":200},"action":{"type":"string","enum":["invoke","click","toggle","select","expand","collapse","focus"],"description":"for invoke: what to do to the control"},"source":{"type":"string","maxLength":200,"description":"for pivot and chart: the source range, e.g. data!A1:H258424"},"cols":{"type":"string","maxLength":200,"description":"for pivot: the header name to run across the columns, or empty for none"},"values":{"type":"string","maxLength":200,"description":"for pivot: the header name to total"},"at":{"type":"string","maxLength":200,"description":"for pivot and chart: where to put it, e.g. Dashboard!A1. For a chart give a range and the chart fills exactly those cells, e.g. Dashboard!A1:H16 — lay several out in ranges that do not overlap"},"kind":{"type":"string","enum":["line","bar","column","pie"],"description":"for chart: which chart to draw"},"rule":{"type":"string","maxLength":100,"description":"for conditional: dataBar, colorScale, iconSet, top10, greaterThan=N or lessThan=N"},"style":{"type":"string","maxLength":300,"description":"for chart: k=v pairs joined by ; — legend=0, gridlines=0, xTitle=Hour of day, yTitle=kWh, dataLabels=1"}},"required":["handle","verb"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "export",
@@ -401,8 +401,21 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
         "struct" => {
             let verb = need("verb")?;
             let s = match verb.as_str() {
-                "insertParagraph" => StructArgs::InsertParagraph { text: need("text")? },
-                "insertTable" => StructArgs::InsertTable { rows: grid(&need("rows")?) },
+                "insertParagraph" => StructArgs::InsertParagraph {
+                    text: need("text")?,
+                    style: opt("name")?.unwrap_or_default(),
+                },
+                "insertTable" => StructArgs::InsertTable {
+                    rows: grid(&need("rows")?),
+                    style: opt("name")?.unwrap_or_default(),
+                },
+                "pageBreak" => StructArgs::PageBreak { kind: opt("name")?.unwrap_or_default() },
+                "contents" => StructArgs::Contents { title: opt("title")?.unwrap_or_default() },
+                "pageNumbers" => StructArgs::PageNumbers { text: opt("text")?.unwrap_or_default() },
+                "picture" => StructArgs::Picture {
+                    path: need("text")?,
+                    width: opt("name")?.unwrap_or_default(),
+                },
                 "addSheet" => StructArgs::AddSheet { name: need("name")? },
                 "createSlide" => StructArgs::CreateSlide {
                     title: need("title")?,
@@ -433,6 +446,7 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
                     source: need("source")?,
                     title: opt("title")?.unwrap_or_default(),
                     at: need("at")?,
+                    style: opt("style")?.unwrap_or_default(),
                 },
                 "invoke" => StructArgs::Invoke {
                     selector: need("selector")?,
@@ -667,7 +681,7 @@ mod tests {
             arguments: r#"{"handle":"word:d.docx:body","verb":"insertParagraph","text":"line one\nsaid \"hi\""}"#.into(),
         };
         match to_action(&tc).unwrap() {
-            Action::Doc { call: Call::Struct(StructArgs::InsertParagraph { text }), .. } => {
+            Action::Doc { call: Call::Struct(StructArgs::InsertParagraph { text, .. }), .. } => {
                 assert_eq!(text, "line one\nsaid \"hi\"");
             }
             other => panic!("{other:?}"),

@@ -342,7 +342,7 @@ pub fn script_for(call: &Call, unit: &str) -> Option<String> {
                 ),
             )
         }
-        Call::Struct(StructArgs::InsertParagraph { text }) => wrap(
+        Call::Struct(StructArgs::InsertParagraph { text, .. }) => wrap(
             unit,
             "",
             &format!(

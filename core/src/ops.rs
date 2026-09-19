@@ -9,8 +9,10 @@ use crate::{acp, security};
 /// The style keys `format` accepts. The live hand and the in-memory model
 /// must agree on this list, or a style the sidecar applies happily is
 /// refused before it ever gets there.
-const STYLE_KEYS: &[&str] =
-    &["font", "fill", "bold", "italic", "size", "color", "numberFormat", "width", "autofit", "wrap"];
+const STYLE_KEYS: &[&str] = &[
+    "font", "fill", "bold", "italic", "size", "color", "numberFormat", "width", "autofit", "wrap",
+    "autofitSheet", "merge", "border", "align", "freeze",
+];
 /// Zero-based inclusive cell rect: (row0, col0, row1, col1).
 pub type CellRect = (usize, usize, usize, usize);
 /// Parsed excel selector: sheet + optional rect.
@@ -35,8 +37,17 @@ pub struct FormatArgs {
 
 #[derive(Debug, Clone)]
 pub enum StructArgs {
-    InsertParagraph { text: String },
-    InsertTable { rows: Vec<Vec<String>> },
+    InsertParagraph { text: String, style: String },
+    InsertTable { rows: Vec<Vec<String>>, style: String },
+    /// Start a new page, or a new section. Live-only: the in-memory model is
+    /// a list of paragraphs and has no pagination to break.
+    PageBreak { kind: String },
+    /// A table-of-contents field, built from the heading styles above it.
+    Contents { title: String },
+    /// A footer carrying a live page-number field.
+    PageNumbers { text: String },
+    /// Place an image file in the document, optionally at a given width.
+    Picture { path: String, width: String },
     TrackChange { para: Option<String>, text: String },
     Comment { at: Option<String>, text: String },
     AddSheet { name: String },
@@ -58,7 +69,7 @@ pub enum StructArgs {
     Pivot { source: String, rows: String, cols: String, values: String, at: String },
     /// Draw a chart over a range and anchor it on a sheet. Live-only for the
     /// same reason.
-    Chart { kind: String, source: String, title: String, at: String },
+    Chart { kind: String, source: String, title: String, at: String, style: String },
     /// Turn a range into a real Excel Table, so it sorts, filters and grows.
     Table { source: String, name: String },
     /// Give a range a name, so a formula can say what it means.
@@ -352,7 +363,7 @@ fn do_format(relay: &mut Relay, session: &str, handle: &str, args: &FormatArgs) 
 
 fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -> Result<OpOut> {
     match args {
-        StructArgs::InsertParagraph { text } => {
+        StructArgs::InsertParagraph { text, .. } => {
             let files = files(relay, session)?;
             let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { paras, .. } = &mut f.content {
@@ -362,7 +373,7 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
                 Err(Error::ClosedSchema("insertParagraph needs a word handle".into()))
             }
         }
-        StructArgs::InsertTable { rows } => {
+        StructArgs::InsertTable { rows, .. } => {
             let files = files(relay, session)?;
             let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { paras, tables, .. } = &mut f.content {
@@ -459,6 +470,20 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             Err(Error::ClosedSchema(format!(
                 "conditional {rule:?} needs a live handle: mark it live with a hand that drives the app"
             )))
+        }
+        // Pagination, a contents field, a footer and a picture are all things
+        // Word owns. The in-memory model is a list of paragraph strings with
+        // no pages in it, so these say so rather than reporting a page break
+        // into a document that has no pages.
+        StructArgs::PageBreak { .. }
+        | StructArgs::Contents { .. }
+        | StructArgs::PageNumbers { .. }
+        | StructArgs::Picture { .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(
+                "laying out a page needs a live handle: mark it live with a hand that drives Word".into(),
+            ))
         }
     }
 }
@@ -731,7 +756,7 @@ mod cover_tests {
             execute(&mut r, &s, &xh, Call::Read(ReadArgs { selector: "Q3".into() })).unwrap(),
             OpOut::Grid { sheet: "Q3".into(), rows: 4, cols: 4 });
         assert_eq!(
-            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertParagraph { text: "p2".into() })).unwrap(),
+            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertParagraph { text: "p2".into(), style: String::new() })).unwrap(),
             OpOut::Count { what: "paras".into(), n: 2 });
         assert_eq!(
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::TrackChange { para: None, text: "t".into() })).unwrap(),
@@ -740,7 +765,7 @@ mod cover_tests {
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::Comment { at: Some("p0".into()), text: "c".into() })).unwrap(),
             OpOut::Count { what: "comments".into(), n: 1 });
         assert_eq!(
-            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]] })).unwrap(),
+            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]], style: String::new() })).unwrap(),
             OpOut::Count { what: "tables".into(), n: 1 });
         assert_eq!(
             execute(&mut r, &s, &ph, Call::Struct(StructArgs::CreateSlide { title: "S2".into(), bullets: vec![] })).unwrap(),
@@ -754,7 +779,7 @@ mod cover_tests {
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::AddSheet { name: "x".into() })),
             Err(Error::ClosedSchema(_))));
         assert!(matches!(
-            execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into() })),
+            execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into(), style: String::new() })),
             Err(Error::ClosedSchema(_))));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Struct(StructArgs::CreateSlide { title: "x".into(), bullets: vec![] })),

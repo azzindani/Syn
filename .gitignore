@@ -30,3 +30,7 @@ target/
 tests/ui/node_modules/
 tests/ui/.console.json
 tests/ui/.console-url.txt
+
+# The capability fixture: 52MB of City of Calgary open data, not ours to
+# vendor. tests/capability/setup.ps1 names the path it expects.
+samples/

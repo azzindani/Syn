@@ -141,33 +141,57 @@ Committed before the tools it needs exist. Git order is the evidence.
 
 ## What the engine cannot do yet
 
-The gap between v1 and this, and therefore the build order.
+The gap between v1 and this, and therefore the build order. Struck rows are
+closed and verified against live Office; the note says how.
 
 **Excel**
 
-| Need | Today |
+| Need | State |
 |---|---|
-| One formula filled down a column of 258,423 rows | `write` sets cells one by one; the payload cap makes this impossible |
-| Excel Table (ListObject) | no verb |
-| Conditional formatting | no verb |
-| Slicer | no verb |
-| Named range | no verb |
-| Pivot grouped by month/year from a date column | `pivot` groups raw values only |
-| Pivot with several value fields | one value field |
-| Chart axis titles, legend, no-gridlines, size and position | title only |
-| Freeze panes, autofit on a whole sheet | `format` has autofit per range |
+| ~~One formula filled down 258,423 rows~~ | closed: a one-cell payload over a multi-cell range fills it. 1.03M formula cells in 11s |
+| ~~Excel Table (ListObject)~~ | closed: `table` |
+| ~~Conditional formatting~~ | closed: `conditional`, five rule kinds |
+| ~~Slicer~~ | closed: `slicer` |
+| ~~Named range~~ | closed: `name` |
+| ~~Chart size and position~~ | closed: anchor a chart to a *range* and it fills exactly those cells. Anchoring to a single cell left Excel's 440x260 default, and five charts came out with eight overlapping pairs |
+| ~~Chart axis titles, legend, gridlines~~ | closed: `style` on `chart`, same `k=v;k=v` shape `format` uses |
+| ~~Fill and font colour~~ | closed: the Rust side always allowed `fill`/`color`/`font`; the sidecar quietly did not |
+| ~~Freeze panes, sheet-wide autofit~~ | closed: `freeze`, `autofitSheet` on `format` |
+| Pivot grouped by month/year from a date column | open. Derived Year/Month columns are the workaround, and are faster over 258k rows |
+| Pivot with several value fields | open. One value field per pivot |
 
 **Word**
 
-| Need | Today |
+| Need | State |
 |---|---|
-| Append a paragraph | `insertParagraph` maps in `envelope_for`, the sidecar has no method |
-| Heading and body styles | no verb |
-| Tables | no verb |
-| Page break, section break | no verb |
-| Table of contents field | no verb |
-| Header/footer with page numbers | no verb |
-| Pictures, and pasting an Excel chart | no verb |
+| ~~Append a paragraph~~ | closed: `insertParagraph`. Assigning `Range.Text` ate the paragraph mark and merged the new paragraph into the next, taking its style with it: one heading survived out of five. It appends with `InsertAfter` now |
+| ~~Heading and body styles~~ | closed: the style rides in `name`, and goes on the Paragraph rather than its Range |
+| ~~Tables~~ | closed: `insertTable`, same pipe/semicolon grid the sheet uses |
+| ~~Page break, section break~~ | closed: `pageBreak` |
+| ~~Table of contents field~~ | closed: `contents`. A contents page is written before the sections it lists, so calling it again refreshes the one already there rather than stacking a second |
+| ~~Header/footer with page numbers~~ | closed: `pageNumbers`. `Fields.Add` at a collapsed range pushes what was there to the right, so PAGE then NUMPAGES produced "Page  of 41"; the fields are placed at explicit offsets, later slot first |
+| ~~Pictures, and pasting an Excel chart~~ | closed: `export png` writes every chart in the workbook to disk, `picture` places one |
 
-Nothing above is exotic; all of it is ordinary late-bound COM. The engine
-just has not been asked for it before.
+Everything above is ordinary late-bound COM. The engine had simply never
+been asked for it.
+
+## Engine load test
+
+Separate from the capability test, and not scored: it answers "can the
+engine carry this volume", not "can a model plan it". `load.txt` is scripted
+by hand, so it says nothing about the model.
+
+    52 operations, 11.3s, 0 failures
+    1,033,692 derived formula cells over 258,423 rows
+    11-site scorecard, 7 metrics each, every one a live formula
+    108 year-month rows, 24 hour rows, 4 seasons
+    5 charts, 2 pivots, 1 slicer, 5 conditional-format rules
+
+Every figure exact against `ground-truth.json`: all 11 site totals, the four
+season totals, peak hour 13:00 at 1,300,197 kWh, and 91 non-zero year-months
+summing to 9,835,517.9 kWh.
+
+The run found four defects that the per-verb smoke tests had not: charts
+overlapping at cell anchors, the sidecar dying at startup when Excel was
+momentarily busy, `fill`/`color` accepted by Rust and refused by the
+sidecar, and the CLI reading a multi-word chart title into the style slot.

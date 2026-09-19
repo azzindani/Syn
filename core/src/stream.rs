@@ -31,7 +31,7 @@ pub fn stream_block(relay: &mut Relay, session: &str, handle: &str, stream: &mut
 
 pub fn stream_end(relay: &mut Relay, session: &str, handle: &str, stream: Stream) -> Result<(usize, usize)> {
     for block in &stream.blocks {
-        execute(relay, session, handle, Call::Struct(StructArgs::InsertParagraph { text: block.clone() }))?;
+        execute(relay, session, handle, Call::Struct(StructArgs::InsertParagraph { text: block.clone(), style: String::new() }))?;
     }
     let out = (stream.blocks.len(), stream.chars);
     relay.emit(session, "stream.end", handle, format!("blocks={} chars={}", out.0, out.1))?;

@@ -155,6 +155,12 @@ fn drive(
 }
 
 
+/// A Word style name as one CLI token: underscores stand in for spaces, and
+/// a bare `.` means body text. Keeps the prose last on the line.
+fn word_style(tok: &str) -> String {
+    if tok == "." { String::new() } else { tok.replace('_', " ") }
+}
+
 fn main() {
     // Deployment config before anything else: .env seeds the process env,
     // a real shell export always wins. Key names only are printed.
@@ -298,14 +304,76 @@ fn main() {
                 let call = Call::Write(WriteArgs { selector: a[1].into(), values: core::tools::grid(a[2]) });
                 run_op(&mut runner, &mut relay, a[0], "write", call);
             }
+            // The style is one token so the prose can keep its spaces and
+            // stay last: "Heading_1" for "Heading 1", "." for body text.
             "para" => {
-                let a: Vec<&str> = rest.splitn(2, ' ').collect();
-                if a.len() < 2 {
-                    println!("ERROR usage: para <handle> <text>");
+                let a: Vec<&str> = rest.splitn(3, ' ').collect();
+                if a.len() < 3 {
+                    println!("ERROR usage: para <handle> <style|.> <text>   (style: Heading_1, Title, Quote)");
                     continue;
                 }
-                let call = Call::Struct(StructArgs::InsertParagraph { text: a[1].into() });
+                let call = Call::Struct(StructArgs::InsertParagraph {
+                    text: a[2].into(),
+                    style: word_style(a[1]),
+                });
                 run_op(&mut runner, &mut relay, a[0], "para", call);
+            }
+            "wtable" => {
+                let a: Vec<&str> = rest.splitn(3, ' ').collect();
+                if a.len() < 3 {
+                    println!("ERROR usage: wtable <handle> <style|.> <cells by | rows by ;>");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::InsertTable {
+                    rows: core::tools::grid(a[2]),
+                    style: word_style(a[1]),
+                });
+                run_op(&mut runner, &mut relay, a[0], "wtable", call);
+            }
+            "pagebreak" => {
+                let a: Vec<&str> = rest.splitn(2, ' ').collect();
+                if a.is_empty() || a[0].is_empty() {
+                    println!("ERROR usage: pagebreak <handle> [page|section]");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::PageBreak {
+                    kind: a.get(1).unwrap_or(&"").trim().to_string(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "pagebreak", call);
+            }
+            "contents" => {
+                let a: Vec<&str> = rest.splitn(2, ' ').collect();
+                if a.is_empty() || a[0].is_empty() {
+                    println!("ERROR usage: contents <handle> [heading]");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::Contents {
+                    title: a.get(1).unwrap_or(&"").trim().to_string(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "contents", call);
+            }
+            "pagenumbers" => {
+                let a: Vec<&str> = rest.splitn(2, ' ').collect();
+                if a.is_empty() || a[0].is_empty() {
+                    println!("ERROR usage: pagenumbers <handle> [footer text]");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::PageNumbers {
+                    text: a.get(1).unwrap_or(&"").trim().to_string(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "pagenumbers", call);
+            }
+            "picture" => {
+                let a: Vec<&str> = rest.splitn(3, ' ').collect();
+                if a.len() < 2 {
+                    println!("ERROR usage: picture <handle> <path> [width in points]");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::Picture {
+                    path: a[1].into(),
+                    width: a.get(2).unwrap_or(&"").trim().to_string(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "picture", call);
             }
             "slide" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -399,17 +467,23 @@ fn main() {
                 });
                 run_op(&mut runner, &mut relay, h, "slicer", call);
             }
+            // Style before title, for the same reason `para` puts it before
+            // the prose: the title has spaces in it and has to come last.
             "chart" => {
-                let a: Vec<&str> = rest.splitn(5, ' ').collect();
+                let a: Vec<&str> = rest.splitn(6, ' ').collect();
                 if a.len() < 4 {
-                    println!("ERROR usage: chart <handle> <line|bar|column|pie> <source> <at> [title]");
+                    println!(
+                        "ERROR usage: chart <handle> <line|bar|column|pie> <source> <at> [style|.] [title]"
+                    );
                     continue;
                 }
+                let style = a.get(4).map(|s| *s).unwrap_or(".");
                 let call = Call::Struct(StructArgs::Chart {
                     kind: a[1].into(),
                     source: a[2].into(),
                     at: a[3].into(),
-                    title: a.get(4).unwrap_or(&"").trim().to_string(),
+                    title: a.get(5).unwrap_or(&"").trim().to_string(),
+                    style: if style == "." { String::new() } else { style.to_string() },
                 });
                 run_op(&mut runner, &mut relay, a[0], "chart", call);
             }

@@ -185,7 +185,7 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             ),
             None,
         )),
-        Call::Struct(StructArgs::Chart { kind, source, title, at }) => Some(envelope(
+        Call::Struct(StructArgs::Chart { kind, source, title, at, style }) => Some(envelope(
             "chart",
             handle,
             &format!(
@@ -195,7 +195,7 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
                 esc(title),
                 esc(at)
             ),
-            None,
+            (!style.is_empty()).then_some(style.as_str()),
         )),
         Call::Struct(StructArgs::Table { source, name }) => Some(envelope(
             "table",
@@ -229,11 +229,41 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             ),
             None,
         )),
-        Call::Struct(StructArgs::InsertParagraph { text }) => Some(envelope(
+        Call::Struct(StructArgs::InsertParagraph { text, style }) => Some(envelope(
             "insertParagraph",
             handle,
-            "{}",
+            &format!("{{\"name\":\"{}\"}}", esc(style)),
             Some(text),
+        )),
+        Call::Struct(StructArgs::InsertTable { rows, style }) => Some(envelope(
+            "insertTable",
+            handle,
+            &format!("{{\"name\":\"{}\"}}", esc(style)),
+            Some(&grid_payload(rows)),
+        )),
+        Call::Struct(StructArgs::PageBreak { kind }) => Some(envelope(
+            "pageBreak",
+            handle,
+            &format!("{{\"name\":\"{}\"}}", esc(kind)),
+            None,
+        )),
+        Call::Struct(StructArgs::Contents { title }) => Some(envelope(
+            "contents",
+            handle,
+            &format!("{{\"title\":\"{}\"}}", esc(title)),
+            None,
+        )),
+        Call::Struct(StructArgs::PageNumbers { text }) => Some(envelope(
+            "pageNumbers",
+            handle,
+            &format!("{{\"text\":\"{}\"}}", esc(text)),
+            None,
+        )),
+        Call::Struct(StructArgs::Picture { path, width }) => Some(envelope(
+            "picture",
+            handle,
+            &format!("{{\"text\":\"{}\",\"name\":\"{}\"}}", esc(path), esc(width)),
+            None,
         )),
         Call::Struct(_) => None,
     }
@@ -427,9 +457,44 @@ mod tests {
         let s = Call::Struct(StructArgs::CreateSlide { title: "T".into(), bullets: vec![] });
         assert!(!h.dispatch(&s, "ppt:d.pptx:deck").unwrap().ok);
         assert!(sent(&w).is_empty(), "nothing may go on the wire for an unmapped op");
-        let t = Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]] });
+        let t = Call::Struct(StructArgs::TrackChange { para: None, text: "t".into() });
         assert!(!h.dispatch(&t, "word:d.docx:body").unwrap().ok);
         assert!(sent(&w).is_empty());
+    }
+
+    #[test]
+    fn a_word_report_can_be_built_rather_than_filled_into_a_template() {
+        use crate::ops::StructArgs;
+        // Word could only overwrite paragraphs that already existed, so a
+        // report had to ship as a template with the right number of blank
+        // lines in it. These are the verbs that write the document instead.
+        let (mut h, w) = hand(&"{\"ok\":true,\"detail\":\"done\"}\n".repeat(6));
+        let calls = [
+            Call::Struct(StructArgs::InsertParagraph {
+                text: "Estate performance".into(),
+                style: "Heading 1".into(),
+            }),
+            Call::Struct(StructArgs::InsertTable {
+                rows: vec![vec!["Site".into(), "kWh".into()], vec!["Bearspaw".into(), "3082638".into()]],
+                style: String::new(),
+            }),
+            Call::Struct(StructArgs::PageBreak { kind: "page".into() }),
+            Call::Struct(StructArgs::Contents { title: "Contents".into() }),
+            Call::Struct(StructArgs::PageNumbers { text: "Quarterly review".into() }),
+            Call::Struct(StructArgs::Picture { path: "out\\by-site.png".into(), width: "420".into() }),
+        ];
+        for c in &calls {
+            assert!(h.dispatch(c, "word:r.docx:body").unwrap().ok, "{c:?} did not reach the hand");
+        }
+        let out = sent(&w);
+        for method in ["insertParagraph", "insertTable", "pageBreak", "contents", "pageNumbers", "picture"] {
+            assert!(out.contains(&format!("\"method\":\"{method}\"")), "{method} never went on the wire: {out}");
+        }
+        // The style rides in `name`, which is the same field addSheet and
+        // table already use, so the sidecar needs no second grammar.
+        assert!(out.contains("\"name\":\"Heading 1\""), "{out}");
+        // A table crosses as the same pipe/semicolon grid the sheet uses.
+        assert!(out.contains("Site|kWh;Bearspaw|3082638"), "{out}");
     }
 
     #[test]
@@ -518,7 +583,8 @@ mod tests {
                 kind: "line".into(),
                 source: "Summary!A1:B13".into(),
                 title: "Monthly".into(),
-                at: "Dashboard!A1".into(),
+                at: "Dashboard!A1:H16".into(),
+                style: "legend=0;yTitle=kWh".into(),
             }),
             "excel:p.xlsx:S",
         )
@@ -532,5 +598,9 @@ mod tests {
         assert!(out.contains("bold=1;numberFormat=#,##0"), "{out}");
         assert!(out.contains("\"values\":\"kWh\""), "{out}");
         assert!(out.contains("\"kind\":\"line\""), "{out}");
+        // A chart anchored to a range is how the model controls size, and the
+        // style rides as a payload rather than as a second grammar.
+        assert!(out.contains("\"at\":\"Dashboard!A1:H16\""), "{out}");
+        assert!(out.contains("legend=0;yTitle=kWh"), "{out}");
     }
 }

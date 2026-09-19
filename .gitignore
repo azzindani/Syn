@@ -25,3 +25,8 @@ target/
 
 # Saved conversations: the user's, not the project's.
 .syn/
+
+# Playwright: installed browsers and node_modules are machine-local
+tests/ui/node_modules/
+tests/ui/.console.json
+tests/ui/.console-url.txt

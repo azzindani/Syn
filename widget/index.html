@@ -206,7 +206,7 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #send:disabled{opacity:.4;box-shadow:none}
 #hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
   font-size:11px;color:var(--muted-foreground)}
-body.blank-chat #hint{display:block}
+body.blank-chat #hint,body.busy #hint{display:block}
 .spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -539,6 +539,7 @@ async function refresh() {
 
 function thinking(on) {
   busy = on;
+  document.body.classList.toggle("busy", on);
   $("send").disabled = on;
   $("hint").innerHTML = on ? '<span class="spin"></span> working…'
     : "Enter sends · Shift+Enter for a new line";

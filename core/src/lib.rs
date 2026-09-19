@@ -5,6 +5,7 @@
 pub mod acp;
 pub mod agent;
 pub mod bus;
+pub mod cdp;
 pub mod config;
 pub mod guard;
 pub mod hand;
@@ -25,6 +26,7 @@ pub mod snapshots;
 pub mod stream;
 pub mod tools;
 pub mod vfs;
+pub mod ws;
 
 pub use bus::Relay;
 pub use protocol::{Op, Error, StructVerb};

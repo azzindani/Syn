@@ -4,7 +4,10 @@
 //! against the live registry first (files may have closed mid-pause).
 //!
 //! A handle marked live dispatches through an attached `LiveHand` to a real
-//! document instead of the in-memory model. It takes the SAME route to get
+//! document instead of the in-memory model. Many hands can be attached at
+//! once and a handle routes to the one that claims its app, so a single
+//! session can hold Office, a browser and an editor at the same time and
+//! the caller never picks a transport. It takes the SAME route to get
 //! there — kill switch, app allowlist, doom-loop gate, registry check, event
 //! feed — because an op that edits the document in front of the human wants
 //! more supervision than one that edits a model in memory, not less.
@@ -16,7 +19,7 @@ use crate::ops::{Call, OpOut, execute};
 use crate::protocol::{Error, Result};
 use crate::queue::{QueueState, QueuedOp, RunQueue};
 use crate::security;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -32,8 +35,22 @@ pub struct Runner {
     jobs: std::collections::HashMap<String, Job>,
     seq: u64,
     guard: Guard,
-    hand: Option<Box<dyn LiveHand>>,
-    live: HashSet<String>,
+    hands: Vec<Attached>,
+    /// handle -> name of the hand it is bound to.
+    live: HashMap<String, String>,
+}
+
+/// One attached hand and the apps it claims.
+///
+/// An empty `apps` makes the hand a catch-all: it takes any handle no other
+/// hand claims. A named claim beats a catch-all, and among equals the first
+/// attached wins, so routing is insertion-ordered and never depends on hash
+/// iteration order.
+#[derive(Debug)]
+struct Attached {
+    name: String,
+    apps: Vec<String>,
+    hand: Box<dyn LiveHand>,
 }
 
 impl Runner {
@@ -44,8 +61,8 @@ impl Runner {
             jobs: std::collections::HashMap::new(),
             seq: 0,
             guard: Guard::open(),
-            hand: None,
-            live: HashSet::new(),
+            hands: Vec::new(),
+            live: HashMap::new(),
         }
     }
 
@@ -55,30 +72,80 @@ impl Runner {
         r
     }
 
-    /// Bind a live hand. Nothing dispatches through it until a handle is
-    /// marked live, so attaching one cannot change existing behaviour.
+    /// Bind a hand under `name`, claiming `apps` (empty = any app).
+    /// Nothing dispatches through it until a handle is marked live, so
+    /// attaching one cannot change existing behaviour.
+    ///
+    /// Re-attaching a name replaces that hand and unlives its handles: a new
+    /// pipe is a new process, and a document it never opened must be marked
+    /// live again rather than inherited from its predecessor.
+    pub fn attach_hand_as(&mut self, name: &str, apps: Vec<String>, hand: Box<dyn LiveHand>) {
+        self.detach_hand(name);
+        self.hands.push(Attached { name: name.into(), apps, hand });
+    }
+
+    /// Bind a catch-all hand named "default".
     pub fn attach_hand(&mut self, hand: Box<dyn LiveHand>) {
-        self.hand = Some(hand);
+        self.attach_hand_as("default", Vec::new(), hand);
     }
 
     pub fn has_hand(&self) -> bool {
-        self.hand.is_some()
+        !self.hands.is_empty()
     }
 
-    /// Route this handle to the live hand instead of the in-memory model.
-    pub fn mark_live(&mut self, handle: &str) {
-        self.live.insert(handle.to_string());
+    /// Attached hands in routing order, as (name, claimed apps).
+    pub fn hands(&self) -> Vec<(&str, &[String])> {
+        self.hands.iter().map(|a| (a.name.as_str(), a.apps.as_slice())).collect()
+    }
+
+    /// The hand that would take this app, by the rule on `Attached`.
+    fn route(&self, app: &str) -> Option<&str> {
+        self.hands
+            .iter()
+            .find(|a| a.apps.iter().any(|x| x == app))
+            .or_else(|| self.hands.iter().find(|a| a.apps.is_empty()))
+            .map(|a| a.name.as_str())
+    }
+
+    /// Route this handle to a live hand instead of the in-memory model, and
+    /// report which hand took it.
+    ///
+    /// Fails when no attached hand claims the app, so a handle for a hand
+    /// that was never attached binds nothing rather than quietly staying on
+    /// the in-memory model and reporting edits to a document no one touched.
+    pub fn mark_live(&mut self, handle: &str) -> Result<String> {
+        let app = app_of(handle).to_string();
+        let Some(name) = self.route(&app).map(str::to_string) else {
+            return Err(Error::NoHand(app));
+        };
+        self.live.insert(handle.to_string(), name.clone());
+        Ok(name)
     }
 
     pub fn is_live(&self, handle: &str) -> bool {
-        self.live.contains(handle) && self.hand.is_some()
+        self.hand_for(handle).is_some()
     }
 
-    /// Forget the hand and every live handle. Called when the pipe dies so
-    /// the next op fails loudly instead of silently hitting the in-memory
-    /// model and reporting success for a document it never touched.
+    /// Name of the hand bound to this handle, if it is live and that hand is
+    /// still attached.
+    pub fn hand_for(&self, handle: &str) -> Option<&str> {
+        let name = self.live.get(handle)?;
+        self.hands.iter().find(|a| &a.name == name).map(|a| a.name.as_str())
+    }
+
+    /// Forget one hand and only the handles bound to it. Called when a pipe
+    /// dies so the next op on those handles fails loudly instead of silently
+    /// hitting the in-memory model and reporting success for a document it
+    /// never touched. One dead transport must not unlive documents held by a
+    /// hand that is still healthy.
+    pub fn detach_hand(&mut self, name: &str) {
+        self.hands.retain(|a| a.name != name);
+        self.live.retain(|_, v| v != name);
+    }
+
+    /// Forget every hand and every live handle.
     pub fn drop_hand(&mut self) {
-        self.hand = None;
+        self.hands.clear();
         self.live.clear();
     }
 
@@ -171,8 +238,13 @@ impl Runner {
         if !relay.registry(&self.session)?.contains(&job.handle) {
             return Err(Error::UnknownHandle(job.handle));
         }
-        let hand = self.hand.as_mut().expect("is_live() proved a hand is attached");
-        match hand.dispatch_call(&job.call, &job.handle) {
+        let bound = self.live.get(&job.handle).cloned().expect("is_live() proved a hand is bound");
+        let hand = self
+            .hands
+            .iter_mut()
+            .find(|a| a.name == bound)
+            .expect("hand_for() proved the bound hand is still attached");
+        match hand.hand.dispatch_call(&job.call, &job.handle) {
             Ok(reply) if reply.ok => {
                 let preview = security::truncate_output(&reply.preview);
                 relay.emit(&self.session, "step.done", &job.handle, format!("{preview} live"))?;
@@ -184,10 +256,11 @@ impl Runner {
                 Err(Error::Live(reply.error))
             }
             Err(e) => {
-                // The pipe is gone. Pause and forget the hand: continuing
-                // would quietly fall back to the in-memory model.
+                // The pipe is gone. Pause and forget THIS hand: continuing
+                // would quietly fall back to the in-memory model. Hands on
+                // other transports are untouched; they did not fail.
                 self.queue.freeze();
-                self.drop_hand();
+                self.detach_hand(&bound);
                 relay.emit(&self.session, "step.error", &job.handle, format!("transport {e}"))?;
                 Err(Error::Transport(e.to_string()))
             }
@@ -257,7 +330,7 @@ mod tests {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
         run.attach_hand(Box::new(FakeHand::ok(&["grid Sheet1: 5x3"])));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         run.submit(read_job(&h));
         let out = run.pump(&mut r).unwrap().unwrap();
         assert_eq!(out, OpOut::Text { detail: "grid Sheet1: 5x3".into() });
@@ -284,7 +357,7 @@ mod tests {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
         run.attach_hand(Box::new(FakeHand::ok(&["never"])));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         run.submit(read_job(&h));
         run.kill();
         assert!(matches!(run.pump(&mut r), Err(Error::Killed)));
@@ -295,7 +368,7 @@ mod tests {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
         run.attach_hand(Box::new(FakeHand::ok(&["never"])));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         run.lock_allowlist(vec!["word".into()]); // handle is excel:
         run.submit(read_job(&h));
         assert!(matches!(run.pump(&mut r), Err(Error::AppDenied(_))));
@@ -306,7 +379,7 @@ mod tests {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
         run.attach_hand(Box::new(FakeHand::ok(&["a", "b", "c"])));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         for _ in 0..3 {
             run.submit(read_job(&h));
         }
@@ -321,7 +394,7 @@ mod tests {
         let (mut r, s, _h) = relay1();
         let mut run = Runner::new(&s);
         run.attach_hand(Box::new(FakeHand::ok(&["never"])));
-        run.mark_live("excel:ghost.xlsx:Sheet1");
+        run.mark_live("excel:ghost.xlsx:Sheet1").unwrap();
         run.submit(read_job("excel:ghost.xlsx:Sheet1"));
         assert!(matches!(run.pump(&mut r), Err(Error::UnknownHandle(_))));
     }
@@ -337,7 +410,7 @@ mod tests {
             error: "workbook not open for excel:p.xlsx:Sheet1".into(),
         }));
         run.attach_hand(Box::new(fake));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         run.submit(read_job(&h));
         match run.pump(&mut r) {
             Err(Error::Live(d)) => assert!(d.contains("workbook not open")),
@@ -357,7 +430,7 @@ mod tests {
             "sidecar closed the pipe",
         )));
         run.attach_hand(Box::new(fake));
-        run.mark_live(&h);
+        run.mark_live(&h).unwrap();
         run.submit(read_job(&h));
         run.submit(read_job(&h));
         assert!(matches!(run.pump(&mut r), Err(Error::Transport(_))));
@@ -413,6 +486,105 @@ mod tests {
         assert!(run.pump(&mut r).is_err());
         assert_eq!(run.state(), &QueueState::Paused);
     }
+
+    /// Attach a word hand alongside the excel one and give the relay a word
+    /// handle to route.
+    fn with_word(r: &mut Relay, s: &str) -> String {
+        let h = crate::protocol::new_handle("word", "d.docx", "body");
+        r.attach(s, h.clone(), OpenFile {
+            kind: FileKind::Word,
+            content: FileContent::Word {
+                paras: vec!["p".into()],
+                tables: Vec::new(),
+                comments: Vec::new(),
+                changes: Vec::new(),
+            },
+            styles: HashMap::new(),
+        });
+        h
+    }
+
+    #[test]
+    fn two_hands_each_get_their_own_app() {
+        let (mut r, s, xh) = relay1();
+        let wh = with_word(&mut r, &s);
+        let mut run = Runner::new(&s);
+        run.attach_hand_as("office", vec!["excel".into()], Box::new(FakeHand::ok(&["from excel hand"])));
+        run.attach_hand_as("writer", vec!["word".into()], Box::new(FakeHand::ok(&["from word hand"])));
+        assert_eq!(run.mark_live(&xh).unwrap(), "office");
+        assert_eq!(run.mark_live(&wh).unwrap(), "writer");
+
+        run.submit(read_job(&xh));
+        let out = run.pump(&mut r).unwrap().unwrap();
+        assert_eq!(out, OpOut::Text { detail: "from excel hand".into() });
+
+        run.submit(Job {
+            handle: wh.clone(),
+            summary: "read".into(),
+            call: Call::Read(ReadArgs { selector: "body".into() }),
+        });
+        let out = run.pump(&mut r).unwrap().unwrap();
+        assert_eq!(out, OpOut::Text { detail: "from word hand".into() });
+    }
+
+    #[test]
+    fn a_named_claim_beats_a_catch_all() {
+        let (_r, s, xh) = relay1();
+        let mut run = Runner::new(&s);
+        run.attach_hand(Box::new(FakeHand::ok(&["catch-all"])));
+        run.attach_hand_as("office", vec!["excel".into()], Box::new(FakeHand::ok(&["claimed"])));
+        // Attached second, but it names the app, so it wins.
+        assert_eq!(run.mark_live(&xh).unwrap(), "office");
+        assert_eq!(run.mark_live("ppt:d.pptx:deck").unwrap(), "default");
+    }
+
+    #[test]
+    fn marking_live_fails_when_no_hand_claims_the_app() {
+        let (_r, s, xh) = relay1();
+        let mut run = Runner::new(&s);
+        run.attach_hand_as("writer", vec!["word".into()], Box::new(FakeHand::default()));
+        // Fails closed: without this the handle would stay on the in-memory
+        // model and report edits to a document nobody touched.
+        assert!(matches!(run.mark_live(&xh), Err(Error::NoHand(a)) if a == "excel"));
+        assert!(!run.is_live(&xh));
+    }
+
+    #[test]
+    fn a_dead_pipe_drops_only_its_own_hand() {
+        let (mut r, s, xh) = relay1();
+        let wh = with_word(&mut r, &s);
+        let mut run = Runner::new(&s);
+        let dead = FakeHand {
+            replies: std::collections::VecDeque::from([Err(std::io::Error::other("pipe closed"))]),
+            seen: Vec::new(),
+        };
+        run.attach_hand_as("office", vec!["excel".into()], Box::new(dead));
+        run.attach_hand_as("writer", vec!["word".into()], Box::new(FakeHand::ok(&["still here"])));
+        run.mark_live(&xh).unwrap();
+        run.mark_live(&wh).unwrap();
+
+        run.submit(read_job(&xh));
+        assert!(matches!(run.pump(&mut r), Err(Error::Transport(_))));
+        // The excel hand is gone and its handle is no longer live...
+        assert!(!run.is_live(&xh));
+        assert_eq!(run.hands().len(), 1);
+        // ...but the word hand never failed, so it keeps its document.
+        assert!(run.is_live(&wh));
+        assert_eq!(run.hand_for(&wh), Some("writer"));
+    }
+
+    #[test]
+    fn reattaching_a_name_unlives_its_handles() {
+        let (_r, s, xh) = relay1();
+        let mut run = Runner::new(&s);
+        run.attach_hand_as("office", vec!["excel".into()], Box::new(FakeHand::default()));
+        run.mark_live(&xh).unwrap();
+        // A new pipe is a new process: it never opened this document.
+        run.attach_hand_as("office", vec!["excel".into()], Box::new(FakeHand::default()));
+        assert!(!run.is_live(&xh));
+        assert_eq!(run.hands().len(), 1);
+    }
+
 }
 
 #[cfg(test)]

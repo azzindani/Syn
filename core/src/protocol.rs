@@ -63,6 +63,7 @@ pub enum Error {
     Killed,
     Transport(String),
     Live(String),
+    NoHand(String),
 }
 
 impl fmt::Display for Error {
@@ -70,6 +71,7 @@ impl fmt::Display for Error {
         match self {
             Self::UnknownSession(s) => write!(f, "unknown session {s}: handshake first"),
             Self::UnknownHandle(h) => write!(f, "handle not open: {h}: list registry first"),
+            Self::NoHand(a) => write!(f, "no hand claims app {a}: attach one that does"),
             Self::BadSelector(s) => write!(f, "bad selector {s:?}: rewrite it for the handle kind"),
             Self::ClosedSchema(d) => write!(f, "schema violation: {d}"),
             Self::OverBulkCap => write!(f, "over bulk cap: narrow the selector, refusing not truncating"),

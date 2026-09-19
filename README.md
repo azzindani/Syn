@@ -23,6 +23,11 @@ software hands (Office first) in one live session, any model via OpenRouter.
     paths, deadline, capped output returned fenced as untrusted.
   - `hand` — `office-rpc/1` transport to a live sidecar (the brain's
     connection to the hands; generic over the stream, so testable anywhere).
+  - `cdp` — Chrome DevTools hand: every browser AND every Electron app
+    (VS Code, Slack, Figma, Notion) with no plugin. Selectors are bound as
+    JS string literals, never pasted into source.
+  - `ws` — RFC 6455 client (handshake, masking, ping, continuation) in std,
+    because `core` has no dependencies.
   - bins: `cli` (REPL: `do`/`approve`/`deny`, `hand`/`live`, `shellallow`),
     `mcpgate` (stdio bridge).
 - `widget/index.html` — chat + live feed + model picker + budget + kill
@@ -72,6 +77,34 @@ the Tauri bundle and a Rust-side pipe client are still unproven — status and
 the COM lessons behind the fixes are in `docs/runbook-windows.md`.
 
 Copy `.env.example` to `.env` and add a key to enable `send` and `do`.
+
+## Many hands, one session
+
+`Runner` holds several hands at once and routes each handle to the one that
+claims its app, so the caller names a document and never a transport. A
+named claim beats a catch-all; one dead transport drops only its own hand.
+
+```
+cli.exe
+  hand synhand-excel excel word ppt   # COM sidecar, Office apps
+  cdp 127.0.0.1:9222 web              # a browser or any Electron app
+  hands                               # both, in routing order
+  page web testbed #report            # register a page as a handle
+  live web:testbed:#report            # -> hand=cdp-127.0.0.1:9222
+  read web:testbed:#report h1
+```
+
+Verified live against Chrome and Edge at once, two hands in one session:
+read, write, format, `struct` and `export` all land in the open page, `undo`
+is refused rather than faked (a page has no undo this hand can honour), and
+the allowlist and kill switch stop a live browser op exactly as they stop a
+live Excel one. Reproduce it with `scripts/live-cdp-smoke.ps1`, which reaps
+the browser tree and proves the port closed when it is done.
+
+Start a Chromium for it with `--remote-debugging-port=9222` and its own
+`--user-data-dir`. That port is unauthenticated: anything local that reaches
+it controls the browser and its logged-in sessions, so keep it on 127.0.0.1
+and off your everyday profile.
 
 ## Drive it from a terminal
 

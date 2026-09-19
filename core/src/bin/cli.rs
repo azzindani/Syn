@@ -9,7 +9,10 @@
 //!   undo <h> | events | registry | route <skim|routine|code|deep|vision>
 //!   pause | resume | pump | kill | allow <app...> | send <task> <prompt...> (provider POST, needs key)
 //!   config                  print resolved models + endpoint (never the key)
-//!   hand <pipe>             connect to a live office-host sidecar
+//!   hand <pipe> [app...]    connect a hand; names the apps it claims
+//!   cdp <host:port> [app..] connect a Chrome DevTools hand (Electron too)
+//!   page <app> <match> [u]  register a browser page as a handle
+//!   hands                   attached hands, in routing order
 //!   live <handle>           route that handle's ops to the open document
 //!   lread <h> <sel>         queued read of a live handle
 //!                           (once `live`, plain `write` also hits the document)
@@ -22,8 +25,9 @@
 use core::agent::{Agent, Brain, CurlBrain, Step};
 use core::bus::{FileContent, FileKind, OpenFile};
 use core::config;
+use core::cdp::Cdp;
 use core::hand::Hand;
-use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs, execute};
+use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use core::protocol::new_handle;
 use core::provider;
 use core::router::{TaskKind, route};
@@ -40,6 +44,22 @@ fn blank_excel() -> OpenFile {
             sheets: HashMap::from([("Sheet1".into(), vec![vec![String::new(); 4]; 4])]),
         },
         styles: HashMap::new(),
+    }
+}
+
+/// Submit one op and run it.
+///
+/// Every op arm goes through here. Calling `ops::execute` from a command
+/// would skip the kill switch, the app allowlist, the doom-loop gate, the
+/// event feed AND the live-hand routing, so a handle marked live would
+/// quietly edit the in-memory model instead of the open document. The agent
+/// loop already holds this invariant; the REPL now holds it too.
+fn run_op(runner: &mut Runner, relay: &mut Relay, handle: &str, what: &str, call: Call) {
+    let id = runner.submit(Job { handle: handle.into(), summary: format!("cli-{what}"), call });
+    match runner.pump(relay) {
+        Ok(Some(o)) => println!("RECEIPT {id} {what} {o:?}"),
+        Ok(None) => println!("ERROR {id} queue not running"),
+        Err(e) => println!("ERROR {id} {e}"),
     }
 }
 
@@ -120,7 +140,12 @@ fn main() {
         let (line, live) = match buf.pop_front() {
             Some(l) => (l, false),
             None => match stdin.lock().lines().next() {
-                Some(Ok(l)) => (l, true),
+                // Strip a leading BOM. Windows producers add one freely --
+                // PowerShell's $OutputEncoding does it when piping to a
+                // native exe -- and it has now cost this project three
+                // debugging sessions, two of them on the sidecar pipe.
+                // Tolerating it here is one line; diagnosing it again is not.
+                Some(Ok(l)) => (l.strip_prefix('\u{feff}').unwrap_or(&l).to_string(), true),
                 _ => break,
             },
         };
@@ -171,10 +196,7 @@ fn main() {
                     println!("ERROR usage: read <handle> <selector>");
                     continue;
                 }
-                match execute(&mut relay, &session, a[0], Call::Read(ReadArgs { selector: a[1].into() })) {
-                    Ok(o) => println!("RECEIPT read {o:?}"),
-                    Err(e) => println!("ERROR {e}"),
-                }
+                run_op(&mut runner, &mut relay, a[0], "read", Call::Read(ReadArgs { selector: a[1].into() }));
             }
             "write" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -183,13 +205,7 @@ fn main() {
                     continue;
                 }
                 let call = Call::Write(WriteArgs { selector: a[1].into(), values: parse_grid(a[2]) });
-                let h = a[0].to_string();
-                let id = runner.submit(Job { handle: h, summary: "cli-write".into(), call });
-                match runner.pump(&mut relay) {
-                    Ok(Some(o)) => println!("RECEIPT {id} {o:?}"),
-                    Ok(None) => println!("ERROR {id} queue not running"),
-                    Err(e) => println!("ERROR {id} {e}"),
-                }
+                run_op(&mut runner, &mut relay, a[0], "write", call);
             }
             "para" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
@@ -197,10 +213,8 @@ fn main() {
                     println!("ERROR usage: para <handle> <text>");
                     continue;
                 }
-                match execute(&mut relay, &session, a[0], Call::Struct(StructArgs::InsertParagraph { text: a[1].into() })) {
-                    Ok(o) => println!("RECEIPT para {o:?}"),
-                    Err(e) => println!("ERROR {e}"),
-                }
+                let call = Call::Struct(StructArgs::InsertParagraph { text: a[1].into() });
+                run_op(&mut runner, &mut relay, a[0], "para", call);
             }
             "slide" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -209,10 +223,8 @@ fn main() {
                     continue;
                 }
                 let bullets = a[2].split('|').map(str::to_string).collect();
-                match execute(&mut relay, &session, a[0], Call::Struct(StructArgs::CreateSlide { title: a[1].into(), bullets })) {
-                    Ok(o) => println!("RECEIPT slide {o:?}"),
-                    Err(e) => println!("ERROR {e}"),
-                }
+                let call = Call::Struct(StructArgs::CreateSlide { title: a[1].into(), bullets });
+                run_op(&mut runner, &mut relay, a[0], "slide", call);
             }
             "xfer" => {
                 let a: Vec<&str> = rest.splitn(4, ' ').collect();
@@ -221,25 +233,15 @@ fn main() {
                     continue;
                 }
                 let call = Call::Struct(StructArgs::Transfer { from: a[0].into(), selector: a[1].into(), title: a[3].into() });
-                let h = a[2].to_string();
-                let id = runner.submit(Job { handle: h, summary: "cli-xfer".into(), call });
-                match runner.pump(&mut relay) {
-                    Ok(o) => println!("RECEIPT {id} {o:?}"),
-                    Err(e) => println!("ERROR {id} {e}"),
-                }
+                run_op(&mut runner, &mut relay, a[2], "xfer", call);
             }
-            "undo" => match execute(&mut relay, &session, rest, Call::Undo) {
-                Ok(o) => println!("RECEIPT undo {o:?}"),
-                Err(e) => println!("ERROR {e}"),
-            },
+            "undo" => run_op(&mut runner, &mut relay, rest.trim(), "undo", Call::Undo),
             "export" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 let fmt = a.get(1).unwrap_or(&"summary").to_string();
                 let path = a.get(2).map(|s| s.to_string());
-                match execute(&mut relay, &session, a[0], Call::Export(ExportArgs { format: fmt, path, sheet: None })) {
-                    Ok(o) => println!("RECEIPT export {o:?}"),
-                    Err(e) => println!("ERROR {e}"),
-                }
+                let call = Call::Export(ExportArgs { format: fmt, path, sheet: None });
+                run_op(&mut runner, &mut relay, a[0], "export", call);
             }
             "format" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -257,10 +259,8 @@ fn main() {
                         }
                     }
                 }
-                match execute(&mut relay, &session, a[0], Call::Format(FormatArgs { selector: a[1].into(), style })) {
-                    Ok(o) => println!("RECEIPT format {o:?}"),
-                    Err(e) => println!("ERROR {e}"),
-                }
+                let call = Call::Format(FormatArgs { selector: a[1].into(), style });
+                run_op(&mut runner, &mut relay, a[0], "format", call);
             }
             "events" => {
                 for e in relay.events(&session).unwrap_or_default() {
@@ -344,13 +344,75 @@ fn main() {
                 }
             }
             "hand" => {
-                let pipe = rest.trim();
+                // `hand <pipe> [app...]`: with apps, this hand claims them;
+                // with none it is the catch-all for handles no other hand
+                // claims. Several hands can be attached at once.
+                let mut parts = rest.split_whitespace();
+                let Some(pipe) = parts.next() else {
+                    println!("ERROR usage: hand <pipe> [app...]");
+                    continue;
+                };
+                let apps: Vec<String> = parts.map(str::to_string).collect();
                 match Hand::connect(pipe) {
                     Ok(h) => {
-                        runner.attach_hand(Box::new(h));
-                        println!("RECEIPT hand connected pipe={pipe}");
+                        let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
+                        runner.attach_hand_as(pipe, apps, Box::new(h));
+                        println!("RECEIPT hand={pipe} claims={claims}");
                     }
                     Err(e) => println!("ERROR hand {e}"),
+                }
+            }
+            "cdp" => {
+                // One hand, every Chromium on the box: browsers and every
+                // Electron app started with --remote-debugging-port.
+                let mut parts = rest.split_whitespace();
+                let Some(addr) = parts.next() else {
+                    println!("ERROR usage: cdp <host:port> [app...]");
+                    continue;
+                };
+                let apps: Vec<String> = parts.map(str::to_string).collect();
+                match Cdp::connect(addr) {
+                    Ok(c) => {
+                        let open: Vec<String> = c
+                            .targets()
+                            .iter()
+                            .filter(|t| t.kind == "page")
+                            .map(|t| t.title.clone())
+                            .collect();
+                        let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
+                        let name = format!("cdp-{addr}");
+                        runner.attach_hand_as(&name, apps, Box::new(c));
+                        println!("RECEIPT hand={name} claims={claims} pages={open:?}");
+                    }
+                    Err(e) => println!("ERROR cdp {e}"),
+                }
+            }
+            "page" => {
+                // Register a browser page in the registry so ops can address
+                // it. The in-memory body stays empty on purpose: a live
+                // handle never reads it, and filling it would invite an op
+                // to succeed against a model of a document instead of the
+                // document.
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                let (app, m, unit) = match a.as_slice() {
+                    [app, m] => (*app, *m, ":doc"),
+                    [app, m, u] => (*app, *m, *u),
+                    _ => {
+                        println!("ERROR usage: page <app> <title-or-url-match> [css-unit]");
+                        continue;
+                    }
+                };
+                let h = new_handle(app, m, unit);
+                relay.attach(&session, h.clone(), blank_word());
+                println!("RECEIPT attached={h}");
+            }
+            "hands" => {
+                if !runner.has_hand() {
+                    println!("RECEIPT hands none");
+                }
+                for (name, apps) in runner.hands() {
+                    let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
+                    println!("HAND {name} claims={claims}");
                 }
             }
             "live" => {
@@ -363,8 +425,10 @@ fn main() {
                     println!("ERROR live no hand: run `hand <pipe>` first");
                     continue;
                 }
-                runner.mark_live(h);
-                println!("RECEIPT live={h} (ops on this handle now reach the open document)");
+                match runner.mark_live(h) {
+                    Ok(name) => println!("RECEIPT live={h} hand={name} (ops on this handle now reach the open document)"),
+                    Err(e) => println!("ERROR live {e}"),
+                }
             }
             "lread" => {
                 // Queued like every other job, so a live read passes the
@@ -376,12 +440,7 @@ fn main() {
                     continue;
                 }
                 let call = Call::Read(ReadArgs { selector: a[1].into() });
-                let id = runner.submit(Job { handle: a[0].into(), summary: "lread".into(), call });
-                match runner.pump(&mut relay) {
-                    Ok(Some(o)) => println!("RECEIPT {id} {o:?}"),
-                    Ok(None) => println!("ERROR {id} queue not running"),
-                    Err(e) => println!("ERROR {id} {e}"),
-                }
+                run_op(&mut runner, &mut relay, a[0], "lread", call);
             }
             "send" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();

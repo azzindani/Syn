@@ -1,4 +1,4 @@
-# Harness 08 — Production-Grade: Single-User Device, Porting + Digestion Protocol
+# 08 — Production-Grade: Single-User Device, Porting + Digestion Protocol
 
 Date: 2026-09-10
 Status: production-grade baseline

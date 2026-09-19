@@ -1,4 +1,4 @@
-# Harness 06 — Prior Art: Did Someone Build This Already? (Deep Research 2026-09-10)
+# 06 — Prior Art: Did Someone Build This Already? (Deep Research 2026-09-10)
 
 ## Short verdict
 No single product = your exact combo (custom desktop one-session brain + thin Office.js hands + COM live/headless + OpenRouter/DeepSeek + cross-app Word->PPT + Adobe/3D/CAD).

@@ -1,4 +1,4 @@
-# Harness 07 — Live Running Orchestration (Human Eyes Spec)
+# 07 — Live Running Orchestration (Human Eyes Spec)
 
 Date: 2026-09-10
 Status: spec v0 — answers MCP headless-blind problem

@@ -1,4 +1,4 @@
-//! harness-cli: scriptable REPL over the Runner. Every line is one command;
+//! cli: scriptable REPL over the Runner. Every line is one command;
 //! every mutation prints a RECEIPT line. Pipe a script file for E2E tests.
 //!
 //! Commands:
@@ -8,15 +8,22 @@
 //!   slide <h> <title> <b1|b2> | xfer <src> <sel> <dst> <title>
 //!   undo <h> | events | registry | route <skim|routine|code|deep|vision>
 //!   pause | resume | pump | kill | allow <app...> | send <task> <prompt...> (provider POST, needs key)
+//!   config                  print resolved models + endpoint (never the key)
+//!   hand <pipe>             connect to a live office-host sidecar
+//!   live <handle>           route that handle's ops to the open document
+//!   lread <h> <sel>         queued read of a live handle
+//!                           (once `live`, plain `write` also hits the document)
 //!   quit
 
-use harness_core::bus::{FileContent, FileKind, OpenFile};
-use harness_core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs, execute};
-use harness_core::protocol::new_handle;
-use harness_core::provider::{self, request_body};
-use harness_core::router::{TaskKind, route};
-use harness_core::runner::{Job, Runner};
-use harness_core::Relay;
+use core::bus::{FileContent, FileKind, OpenFile};
+use core::config;
+use core::hand::Hand;
+use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs, execute};
+use core::protocol::new_handle;
+use core::provider;
+use core::router::{TaskKind, route};
+use core::runner::{Job, Runner};
+use core::Relay;
 use std::collections::HashMap;
 use std::io::BufRead;
 
@@ -49,10 +56,15 @@ fn parse_grid(s: &str) -> Vec<Vec<String>> {
 }
 
 fn main() {
+    // Deployment config before anything else: .env seeds the process env,
+    // a real shell export always wins. Key names only are printed.
+    if let Some(l) = config::load_env(&std::env::current_dir().unwrap_or_default()) {
+        println!("RECEIPT env file={} applied={} kept={}", l.path.display(), l.applied.join(","), l.skipped.join(","));
+    }
     let mut relay = Relay::new();
     let mut session = "cli".to_string();
     let mut runner = Runner::new(&session);
-    relay.handshake(&session, "harness-cli");
+    relay.handshake(&session, "cli");
 
     let stdin = std::io::stdin();
     let mut buf: std::collections::VecDeque<String> = std::collections::VecDeque::new();
@@ -91,7 +103,7 @@ fn main() {
             "quit" | "exit" => break,
             "session" => {
                 session = rest.to_string();
-                relay.handshake(&session, "harness-cli");
+                relay.handshake(&session, "cli");
                 runner = Runner::new(&session);
                 println!("RECEIPT session={session}");
             }
@@ -131,7 +143,8 @@ fn main() {
                 let h = a[0].to_string();
                 let id = runner.submit(Job { handle: h, summary: "cli-write".into(), call });
                 match runner.pump(&mut relay) {
-                    Ok(o) => println!("RECEIPT {id} {o:?}"),
+                    Ok(Some(o)) => println!("RECEIPT {id} {o:?}"),
+                    Ok(None) => println!("ERROR {id} queue not running"),
                     Err(e) => println!("ERROR {id} {e}"),
                 }
             }
@@ -221,7 +234,54 @@ fn main() {
                     _ => TaskKind::VisionFallback,
                 };
                 let r = route(task);
-                println!("RECEIPT route model={:?} effort={:?} rank={}", r.model, r.effort, r.cost_rank);
+                println!(
+                    "RECEIPT route model={:?} id={} effort={:?} rank={}",
+                    r.model,
+                    config::model_id(r.model),
+                    r.effort,
+                    r.cost_rank
+                );
+            }
+            "config" => println!("RECEIPT config {}", config::describe()),
+            "hand" => {
+                let pipe = rest.trim();
+                match Hand::connect(pipe) {
+                    Ok(h) => {
+                        runner.attach_hand(Box::new(h));
+                        println!("RECEIPT hand connected pipe={pipe}");
+                    }
+                    Err(e) => println!("ERROR hand {e}"),
+                }
+            }
+            "live" => {
+                let h = rest.trim();
+                if !relay.registry(&session).unwrap_or_default().contains(&h.to_string()) {
+                    println!("ERROR live {h} is not in the registry: attach it first");
+                    continue;
+                }
+                if !runner.has_hand() {
+                    println!("ERROR live no hand: run `hand <pipe>` first");
+                    continue;
+                }
+                runner.mark_live(h);
+                println!("RECEIPT live={h} (ops on this handle now reach the open document)");
+            }
+            "lread" => {
+                // Queued like every other job, so a live read passes the
+                // kill switch, the app allowlist and the doom-loop gate and
+                // shows up in the event feed.
+                let a: Vec<&str> = rest.splitn(2, ' ').collect();
+                if a.len() < 2 {
+                    println!("ERROR usage: lread <handle> <selector>");
+                    continue;
+                }
+                let call = Call::Read(ReadArgs { selector: a[1].into() });
+                let id = runner.submit(Job { handle: a[0].into(), summary: "lread".into(), call });
+                match runner.pump(&mut relay) {
+                    Ok(Some(o)) => println!("RECEIPT {id} {o:?}"),
+                    Ok(None) => println!("ERROR {id} queue not running"),
+                    Err(e) => println!("ERROR {id} {e}"),
+                }
             }
             "send" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
@@ -237,10 +297,22 @@ fn main() {
                     _ => TaskKind::VisionFallback,
                 };
                 let r = route(task);
-                let base = std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| provider::DEFAULT_BASE_URL.into());
-                let body = request_body(r, "You are the Rig desk worker. Answer briefly.", a[1]);
-                match provider::send_via_curl(&base, "HARNESS_API_KEY", &body) {
-                    Ok((status, resp)) => println!("RECEIPT send status={status} bytes={} model={:?}", resp.len(), r.model),
+                let base = config::base_url();
+                let model = config::model_id(r.model);
+                if !config::has_api_key() {
+                    println!("ERROR send env {} not set: add it to .env (see .env.example)", config::API_KEY_ENV);
+                    continue;
+                }
+                let body = provider::request_body_with(&model, r, "You are the Syn desk worker. Answer briefly.", a[1]);
+                match provider::send_via_curl(&base, config::API_KEY_ENV, &body) {
+                    Ok((status, resp)) => {
+                        println!("RECEIPT send status={status} bytes={} model={model}", resp.len());
+                        match provider::parse_chat_text(&resp) {
+                            Some(t) => println!("REPLY {}", t.replace('\n', " ")),
+                            None if status != 200 => println!("ERROR send body {}", resp.replace('\n', " ")),
+                            None => println!("REPLY (no content in response)"),
+                        }
+                    }
                     Err(e) => println!("ERROR send {e}"),
                 }
             }

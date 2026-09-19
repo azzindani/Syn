@@ -5,7 +5,7 @@
 
 use crate::bus::Relay;
 use crate::ops::{Call, StructArgs, execute};
-use crate::protocol::{Result, HarnessError};
+use crate::protocol::{Result, Error};
 
 #[derive(Debug, Default)]
 pub struct Stream {
@@ -21,7 +21,7 @@ pub fn stream_start(relay: &mut Relay, session: &str, handle: &str, title: &str)
 
 pub fn stream_block(relay: &mut Relay, session: &str, handle: &str, stream: &mut Stream, markdown: &str) -> Result<usize> {
     if markdown.len() > 20_000 {
-        return Err(HarnessError::OverBulkCap);
+        return Err(Error::OverBulkCap);
     }
     stream.blocks.push(markdown.to_string());
     stream.chars += markdown.len();

@@ -1,7 +1,7 @@
 // Syn office-host: live Word/Excel/PowerPoint hand over COM.
 // BUILD: Windows + .NET 8 SDK + installed Office:
 //   dotnet build -c Release   (net8.0-windows)
-// RUN:  office-host.exe --pipe synhand-excel --app excel
+// RUN:  office-host.exe --pipe synhand-excel --app excel [--trace]
 // PROTOCOL: one JSON object per line on the named pipe (office-rpc/1):
 //   in:  {"method":"read","handle":"excel:plan.xlsx:Sheet1","args":{"selector":"Sheet1!A1:B2"}}
 //   out: {"ok":true,"preview":"grid Sheet1: 2x2"}
@@ -13,8 +13,10 @@
 // - write paths copy a .bak snapshot before save (mirrors core undo).
 // - late binding (dynamic) only: no PIAs, no NuGet, compiles anywhere.
 // - untrusted opens set AutomationSecurity=ForceDisable (3).
-// STATUS: full implementation; Windows-compile + live-Office run pending
-// (this container has neither dotnet nor Office).
+// STATUS: compiles on .NET 8 and verified against live Excel on Windows 11
+// (read/write/error paths, attach-to-open-workbook, detach without closing
+// the user's app, no orphans). Word and PowerPoint paths are written but
+// NOT yet exercised live -- see docs/runbook-windows.md.
 using System;
 using System.IO;
 using System.IO.Pipes;
@@ -22,17 +24,20 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace Harness.Sidecar
+namespace Syn.Sidecar
 {
     internal static class Program
     {
         private static string _pipe = "synhand";
         private static string _app = "excel";
         private static volatile bool _stop;
+        private static bool _trace;
 
         [STAThread]
         private static int Main(string[] args)
         {
+            _trace = Array.IndexOf(args, "--trace") >= 0
+                     || Environment.GetEnvironmentVariable("SYN_TRACE") == "1";
             for (var i = 0; i + 1 < args.Length; i += 2)
             {
                 if (args[i] == "--pipe") _pipe = args[i + 1];
@@ -43,6 +48,14 @@ namespace Harness.Sidecar
                 Console.Error.WriteLine("app must be word|excel|powerpoint");
                 return 2;
             }
+            // Without this the read loop's stop flag is never set and Ctrl+C
+            // tears the process down mid-COM-call instead of draining it.
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                _stop = true;
+                Console.WriteLine("stop requested: draining");
+            };
             var sta = new Thread(Run) { IsBackground = true };
             sta.SetApartmentState(ApartmentState.STA);
             sta.Start();
@@ -58,16 +71,31 @@ namespace Harness.Sidecar
             {
                 app.Visible = true;
                 app.DisplayAlerts = false;
+                // Byte mode, not Message: the client is an ordinary
+                // StreamReader/StreamWriter pair, and a message-mode server
+                // framed against a byte-mode client never completes a read.
                 using var server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
-                    PipeTransmissionMode.Message, PipeOptions.Asynchronous);
+                    PipeTransmissionMode.Byte, PipeOptions.None);
+                Trace($"pipe {_pipe}: waiting for client");
                 server.WaitForConnection();
-                using var reader = new StreamReader(server, Encoding.UTF8);
-                using var writer = new StreamWriter(server, Encoding.UTF8) { AutoFlush = true };
+                Trace("pipe: client connected");
+                // UTF8Encoding(false): the default Encoding.UTF8 carries a
+                // byte-order-mark preamble, and StreamWriter emits it on the
+                // first flush — three stray bytes in front of the first JSON
+                // reply, which every client then fails to parse.
+                var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
+                Trace("pipe: reader ready");
+                using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
+                Trace("pipe: writer ready");
                 while (!_stop)
                 {
+                    Trace("pipe: awaiting line");
                     var line = reader.ReadLine();
-                    if (line == null) break;
+                    if (line == null) { Trace("pipe: EOF, client gone"); break; }
+                    Trace($"pipe: got {line.Length} chars");
                     writer.WriteLine(Dispatch(app, line));
+                    Trace("pipe: reply sent");
                 }
             }
             finally
@@ -85,40 +113,82 @@ namespace Harness.Sidecar
                 _ => throw new ArgumentOutOfRangeException(nameof(app)),
             };
 
+        // Marshal.GetActiveObject is .NET Framework only: it was dropped in
+        // .NET Core and never came back, so the ROT lookup is done by hand.
+        // This is the whole live-attach story — without it the sidecar can
+        // only ever start its own hidden instance, never take the document
+        // the human already has open.
+        [DllImport("oleaut32.dll", PreserveSig = false)]
+        private static extern void GetActiveObject(ref Guid rclsid, IntPtr reserved,
+            [MarshalAs(UnmanagedType.IUnknown)] out object ppunk);
+
+        [DllImport("ole32.dll", PreserveSig = false)]
+        private static extern void CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string progId, out Guid clsid);
+
         private static dynamic GetOrCreate(string progId)
         {
             try
             {
-                return Marshal.GetActiveObject(progId); // live window first
+                CLSIDFromProgID(progId, out var clsid);
+                GetActiveObject(ref clsid, IntPtr.Zero, out var live);
+                Console.WriteLine($"attached to running {progId}");
+                return live; // live window first
             }
             catch (COMException)
             {
+                // MK_E_UNAVAILABLE: nothing in the ROT. Start our own.
                 var t = Type.GetTypeFromProgID(progId, throwOnError: true)!;
+                Console.WriteLine($"no running {progId}; started a new instance");
                 return Activator.CreateInstance(t)!;
             }
         }
 
-        /// Run a COM call with a timeout; modal dialogs surface as errors.
+        /// Run a COM call under a soft timeout; a busy or modal app surfaces
+        /// as a clean error instead of a hang.
+        ///
+        /// The call runs INLINE, on the STA that owns the Office object. The
+        /// first version of this ran it on a second STA thread and blocked
+        /// this one on an event — which deadlocked every request against live
+        /// Excel, because a cross-apartment call needs the owning apartment
+        /// to pump messages and the owner was parked in a non-pumping wait.
+        /// A worker thread cannot make a COM call safe; only the message
+        /// filter below can, and that is what the design intended all along.
         private static string Guarded(Func<string> call, int ms = 15000)
         {
-            string? result = null;
-            Exception? err = null;
-            var done = new ManualResetEventSlim(false);
-            var worker = new Thread(() =>
+            using var _ = MessageFilter.Install(ms);
+            Trace($"guarded: enter (budget {ms}ms)");
+            try
             {
-                try { result = call(); }
-                catch (Exception e) { err = e; }
-                finally { done.Set(); }
-            });
-            worker.SetApartmentState(ApartmentState.STA);
-            worker.Start();
-            if (!done.Wait(ms))
-                return Fail("modal dialog or busy app: human confirm required (call timed out, app untouched)");
-            return err != null ? Fail($"com: {err.Message}") : Ok(result ?? "");
+                // Inner dispatchers already return a complete envelope:
+                // wrapping again would nest one JSON reply inside another.
+                var r = call();
+                Trace("guarded: ok");
+                return r;
+            }
+            catch (COMException e) when (IsBusyOrCancelled(e))
+            {
+                return Fail($"modal dialog or busy app: human confirm required (call cancelled after {ms}ms, app untouched)");
+            }
+            catch (COMException e)
+            {
+                return Fail($"com 0x{(uint)e.HResult:X8}: {e.Message}");
+            }
+            catch (Exception e)
+            {
+                return Fail($"com: {e.Message}");
+            }
         }
+
+        private const int RpcECallRejected = unchecked((int)0x80010001);
+        private const int RpcECallCanceled = unchecked((int)0x80010002);
+        private const int RpcEServerCallRetryLater = unchecked((int)0x8001010A);
+
+        private static bool IsBusyOrCancelled(COMException e) =>
+            e.HResult is RpcECallRejected or RpcECallCanceled or RpcEServerCallRetryLater;
 
         private static string Dispatch(dynamic app, string line)
         {
+            Trace($"dispatch in: {line}");
             var method = JsonField(line, "method");
             var handle = JsonField(line, "handle");
             var selector = JsonField(JsonField(line, "args"), "selector");
@@ -199,12 +269,32 @@ namespace Harness.Sidecar
 
         private static dynamic? FindWorkbook(dynamic app, string handle)
         {
-            foreach (var w in app.Workbooks)
+            Trace("FindWorkbook: reading Workbooks.Count");
+            int n = app.Workbooks.Count;
+            Trace($"FindWorkbook: {n} open");
+            // Index by position, not foreach: enumerating a COM collection
+            // through `dynamic` binds IEnumVARIANT late and is where this
+            // wedged against live Excel. Workbooks is 1-based.
+            for (var i = 1; i <= n; i++)
             {
+                dynamic w = app.Workbooks[i];
                 string name = w.Name;
+                Trace($"FindWorkbook: [{i}] {name}");
                 if (handle.Contains(name)) return w;
             }
             return null;
+        }
+
+        /// Unbuffered stderr trace, off unless --trace or SYN_TRACE=1.
+        /// The pipe carries replies only, so when a call never comes back
+        /// this is the only way to see how far it got. Every hang found on
+        /// this machine was located with it, so it stays in the binary --
+        /// just silent by default.
+        private static void Trace(string msg)
+        {
+            if (!_trace) return;
+            Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
+            Console.Error.Flush();
         }
 
         private static string ReadRange(dynamic wb, string selector)
@@ -298,6 +388,67 @@ namespace Harness.Sidecar
 
         private static string Trunc(string s, int n = 120) =>
             s.Length <= n ? s.Trim() : s[..n].Trim() + "...";
+
+        // ---- COM call-retry policy (IOleMessageFilter) ----
+        // The piece the design called for ("IOleMessageFilter busy retry")
+        // and never had. Without a filter, a call into an Office app that is
+        // mid-recalculation, mid-paint, or showing a modal dialog is simply
+        // rejected or left hanging. With one, COM asks us what to do: we
+        // retry a merely-busy server, and once the budget is spent we cancel,
+        // turning an unbounded hang into a bounded, reportable failure.
+        [ComImport, Guid("00000016-0000-0000-C000-000000000046"),
+         InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IOleMessageFilter
+        {
+            [PreserveSig] int HandleInComingCall(int callType, IntPtr caller, int tickCount, IntPtr interfaceInfo);
+            [PreserveSig] int RetryRejectedCall(IntPtr callee, int tickCount, int rejectType);
+            [PreserveSig] int MessagePending(IntPtr callee, int tickCount, int pendingType);
+        }
+
+        private sealed class MessageFilter : IOleMessageFilter, IDisposable
+        {
+            // HandleInComingCall
+            private const int ServerCallIsHandled = 0;
+            // RetryRejectedCall: -1 cancels, >=100 waits that many ms, then retries.
+            private const int CancelCall = -1;
+            private const int RetryAfterMs = 150;
+            private const int ServerCallRetryLater = 2;
+            // MessagePending
+            private const int PendingMsgCancelCall = 0;
+            private const int PendingMsgWaitDefProcess = 2;
+
+            private readonly IOleMessageFilter? _previous;
+            private readonly int _budgetMs;
+
+            private MessageFilter(int budgetMs)
+            {
+                _budgetMs = budgetMs;
+                CoRegisterMessageFilter(this, out _previous);
+            }
+
+            public static IDisposable Install(int budgetMs) => new MessageFilter(budgetMs);
+
+            // Always restore the previous filter: leaving ours registered
+            // would apply this budget to unrelated calls.
+            public void Dispose() => CoRegisterMessageFilter(_previous, out _);
+
+            int IOleMessageFilter.HandleInComingCall(int callType, IntPtr caller, int tickCount, IntPtr interfaceInfo)
+                => ServerCallIsHandled;
+
+            // tickCount is elapsed ms since the call started, which is exactly
+            // the soft-timeout budget the runbook asks the sidecar to enforce.
+            int IOleMessageFilter.RetryRejectedCall(IntPtr callee, int tickCount, int rejectType)
+            {
+                if (rejectType != ServerCallRetryLater) return CancelCall;
+                return tickCount < _budgetMs ? RetryAfterMs : CancelCall;
+            }
+
+            int IOleMessageFilter.MessagePending(IntPtr callee, int tickCount, int pendingType)
+                => tickCount < _budgetMs ? PendingMsgWaitDefProcess : PendingMsgCancelCall;
+
+            [DllImport("ole32.dll")]
+            private static extern int CoRegisterMessageFilter(IOleMessageFilter? newFilter, out IOleMessageFilter? oldFilter);
+        }
 
         private static string Ok(string preview) => "{\"ok\":true,\"preview\":\"" + Esc(preview) + "\"}";
         private static string Fail(string error) => "{\"ok\":false,\"error\":\"" + Esc(error) + "\"}";

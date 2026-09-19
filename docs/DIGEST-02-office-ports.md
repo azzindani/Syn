@@ -1,4 +1,4 @@
-# DIGEST-02 — Office Ports (in harness-08 order)
+# DIGEST-02 — Office Ports (in 08 order)
 
 ## 1. dcc-mcp-office (rpc + sidecar) — PORT FIRST
 - Wire: `office-rpc/1` (catalog v1.2): `office.host.handshake/ping`, `office.job.get/cancel`, `office.command.execute` (`crates/office-protocol/office-rpc.catalog.json` + JSON schemas).

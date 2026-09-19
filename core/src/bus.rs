@@ -2,7 +2,7 @@
 //! doom-loop gate. Single-user, single-device: no auth, no tenants.
 use std::collections::HashMap;
 
-use crate::protocol::{DOOM_LOOP_THRESHOLD, HarnessError, Result, new_handle};
+use crate::protocol::{DOOM_LOOP_THRESHOLD, Error, Result, new_handle};
 
 pub use crate::protocol::new_handle as make_handle;
 
@@ -73,11 +73,11 @@ impl Relay {
     }
 
     fn session(&self, id: &str) -> Result<&Session> {
-        self.sessions.get(id).ok_or_else(|| HarnessError::UnknownSession(id.to_string()))
+        self.sessions.get(id).ok_or_else(|| Error::UnknownSession(id.to_string()))
     }
 
     fn session_mut(&mut self, id: &str) -> Result<&mut Session> {
-        self.sessions.get_mut(id).ok_or_else(|| HarnessError::UnknownSession(id.to_string()))
+        self.sessions.get_mut(id).ok_or_else(|| Error::UnknownSession(id.to_string()))
     }
 
     /// Admit (or rejoin) a session. Idempotent like opencode session adopt.
@@ -115,7 +115,7 @@ impl Relay {
     pub fn follow(&mut self, session: &str, handle: &str, selection: &str) -> Result<()> {
         let s = self.session_mut(session)?;
         if !s.files.contains_key(handle) {
-            return Err(HarnessError::UnknownHandle(handle.into()));
+            return Err(Error::UnknownHandle(handle.into()));
         }
         s.follow.insert(handle.to_string(), selection.to_string());
         s.events.push(Event { t: "follow".into(), handle: handle.into(), detail: selection.into() });
@@ -144,7 +144,7 @@ impl Relay {
     /// Snapshot before every mutation (opencode pre-stream snapshot rule).
     pub fn snapshot(&mut self, session: &str, handle: &str) -> Result<usize> {
         let s = self.session_mut(session)?;
-        let content = s.files.get(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?.content.clone();
+        let content = s.files.get(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?.content.clone();
         let stack = s.snapshots.entry(handle.to_string()).or_default();
         stack.push(content);
         Ok(stack.len())
@@ -153,8 +153,8 @@ impl Relay {
     pub fn undo(&mut self, session: &str, handle: &str) -> Result<usize> {
         let s = self.session_mut(session)?;
         let stack = s.snapshots.entry(handle.to_string()).or_default();
-        let content = stack.pop().ok_or_else(|| HarnessError::EmptyUndo(handle.into()))?;
-        let file = s.files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+        let content = stack.pop().ok_or_else(|| Error::EmptyUndo(handle.into()))?;
+        let file = s.files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
         file.content = content;
         let remaining = stack.len();
         s.events.push(Event { t: "step.undo".into(), handle: handle.into(), detail: format!("remaining={remaining}") });
@@ -169,7 +169,7 @@ impl Relay {
         if n >= DOOM_LOOP_THRESHOLD {
             let last = &s.calls[n - DOOM_LOOP_THRESHOLD..];
             if last.iter().all(|c| c == &last[0]) {
-                return Err(HarnessError::DoomLoop(op.to_string()));
+                return Err(Error::DoomLoop(op.to_string()));
             }
         }
         Ok(())
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn unknown_session_rejected() {
         let r = Relay::new();
-        assert!(matches!(r.registry("nope"), Err(HarnessError::UnknownSession(_))));
+        assert!(matches!(r.registry("nope"), Err(Error::UnknownSession(_))));
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
         r.handshake("s", "w");
         assert!(r.gate("s", "read", "k").is_ok());
         assert!(r.gate("s", "read", "k").is_ok());
-        assert!(matches!(r.gate("s", "read", "k"), Err(HarnessError::DoomLoop(_))));
+        assert!(matches!(r.gate("s", "read", "k"), Err(Error::DoomLoop(_))));
     }
 
     #[test]
@@ -315,7 +315,7 @@ mod cover_tests {
         let mut r = Relay::new();
         r.handshake("s", "w");
         r.attach("s", "h".into(), excel_file());
-        assert!(matches!(r.undo("s", "h"), Err(HarnessError::EmptyUndo(_))));
+        assert!(matches!(r.undo("s", "h"), Err(Error::EmptyUndo(_))));
         // Same op, differing args: never a loop. Two same + different resets.
         for k in ["a", "b", "a", "a", "c", "a", "a"] {
             assert!(r.gate("s", "read", k).is_ok(), "{k}");

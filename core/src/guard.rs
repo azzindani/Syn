@@ -3,7 +3,7 @@
 //! every Runner::pump passes through Guard::check first. kill() latches —
 //! only a fresh Guard re-arms dispatch.
 
-use crate::protocol::{HarnessError, Result};
+use crate::protocol::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct Guard {
@@ -43,7 +43,7 @@ impl Guard {
     /// Latch probe: call before dequeuing so a killed runner consumes nothing.
     pub fn armed(&self) -> Result<()> {
         if self.killed {
-            return Err(HarnessError::Killed);
+            return Err(Error::Killed);
         }
         Ok(())
     }
@@ -51,12 +51,12 @@ impl Guard {
     /// Check one dispatch. App is the handle prefix ("excel", "word").
     pub fn check(&self, app: &str) -> Result<()> {
         if self.killed {
-            return Err(HarnessError::Killed);
+            return Err(Error::Killed);
         }
         if let Some(apps) = &self.allowed_apps
             && !apps.iter().any(|a| a == app)
         {
-            return Err(HarnessError::AppDenied(app.into()));
+            return Err(Error::AppDenied(app.into()));
         }
         Ok(())
     }
@@ -80,7 +80,7 @@ mod tests {
     fn allowlist_denies_unknown_app() {
         let g = Guard::locked(&["excel", "word"]);
         assert!(g.check("word").is_ok());
-        assert!(matches!(g.check("browser"), Err(HarnessError::AppDenied(_))));
+        assert!(matches!(g.check("browser"), Err(Error::AppDenied(_))));
     }
 
     #[test]
@@ -88,7 +88,7 @@ mod tests {
         let mut g = Guard::open();
         g.kill();
         assert!(g.is_killed());
-        assert!(matches!(g.check("excel"), Err(HarnessError::Killed)));
+        assert!(matches!(g.check("excel"), Err(Error::Killed)));
     }
 
     #[test]
@@ -105,7 +105,7 @@ mod cover_tests {
     #[test]
     fn empty_allowlist_denies_everything() {
         let g = Guard::locked(&[]);
-        assert!(matches!(g.check("excel"), Err(HarnessError::AppDenied(_))));
+        assert!(matches!(g.check("excel"), Err(Error::AppDenied(_))));
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod cover_tests {
         let mut g = Guard::locked(&["excel"]);
         assert!(g.check("excel").is_ok());
         g.kill();
-        assert!(matches!(g.check("excel"), Err(HarnessError::Killed)));
+        assert!(matches!(g.check("excel"), Err(Error::Killed)));
     }
 
     #[test]

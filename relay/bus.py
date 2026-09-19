@@ -1,17 +1,17 @@
-"""Rig relay core: sessions, file-handle registry, event stream. Stdlib only."""
+"""Relay core: sessions, file-handle registry, event stream. Stdlib only."""
 import copy
 import time
 
 
-class HarnessError(Exception):
+class Error(Exception):
     pass
 
 
-class DoomLoop(HarnessError):
+class DoomLoop(Error):
     """Raised when last 3 ops are identical tool+args: requires human confirm."""
 
 
-class Denied(HarnessError):
+class Denied(Error):
     pass
 
 
@@ -64,7 +64,7 @@ class Relay:
         s = self._s(session_id)
         stack = s["snapshots"][handle]
         if not stack:
-            raise HarnessError("nothing to undo for %s" % handle)
+            raise Error("nothing to undo for %s" % handle)
         s["files"][handle]["content"] = stack.pop()
         self.emit(session_id, {"t": "step.undo", "handle": handle, "remaining": len(stack)})
         return {"handle": handle, "remaining": len(stack)}
@@ -81,4 +81,4 @@ class Relay:
         try:
             return self.sessions[session_id]
         except KeyError:
-            raise HarnessError("unknown session %s: handshake first" % session_id)
+            raise Error("unknown session %s: handshake first" % session_id)

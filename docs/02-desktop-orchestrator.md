@@ -1,4 +1,4 @@
-# Harness 02 — Desktop Orchestrator (Chat + Background Terminal)
+# 02 — Desktop Orchestrator (Chat + Background Terminal)
 
 ## v0: conversational box + background shell, no screenshots
 - UI: Tauri+React (product) or Streamlit (days-prototype). One input, one thread, `session_id`.
@@ -13,7 +13,7 @@
 $w = New-Object -ComObject Word.Application
 $w.Visible = $false
 $d = $w.Documents.Add()
-$d.Content.Text = "Hello from harness"
+$d.Content.Text = "Hello from Syn"
 $d.SaveAs("C:\tmp\out.docx")
 $w.Quit()
 ```
@@ -23,7 +23,7 @@ $w.Quit()
 - `New-Object` = hidden. `GetActiveObject` = live open app user watches:
 ```powershell
 $w = [Runtime.InteropServices.Marshal]::GetActiveObject("Word.Application")
-$w.ActiveDocument.Content.InsertAfter("added from harness")
+$w.ActiveDocument.Content.InsertAfter("added from Syn")
 $e = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
 $e.ActiveSheet.Range("A1").Value2 = "live update"
 ```

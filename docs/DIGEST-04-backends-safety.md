@@ -29,7 +29,7 @@
 8. Follow-mode selection tracking into live feed.
 
 ## Implementation status (loop D3, verified)
-All 8 deltas now live in `harness-core` (zero-dep, clippy -D clean, 30 tests):
+All 8 deltas now live in `core` (zero-dep, clippy -D clean, 30 tests):
 1. `bus.attach_with_snapshot` + `follow/selection` (hello: document_id/tools/host; follow events in feed).
 2. `paths.rs`: SessionPath idle|streaming|editing + breaker (trips at 3, human reset).
 3. `stream.rs`: stream_start/block/end with 20k block cap + counts.

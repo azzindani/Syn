@@ -5,7 +5,7 @@
 - Handshake: pane sends `hello{role:office-addin, protocolVersion, snapshot{documentId, instanceId, app, tools[], host{platform, officeVersion, href, title}}}`; server replies `welcome{protocolVersion, serverTime}`.
 - Methods: `ping/get_session_snapshot/refresh_session/execute_tool/execute_unsafe_office_js/vfs_list/read/write/delete`.
 - Events: `{type:event, event, ts, payload}` + stored ring buffer; CLI `list/inspect/metadata/tool/exec/events`, strips image base64 from printed JSON (context hygiene).
-- VFS: text/base64 read-write-delete with byteLength — file staging without leaving the harness.
+- VFS: text/base64 read-write-delete with byteLength — file staging without leaving the workspace.
 - `execute_unsafe_office_js` escape hatch: full taskpane eval in dev, sandboxed app-tool route in prod. Syn: dev-only, never prod.
 - Port deltas for Syn: panes are hands not chats (move AgentRuntime+chat to desktop widget); snapshot.hello maps to our attach{handle, kind, tools}; VFS verbs map to read/write/export.
 

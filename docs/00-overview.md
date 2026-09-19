@@ -1,4 +1,4 @@
-# Harness 00 — Overview: One Brain, Many Hands
+# 00 — Overview: One Brain, Many Hands
 
 Date: 2026-09-10 / swept full thread
 Status: idea bucket
@@ -6,13 +6,13 @@ Status: idea bucket
 ## Where this started
 - Asked for big anti-mainstream projects (see `ideas-00-big-bets.md` + `ideas-01-coding-projects.md`).
 - Narrowed to: MS Office family plugin for agents -> can we control Word/Excel/PPT from one desktop session with external models (OpenRouter/DeepSeek), not standalone sidebars?
-- Answer became this harness.
+- Answer became Syn.
 
 ## Problem (from thread)
 - OpenAI: `ChatGPT desktop app` (new: Chat+Work+Codex, old renamed `ChatGPT Classic`). Anthropic: `Claude Desktop`. Both support in-app model change, but locked to first-party models by default.
 - Office plugins are standalone: ChatGPT for Excel/PowerPoint (Marketplace, Excel+PPT only, separate history; Codex desktop CAN drive open Excel via add-in, Excel-only). Claude for Word/Excel/PowerPoint (GA paid) + Outlook (beta), one conversation across Office apps. Neither runs inside the desktop AI app.
 - Claude Desktop alone = Graph file-level (OneDrive/SharePoint/Outlook/Teams read, write with scopes), not live open-doc UI control. Live tracked-changes / cell / slide-master work needs add-in hands.
-- Built-in harness wall: Office.js iframe can only touch its own doc + https out. No cross-app, no OS, no localhost in prod. Hence fragmentation.
+- Built-in first-party wall: Office.js iframe can only touch its own doc + https out. No cross-app, no OS, no localhost in prod. Hence fragmentation.
 - GPT-6 Astra computer-use is best (`gpt-6-astra`, 72.6% OSWorld 2.0, ~47% faster than Sol) but heavy: screenshot loops, $10/M in / $50/M out, long-context surcharge, per-call fee.
 
 ## Vision

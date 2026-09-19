@@ -1,10 +1,10 @@
 //! M2/M3 acceptance demo: 2 Excels + 1 Word open in one session,
 //! typed transfers with provenance, pause/resume, full event log.
 //! Run: cargo run --example demo
-use harness_core::bus::{FileContent, FileKind, OpenFile};
-use harness_core::ops::{Call, ReadArgs, StructArgs, WriteArgs, execute};
-use harness_core::protocol::new_handle;
-use harness_core::Relay;
+use core::bus::{FileContent, FileKind, OpenFile};
+use core::ops::{Call, ReadArgs, StructArgs, WriteArgs, execute};
+use core::protocol::new_handle;
+use core::Relay;
 use std::collections::HashMap;
 
 fn excel(rows: Vec<Vec<&str>>) -> OpenFile {
@@ -31,7 +31,7 @@ fn word() -> OpenFile {
 fn main() {
     let mut r = Relay::new();
     let s = "demo";
-    r.handshake(s, "harness-widget");
+    r.handshake(s, "widget");
     let plan = new_handle("excel", "plan.xlsx", "Sheet1");
     let act = new_handle("excel", "actual.xlsx", "Sheet1");
     let rep = new_handle("word", "report.docx", "body");

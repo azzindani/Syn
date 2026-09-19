@@ -1,10 +1,12 @@
-//! Rig core: single-user harness protocol, relay bus, primitive ops, security.
+//! Core: single-user session protocol, relay bus, primitive ops, security.
 //! Zero dependencies: mirrors the Python POC in `../relay/` with closed
 //! schemas enforced by the type system instead of runtime checks.
 
 pub mod acp;
 pub mod bus;
+pub mod config;
 pub mod guard;
+pub mod hand;
 pub mod mcpgate;
 pub mod memory;
 pub mod ooxml;
@@ -22,4 +24,4 @@ pub mod stream;
 pub mod vfs;
 
 pub use bus::Relay;
-pub use protocol::{Op, HarnessError, StructVerb};
+pub use protocol::{Op, Error, StructVerb};

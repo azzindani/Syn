@@ -2,7 +2,7 @@
 //! do not compile at the call site and are rejected at the protocol edge.
 //! Every mutation snapshots first and auto-rolls back on failure.
 use crate::bus::{FileContent, FileKind, Relay, Slide};
-use crate::protocol::{BULK_CAP_CELLS, Op, Result, HarnessError};
+use crate::protocol::{BULK_CAP_CELLS, Op, Result, Error};
 use crate::{acp, security};
 
 /// Allowed cosmetic keys. Unknown keys rejected, never ignored.
@@ -62,7 +62,7 @@ fn col_to_idx(col: &str) -> Result<usize> {
     let mut n = 0usize;
     for ch in col.chars() {
         if !ch.is_ascii_alphabetic() {
-            return Err(HarnessError::BadSelector(col.into()));
+            return Err(Error::BadSelector(col.into()));
         }
         n = n * 26 + (ch.to_ascii_uppercase() as usize - 64);
     }
@@ -75,15 +75,15 @@ fn parse_range(sel: &str) -> Result<ParsedSelector> {
         return Ok((sel.to_string(), None));
     };
     let rng = rng.to_uppercase();
-    let (start, end) = rng.split_once(':').ok_or_else(|| HarnessError::BadSelector(sel.into()))?;
+    let (start, end) = rng.split_once(':').ok_or_else(|| Error::BadSelector(sel.into()))?;
     let split = |s: &str| -> Result<(usize, usize)> {
-        let i = s.find(|c: char| c.is_ascii_digit()).ok_or_else(|| HarnessError::BadSelector(sel.into()))?;
-        Ok((s[i..].parse::<usize>().map_err(|_| HarnessError::BadSelector(sel.into()))? - 1, col_to_idx(&s[..i])?))
+        let i = s.find(|c: char| c.is_ascii_digit()).ok_or_else(|| Error::BadSelector(sel.into()))?;
+        Ok((s[i..].parse::<usize>().map_err(|_| Error::BadSelector(sel.into()))? - 1, col_to_idx(&s[..i])?))
     };
     let (r0, c0) = split(start)?;
     let (r1, c1) = split(end)?;
     if (r1 - r0 + 1) * (c1 - c0 + 1) > BULK_CAP_CELLS {
-        return Err(HarnessError::OverBulkCap);
+        return Err(Error::OverBulkCap);
     }
     Ok((sheet.to_string(), Some((r0, c0, r1, c1))))
 }
@@ -109,7 +109,7 @@ pub enum Call {
 }
 
 impl Call {
-    fn op(&self) -> Op {
+    pub fn op(&self) -> Op {
         match self {
             Self::Read(_) => Op::Read,
             Self::Write(_) => Op::Write,
@@ -120,7 +120,7 @@ impl Call {
         }
     }
 
-    fn args_key(&self) -> String {
+    pub fn args_key(&self) -> String {
         format!("{self:?}")
     }
 }
@@ -131,7 +131,7 @@ pub fn execute(relay: &mut Relay, session: &str, handle: &str, call: Call) -> Re
     relay.emit(session, "step.start", handle, format!("{op:?}"))?;
     relay.gate(session, &format!("{op:?}"), &call.args_key())?;
     if !relay.registry(session)?.contains(&handle.to_string()) {
-        return Err(HarnessError::UnknownHandle(handle.into()));
+        return Err(Error::UnknownHandle(handle.into()));
     }
     let mutating = matches!(call, Call::Write(_) | Call::Format(_) | Call::Struct(_));
     if mutating {
@@ -162,11 +162,11 @@ fn files<'a>(relay: &'a mut Relay, session: &str) -> Result<&'a mut std::collect
 
 fn do_read(relay: &mut Relay, session: &str, handle: &str, args: &ReadArgs) -> Result<OpOut> {
     let files = files(relay, session)?;
-    let f = files.get(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+    let f = files.get(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
     match (&f.kind, &f.content) {
         (FileKind::Excel, FileContent::Excel { sheets }) => {
             let (sheet, rng) = parse_range(&args.selector)?;
-            let grid = sheets.get(&sheet).ok_or_else(|| HarnessError::BadSelector(args.selector.clone()))?;
+            let grid = sheets.get(&sheet).ok_or_else(|| Error::BadSelector(args.selector.clone()))?;
             match rng {
                 None => Ok(OpOut::Grid { sheet, rows: grid.len(), cols: grid.first().map(|r| r.len()).unwrap_or(0) }),
                 Some((r0, c0, r1, c1)) => Ok(OpOut::Grid { sheet, rows: r1 - r0 + 1, cols: c1 - c0 + 1 }),
@@ -179,49 +179,49 @@ fn do_read(relay: &mut Relay, session: &str, handle: &str, args: &ReadArgs) -> R
                 let _flag = security::scan_injection(&text);
                 Ok(OpOut::Count { what: "paras".into(), n: paras.len() })
             } else if let Some(n) = args.selector.strip_prefix('p').and_then(|s| s.parse::<usize>().ok()) {
-                paras.get(n).ok_or_else(|| HarnessError::BadSelector(args.selector.clone()))?;
+                paras.get(n).ok_or_else(|| Error::BadSelector(args.selector.clone()))?;
                 Ok(OpOut::Text { detail: format!("para {n}") })
             } else {
-                Err(HarnessError::BadSelector(args.selector.clone()))
+                Err(Error::BadSelector(args.selector.clone()))
             }
         }
         (FileKind::Ppt, FileContent::Ppt { slides }) => {
             if args.selector == "deck" {
                 Ok(OpOut::Count { what: "slides".into(), n: slides.len() })
             } else if let Some(n) = args.selector.strip_prefix("slide").and_then(|s| s.parse::<usize>().ok()) {
-                slides.get(n - 1).ok_or_else(|| HarnessError::BadSelector(args.selector.clone()))?;
+                slides.get(n - 1).ok_or_else(|| Error::BadSelector(args.selector.clone()))?;
                 Ok(OpOut::Text { detail: format!("slide {n}") })
             } else {
-                Err(HarnessError::BadSelector(args.selector.clone()))
+                Err(Error::BadSelector(args.selector.clone()))
             }
         }
-        _ => Err(HarnessError::ClosedSchema("kind/content mismatch".into())),
+        _ => Err(Error::ClosedSchema("kind/content mismatch".into())),
     }
 }
 
 fn do_export(relay: &mut Relay, session: &str, handle: &str, args: &ExportArgs) -> Result<OpOut> {
     if args.format == "xlsx" || args.format == "docx" {
-        args.path.clone().ok_or_else(|| HarnessError::ClosedSchema("xlsx/docx export needs path".into()))?;
+        args.path.clone().ok_or_else(|| Error::ClosedSchema("xlsx/docx export needs path".into()))?;
     }
     let files = files(relay, session)?;
-    let f = files.get(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+    let f = files.get(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
     let path = args.path.clone();
     let sheet = args.sheet.clone();
     let out = match &f.content {
         FileContent::Excel { sheets } => {
-            let sheet_name = sheet.or_else(|| sheets.keys().next().cloned()).ok_or_else(|| HarnessError::BadSelector("no sheets".into()))?;
-            let grid = sheets.get(&sheet_name).ok_or_else(|| HarnessError::BadSelector(format!("sheet not open: {sheet_name}")))?;
+            let sheet_name = sheet.or_else(|| sheets.keys().next().cloned()).ok_or_else(|| Error::BadSelector("no sheets".into()))?;
+            let grid = sheets.get(&sheet_name).ok_or_else(|| Error::BadSelector(format!("sheet not open: {sheet_name}")))?;
             match args.format.as_str() {
                 "xlsx" => {
                     let data = crate::ooxml::write_xlsx(&sheet_name, grid);
                     let p = path.unwrap();
                     if let Some(parent) = std::path::Path::new(&p).parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| HarnessError::BadSelector(format!("mkdir {parent:?}: {e}")))?;
+                        std::fs::create_dir_all(parent).map_err(|e| Error::BadSelector(format!("mkdir {parent:?}: {e}")))?;
                     }
-                    std::fs::write(&p, &data).map_err(|e| HarnessError::BadSelector(format!("write {p}: {e}")))?;
+                    std::fs::write(&p, &data).map_err(|e| Error::BadSelector(format!("write {p}: {e}")))?;
                     OpOut::Text { detail: format!("xlsx {p} bytes={} sheet={sheet_name}", data.len()) }
                 }
-                "pptx" => return Err(HarnessError::ClosedSchema("pptx deferred: DrawingML surface too large for POC".into())),
+                "pptx" => return Err(Error::ClosedSchema("pptx deferred: DrawingML surface too large for POC".into())),
                 _ => OpOut::Text { detail: format!("sheets={}", sheets.keys().cloned().collect::<Vec<_>>().join(",")) },
             }
         }
@@ -230,17 +230,17 @@ fn do_export(relay: &mut Relay, session: &str, handle: &str, args: &ExportArgs) 
                 let data = crate::ooxml::write_docx(paras, tables);
                 let p = path.unwrap();
                 if let Some(parent) = std::path::Path::new(&p).parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| HarnessError::BadSelector(format!("mkdir {parent:?}: {e}")))?;
+                    std::fs::create_dir_all(parent).map_err(|e| Error::BadSelector(format!("mkdir {parent:?}: {e}")))?;
                 }
-                std::fs::write(&p, &data).map_err(|e| HarnessError::BadSelector(format!("write {p}: {e}")))?;
+                std::fs::write(&p, &data).map_err(|e| Error::BadSelector(format!("write {p}: {e}")))?;
                 OpOut::Text { detail: format!("docx {p} bytes={} paras={}", data.len(), paras.len()) }
             }
-            "pptx" | "xlsx" => return Err(HarnessError::ClosedSchema("word handles export summary|preview|docx only".into())),
+            "pptx" | "xlsx" => return Err(Error::ClosedSchema("word handles export summary|preview|docx only".into())),
             _ => OpOut::Text { detail: format!("paras={}", paras.len()) },
         },
         FileContent::Ppt { slides } => {
             if args.format == "xlsx" || args.format == "docx" || args.format == "pptx" {
-                return Err(HarnessError::ClosedSchema("ppt handles export summary|preview only (pptx deferred)".into()));
+                return Err(Error::ClosedSchema("ppt handles export summary|preview only (pptx deferred)".into()));
             }
             OpOut::Count { what: "slides".into(), n: slides.len() }
         }
@@ -255,12 +255,12 @@ fn do_export(relay: &mut Relay, session: &str, handle: &str, args: &ExportArgs) 
 
 fn do_write(relay: &mut Relay, session: &str, handle: &str, args: &WriteArgs) -> Result<OpOut> {
     let files = files(relay, session)?;
-    let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+    let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
     match (&f.kind, &mut f.content) {
         (FileKind::Excel, FileContent::Excel { sheets }) => {
             let (sheet, rng) = parse_range(&args.selector)?;
-            let (r0, c0, _, _) = rng.ok_or_else(|| HarnessError::BadSelector("write needs a range; use struct.addSheet for new sheets".into()))?;
-            let grid = sheets.get_mut(&sheet).ok_or_else(|| HarnessError::BadSelector(format!("sheet not open: {sheet}")))?;
+            let (r0, c0, _, _) = rng.ok_or_else(|| Error::BadSelector("write needs a range; use struct.addSheet for new sheets".into()))?;
+            let grid = sheets.get_mut(&sheet).ok_or_else(|| Error::BadSelector(format!("sheet not open: {sheet}")))?;
             for (i, row) in args.values.iter().enumerate() {
                 for (j, v) in row.iter().enumerate() {
                     // Formula-injection sanitiser on every cell write.
@@ -270,23 +270,23 @@ fn do_write(relay: &mut Relay, session: &str, handle: &str, args: &WriteArgs) ->
             Ok(OpOut::Text { detail: format!("wrote {} rows", args.values.len()) })
         }
         (FileKind::Word, FileContent::Word { paras, .. }) => {
-            let n: usize = args.selector.strip_prefix('p').and_then(|s| s.parse().ok()).ok_or_else(|| HarnessError::BadSelector("word write targets pN".into()))?;
-            let cell = paras.get_mut(n).ok_or_else(|| HarnessError::BadSelector(args.selector.clone()))?;
+            let n: usize = args.selector.strip_prefix('p').and_then(|s| s.parse().ok()).ok_or_else(|| Error::BadSelector("word write targets pN".into()))?;
+            let cell = paras.get_mut(n).ok_or_else(|| Error::BadSelector(args.selector.clone()))?;
             *cell = args.values.first().and_then(|r| r.first()).cloned().unwrap_or_default();
             Ok(OpOut::Text { detail: format!("wrote {n}") })
         }
-        _ => Err(HarnessError::ClosedSchema("write unsupported for this kind (use struct)".into())),
+        _ => Err(Error::ClosedSchema("write unsupported for this kind (use struct)".into())),
     }
 }
 
 fn do_format(relay: &mut Relay, session: &str, handle: &str, args: &FormatArgs) -> Result<OpOut> {
     for (k, _) in &args.style {
         if !STYLE_KEYS.contains(&k.as_str()) {
-            return Err(HarnessError::ClosedSchema(format!("unknown style key {k:?}")));
+            return Err(Error::ClosedSchema(format!("unknown style key {k:?}")));
         }
     }
     let files = files(relay, session)?;
-    let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+    let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
     f.styles.insert(args.selector.clone(), args.style.clone());
     Ok(OpOut::Text { detail: format!("formatted {}", args.selector) })
 }
@@ -295,64 +295,64 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
     match args {
         StructArgs::InsertParagraph { text } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { paras, .. } = &mut f.content {
                 paras.push(text);
                 Ok(OpOut::Count { what: "paras".into(), n: paras.len() })
             } else {
-                Err(HarnessError::ClosedSchema("insertParagraph needs a word handle".into()))
+                Err(Error::ClosedSchema("insertParagraph needs a word handle".into()))
             }
         }
         StructArgs::InsertTable { rows } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { paras, tables, .. } = &mut f.content {
                 paras.push(format!("[table {}x{}]", rows.len(), rows[0].len()));
                 tables.push(rows);
                 Ok(OpOut::Count { what: "tables".into(), n: tables.len() })
             } else {
-                Err(HarnessError::ClosedSchema("insertTable needs a word handle".into()))
+                Err(Error::ClosedSchema("insertTable needs a word handle".into()))
             }
         }
         StructArgs::TrackChange { para, text } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { changes, .. } = &mut f.content {
                 changes.push(format!("{para:?}: {text}"));
                 Ok(OpOut::Count { what: "changes".into(), n: changes.len() })
             } else {
-                Err(HarnessError::ClosedSchema("trackChange needs a word handle".into()))
+                Err(Error::ClosedSchema("trackChange needs a word handle".into()))
             }
         }
         StructArgs::Comment { at, text } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { comments, .. } = &mut f.content {
                 comments.push(format!("{at:?}: {text}"));
                 Ok(OpOut::Count { what: "comments".into(), n: comments.len() })
             } else {
-                Err(HarnessError::ClosedSchema("comment needs a word handle".into()))
+                Err(Error::ClosedSchema("comment needs a word handle".into()))
             }
         }
         StructArgs::AddSheet { name } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Excel { sheets } = &mut f.content {
                 sheets.insert(name.clone(), vec![vec![String::new(); 4]; 4]);
                 Ok(OpOut::Text { detail: format!("sheet {name}") })
             } else {
-                Err(HarnessError::ClosedSchema("addSheet needs an excel handle".into()))
+                Err(Error::ClosedSchema("addSheet needs an excel handle".into()))
             }
         }
         StructArgs::WriteRange { selector, values } => do_write(relay, session, handle, &WriteArgs { selector, values }),
         StructArgs::CreateSlide { title, bullets } => {
             let files = files(relay, session)?;
-            let f = files.get_mut(handle).ok_or_else(|| HarnessError::UnknownHandle(handle.into()))?;
+            let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Ppt { slides } = &mut f.content {
                 slides.push(Slide { title, bullets, provenance: None });
                 Ok(OpOut::Count { what: "slides".into(), n: slides.len() })
             } else {
-                Err(HarnessError::ClosedSchema("createSlide needs a ppt handle".into()))
+                Err(Error::ClosedSchema("createSlide needs a ppt handle".into()))
             }
         }
         StructArgs::Transfer { from, selector, title } => do_transfer(relay, session, handle, &from, &selector, &title),
@@ -363,22 +363,22 @@ fn do_transfer(relay: &mut Relay, session: &str, dst: &str, src: &str, selector:
     // Read source first (borrow ends before mutable borrow of dst).
     let rows: Vec<Vec<String>> = {
         let files = files(relay, session)?;
-        let s = files.get(src).ok_or_else(|| HarnessError::UnknownHandle(src.into()))?;
+        let s = files.get(src).ok_or_else(|| Error::UnknownHandle(src.into()))?;
         match (&s.kind, &s.content) {
             (FileKind::Excel, FileContent::Excel { sheets }) => {
                 let (sheet, rng) = parse_range(selector)?;
-                let grid = sheets.get(&sheet).ok_or_else(|| HarnessError::BadSelector(selector.into()))?;
+                let grid = sheets.get(&sheet).ok_or_else(|| Error::BadSelector(selector.into()))?;
                 match rng {
                     None => grid.clone(),
                     Some((r0, c0, r1, c1)) => grid[r0..=r1].iter().map(|r| r[c0..=c1].to_vec()).collect(),
                 }
             }
-            _ => return Err(HarnessError::ClosedSchema("transfer source must be an excel range in POC".into())),
+            _ => return Err(Error::ClosedSchema("transfer source must be an excel range in POC".into())),
         }
     };
     let n = rows.len();
     let files = files(relay, session)?;
-    let d = files.get_mut(dst).ok_or_else(|| HarnessError::UnknownHandle(dst.into()))?;
+    let d = files.get_mut(dst).ok_or_else(|| Error::UnknownHandle(dst.into()))?;
     let receipt = TransferReceipt { to: dst.into(), from: src.into(), rows: n };
     match &mut d.content {
         FileContent::Ppt { slides } => {
@@ -392,7 +392,7 @@ fn do_transfer(relay: &mut Relay, session: &str, dst: &str, src: &str, selector:
             paras.push(format!("[imported table {n} rows]"));
             tables.push(rows);
         }
-        _ => return Err(HarnessError::ClosedSchema("transfer dst must be ppt or word in POC".into())),
+        _ => return Err(Error::ClosedSchema("transfer dst must be ppt or word in POC".into())),
     }
     relay.emit(session, "xfer", dst, format!("{src} -> {dst} rows={n}"))?;
     Ok(OpOut::Transfer(receipt))
@@ -451,14 +451,14 @@ mod tests {
         let c = || Call::Read(ReadArgs { selector: "Sheet1".into() });
         execute(&mut r, &s, &xh, c()).unwrap();
         execute(&mut r, &s, &xh, c()).unwrap();
-        assert!(matches!(execute(&mut r, &s, &xh, c()), Err(HarnessError::DoomLoop(_))));
+        assert!(matches!(execute(&mut r, &s, &xh, c()), Err(Error::DoomLoop(_))));
     }
 
     #[test]
     fn closed_schema_rejects() {
         let (mut r, s, xh, _, _) = relay3();
         let out = execute(&mut r, &s, &xh, Call::Format(FormatArgs { selector: "x".into(), style: vec![("drop_table".into(), "1".into())] }));
-        assert!(matches!(out, Err(HarnessError::ClosedSchema(_))));
+        assert!(matches!(out, Err(Error::ClosedSchema(_))));
     }
 
     #[test]
@@ -481,13 +481,13 @@ mod tests {
         let (mut r, s, _, _, _) = relay3();
         assert!(matches!(
             execute(&mut r, &s, "excel:nope.xlsx:Sheet1", Call::Read(ReadArgs { selector: "Sheet1".into() })),
-            Err(HarnessError::UnknownHandle(_))
+            Err(Error::UnknownHandle(_))
         ));
     }
 
     #[test]
     fn export_writes_real_files() {
-        let dir = std::env::temp_dir().join(format!("harness-export-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (mut r, s, xh, wh, ph) = relay3();
@@ -551,13 +551,13 @@ mod cover_tests {
         let (mut r, s, xh, _, _) = relay_fix();
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Read(ReadArgs { selector: "Sheet1!A1:Z100".into() })),
-            Err(HarnessError::OverBulkCap)));
+            Err(Error::OverBulkCap)));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Write(WriteArgs { selector: "Sheet1".into(), values: vec![vec!["x".into()]] })),
-            Err(HarnessError::BadSelector(_))));
+            Err(Error::BadSelector(_))));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Write(WriteArgs { selector: "Nope!A1:A1".into(), values: vec![vec!["x".into()]] })),
-            Err(HarnessError::BadSelector(_))));
+            Err(Error::BadSelector(_))));
     }
 
     #[test]
@@ -601,13 +601,13 @@ mod cover_tests {
         let (mut r, s, xh, wh, _) = relay_fix();
         assert!(matches!(
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::AddSheet { name: "x".into() })),
-            Err(HarnessError::ClosedSchema(_))));
+            Err(Error::ClosedSchema(_))));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into() })),
-            Err(HarnessError::ClosedSchema(_))));
+            Err(Error::ClosedSchema(_))));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Struct(StructArgs::CreateSlide { title: "x".into(), bullets: vec![] })),
-            Err(HarnessError::ClosedSchema(_))));
+            Err(Error::ClosedSchema(_))));
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod cover_tests {
             OpOut::Text { .. }));
         assert!(matches!(
             execute(&mut r, &s, &ph, Call::Read(ReadArgs { selector: "slide9".into() })),
-            Err(HarnessError::BadSelector(_))));
+            Err(Error::BadSelector(_))));
         let out = execute(&mut r, &s, &xh, Call::Export(ExportArgs { format: "preview".into(), path: None, sheet: None })).unwrap();
         assert!(format!("{out:?}").contains("VisionFallback"));
     }
@@ -635,14 +635,14 @@ mod cover_tests {
             OpOut::Count { what: "paras".into(), n: 1 });
         assert!(matches!(
             execute(&mut r, &s, &wh, Call::Write(WriteArgs { selector: "body".into(), values: vec![vec!["x".into()]] })),
-            Err(HarnessError::BadSelector(_))));
+            Err(Error::BadSelector(_))));
         // One good write + one failed write = two pre-state snapshots stacked.
         assert!(matches!(execute(&mut r, &s, &wh, Call::Undo).unwrap(), OpOut::Undone { remaining: 1 }));
         assert!(matches!(execute(&mut r, &s, &wh, Call::Undo).unwrap(), OpOut::Undone { remaining: 0 }));
         // A read breaks the identical-call streak so the next undo reaches
         // the empty stack instead of the doom-loop gate.
         execute(&mut r, &s, &wh, Call::Read(ReadArgs { selector: "body".into() })).unwrap();
-        assert!(matches!(execute(&mut r, &s, &wh, Call::Undo), Err(HarnessError::EmptyUndo(_))));
+        assert!(matches!(execute(&mut r, &s, &wh, Call::Undo), Err(Error::EmptyUndo(_))));
     }
 
     #[test]
@@ -650,6 +650,6 @@ mod cover_tests {
         let (mut r, s, _, wh, _) = relay_fix();
         assert!(matches!(
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::Transfer { from: "excel:ghost.xlsx:S".into(), selector: "S".into(), title: "t".into() })),
-            Err(HarnessError::UnknownHandle(_))));
+            Err(Error::UnknownHandle(_))));
     }
 }

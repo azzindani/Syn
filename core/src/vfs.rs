@@ -99,7 +99,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("harness-vfs-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("vfs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -133,7 +133,7 @@ mod cover_tests {
 
     #[test]
     fn empty_dir_lists_empty_and_missing_errors() {
-        let dir = std::env::temp_dir().join(format!("harness-vfs-empty-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vfs-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let v = Vfs::open(&dir).unwrap();
         assert!(v.list("").unwrap().is_empty());
@@ -144,7 +144,7 @@ mod cover_tests {
 
     #[test]
     fn curdir_segments_resolve_inside_root() {
-        let dir = std::env::temp_dir().join(format!("harness-vfs-dot-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vfs-dot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let v = Vfs::open(&dir).unwrap();
         v.write("a/./b.txt", b"dot").unwrap();
@@ -157,7 +157,7 @@ mod cover_tests {
 
     #[test]
     fn write_reports_byte_len() {
-        let dir = std::env::temp_dir().join(format!("harness-vfs-len-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vfs-len-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let v = Vfs::open(&dir).unwrap();
         assert_eq!(v.write("f.bin", b"12345").unwrap(), 5);

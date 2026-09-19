@@ -1,6 +1,6 @@
 # Ideas 01 — Big Anti-Mainstream Coding Projects (Origin)
 
-From second answer before Office-harness focus. No todo/e-commerce/chatbot/weather.
+From second answer before the Office focus. No todo/e-commerce/chatbot/weather.
 
 1. Offline Mesh Chat: BLE+WiFi Direct, hop P2P, zero server. Flutter+libp2p/Briar.
 2. Personal Time Machine: local screen/file/clipboard/git/browser -> SQLite+embeddings. Ask Tuesday's key. Python/Rust, no cloud.
@@ -11,4 +11,4 @@ From second answer before Office-harness focus. No todo/e-commerce/chatbot/weath
 7. Home LAN Linter: ARP/nmap scan, default pwds, firmware, rogue IoT score. Python+web UI.
 8. Protocol Time Capsule: SSH BBS/forum/files/games in pure terminal, federated. Go+SSH+SQLite+TUI.
 
-The harness (00-05) was picked from this set as the Office-agents direction.
+Syn (00-05) was picked from this set as the Office-agents direction.

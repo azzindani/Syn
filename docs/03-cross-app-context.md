@@ -1,4 +1,4 @@
-# Harness 03 — Cross-App Context Transfer
+# 03 — Cross-App Context Transfer
 
 ## Goal (from thread)
 Write research presentation by reading paper then writing to PowerPoint. Read Word docs and prepare PPT from them. Context transfer between softwares, one interface session.

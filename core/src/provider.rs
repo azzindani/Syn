@@ -1,6 +1,6 @@
 //! Provider client (OpenRouter-compatible): endpoint + request-body builder.
 //! No network in core: the widget performs transport with a user-supplied key
-//! (env `HARNESS_API_KEY`, never logged, never stored). Model IDs are defaults
+//! (env `SYN_API_KEY`, never logged, never stored). Model IDs are defaults
 //! overridable per deployment. Mock transport lives in tests.
 
 use crate::router::{Effort, Model, Route};
@@ -42,25 +42,37 @@ fn escape_json(s: &str) -> String {
     out
 }
 
-/// Minimal chat-completions body: model + effort + system/user messages.
+/// Minimal chat-completions body against an explicit model id. Callers that
+/// honour deployment config resolve the id through `config::model_id` first;
+/// `request_body` keeps the compiled default.
 /// Std only (no serde in core); the widget may use a JSON library.
-pub fn request_body(route: Route, system: &str, user: &str) -> String {
+pub fn request_body_with(model: &str, route: Route, system: &str, user: &str) -> String {
     format!(
         "{{\"model\":\"{}\",\"reasoning\":{{\"effort\":\"{}\"}},\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}]}}",
-        model_id(route.model),
+        escape_json(model),
         effort_str(route.effort),
         escape_json(system),
         escape_json(user)
     )
 }
 
-/// Streaming variant: identical body plus `"stream":true` for SSE.
-/// The widget reads `text/event-stream` chunks; core parses them below.
-pub fn stream_body(route: Route, system: &str, user: &str) -> String {
-    let mut b = request_body(route, system, user);
+/// Minimal chat-completions body: model + effort + system/user messages.
+pub fn request_body(route: Route, system: &str, user: &str) -> String {
+    request_body_with(model_id(route.model), route, system, user)
+}
+
+/// Streaming variant of [`request_body_with`]: plus `"stream":true` for SSE.
+pub fn stream_body_with(model: &str, route: Route, system: &str, user: &str) -> String {
+    let mut b = request_body_with(model, route, system, user);
     b.pop(); // drop closing '}'
     b.push_str(r#","stream":true}"#);
     b
+}
+
+/// Streaming variant: identical body plus `"stream":true` for SSE.
+/// The widget reads `text/event-stream` chunks; core parses them below.
+pub fn stream_body(route: Route, system: &str, user: &str) -> String {
+    stream_body_with(model_id(route.model), route, system, user)
 }
 
 /// Unescape the JSON string subset the API emits in deltas.
@@ -202,14 +214,37 @@ pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u
         .map_err(|e| format!("curl spawn failed: {e}"))?;
     use std::io::Write;
     let mut child = out;
-    child.stdin.take().expect("piped").write_all(body.as_bytes()).map_err(|e| format!("stdin: {e}"))?;
-    let res = child.wait_with_output().map_err(|e| format!("curl wait: {e}"))?;
-    if !res.status.success() && res.stdout.is_empty() {
-        return Err(format!("curl transport failed: {}", String::from_utf8_lossy(&res.stderr)));
+    // A curl that died early (bad URL, TLS failure) closes stdin, so the
+    // write fails with BrokenPipe. That is not the interesting error: the
+    // reason is on stderr, so keep going and report that instead.
+    if let Some(mut sink) = child.stdin.take()
+        && let Err(e) = sink.write_all(body.as_bytes())
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(format!("stdin: {e}"));
     }
+    let res = child.wait_with_output().map_err(|e| format!("curl wait: {e}"))?;
+    let stderr = String::from_utf8_lossy(&res.stderr).trim().to_string();
+    // Empty stdout means no reply at all, whatever the exit code claims.
+    // The previous form required BOTH a bad exit code AND empty stdout, so
+    // the common case — curl fails, says why on stderr, exits quietly —
+    // was reported to the user as "status=0 bytes=0" with the reason thrown
+    // away. Never discard stderr: it is the only diagnosis available.
     let text = String::from_utf8_lossy(&res.stdout);
     let (payload, code) = text.rsplit_once('\n').unwrap_or((&text, "0"));
-    Ok((code.trim().parse().unwrap_or(0), payload.to_string()))
+    let code: u16 = code.trim().parse().unwrap_or(0);
+    // http_code 000 is curl's way of saying no HTTP response happened at
+    // all: DNS failure, refused connection, TLS error, timeout. curl still
+    // writes that 000 to stdout, so testing for empty stdout is not enough
+    // and the reason only ever exists on stderr.
+    if code == 0 {
+        return Err(if stderr.is_empty() {
+            format!("curl produced no HTTP response ({})", res.status)
+        } else {
+            format!("curl transport failed: {stderr}")
+        });
+    }
+    Ok((code, payload.to_string()))
 }
 
 #[cfg(test)]
@@ -238,7 +273,7 @@ mod tests {
         assert!(body.contains("\\\"hi\\\""));
         assert!(body.contains("\\n"));
         let m = Mock { seen_url: Default::default(), seen_body: Default::default() };
-        m.post(DEFAULT_BASE_URL, "HARNESS_API_KEY", &body).unwrap();
+        m.post(DEFAULT_BASE_URL, "SYN_API_KEY", &body).unwrap();
         assert!(m.seen_url.borrow().contains("openrouter.ai"));
         assert!(m.seen_body.borrow().contains("gpt-5.6-sol"));
     }

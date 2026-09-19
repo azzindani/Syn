@@ -9,3 +9,16 @@ __pycache__/
 bin/
 obj/
 !core/src/bin/
+
+# Deployment config: real keys live here, template is .env.example
+.env
+.env.*
+!.env.example
+
+# Live Office testbed: generated documents, run logs, journals, exports.
+# Everything a real Windows+Office run touches stays here and stays local.
+testbed/*
+!testbed/README.md
+
+# Rust build output (core has its own; the widget crate now builds too)
+target/

@@ -3,7 +3,7 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-CAPTURE = sys.argv[2] if len(sys.argv) > 2 else "/tmp/harness-fake-body.json"
+CAPTURE = sys.argv[2] if len(sys.argv) > 2 else "/tmp/fake-body.json"
 
 
 class H(BaseHTTPRequestHandler):

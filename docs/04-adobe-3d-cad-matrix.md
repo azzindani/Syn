@@ -1,4 +1,4 @@
-# Harness 04 — Adobe / 3D / CAD Connector Matrix (Verified)
+# 04 — Adobe / 3D / CAD Connector Matrix (Verified)
 
 ## Adobe (developer.adobe.com)
 - Photoshop: UXP plugin + UXP Scripting (.psjs, ES6, `batchPlay` for unexposed DOM, `executeAsModal` for mutations) + legacy ExtendScript/VB/AppleScript + REST API cloud batch. UXP async, non-blocking.

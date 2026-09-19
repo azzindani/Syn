@@ -1,5 +1,5 @@
 # E2E wave 2: guard (allow/kill), errors, journal/replay, multi-session.
-# Run: ./core/target/release/harness < tests/e2e_safety.txt
+# Run: ./core/target/release/cli < tests/e2e_safety.txt
 # Expect: RECEIPT allowlist, ERROR AppDenied, RECEIPT killed, ERROR Killed,
 # replay reproducing the journal, sessions isolated.
 session s1
@@ -10,7 +10,7 @@ write excel:plan.xlsx:Sheet1 Sheet1!A1:A1 999
 allow excel word
 write excel:plan.xlsx:Sheet1 Sheet1!A1:A1 111
 read excel:plan.xlsx:Sheet1 Sheet1!A1:A1
-journal /tmp/harness-e2e-journal.txt
+journal /tmp/e2e-journal.txt
 para word:report.docx:body safety wave
 format excel:plan.xlsx:Sheet1 Sheet1!A1:A1 bold=1,font=Calibri
 format excel:plan.xlsx:Sheet1 Sheet1!A1:A1 drop_table=1

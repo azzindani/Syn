@@ -43,7 +43,7 @@ small{color:var(--mut)}
 <script>
 "use strict";
 // Syn widget: chat + live orchestration feed + model picker + budget + kill.
-// Bridge: window.__SYN__ (Tauri invoke harness_op/harness_event) when hosted;
+// Bridge: window.__SYN__ (Tauri invoke op/event) when hosted;
 // otherwise DEMO bus with the exact core event shapes, so the UI is testable
 // in any browser. Streaming parse mirrors core provider::parse_sse_text.
 const $=id=>document.getElementById(id);
@@ -65,7 +65,7 @@ function onCoreEvent(e){
 }
 const Bus={
   async op(name,args){
-    if(window.__SYN__&&window.__SYN__.invoke) return window.__SYN__.invoke("harness_op",{name,...args});
+    if(window.__SYN__&&window.__SYN__.invoke) return window.__SYN__.invoke("op",{name,...args});
     onCoreEvent({session:sess.value,t:"step.start",handle:args.handle||"",detail:name+" "+JSON.stringify(args)});
     await new Promise(r=>setTimeout(r,150));
     const out={session:sess.value,t:"step.done",handle:args.handle||"",detail:"demo-ok (no Tauri bridge; hosted widget runs this live)"};

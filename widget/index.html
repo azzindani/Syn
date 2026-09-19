@@ -207,16 +207,15 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
   font-size:11px;color:var(--muted-foreground)}
 body.blank-chat #hint,body.busy #hint{display:block}
-/* What the run is doing, while it does it. A turn that drives three
-   applications takes minutes, and a spinner alone cannot tell the
-   difference between working and wedged. */
-#live{display:none;margin:0 16px 8px;padding:8px 10px;max-height:168px;overflow-y:auto;
-  border:1px solid var(--border);border-radius:8px;background:var(--accent);
-  font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted-foreground)}
-body.busy #live,body.watching #live{display:block}
-#live div{white-space:pre-wrap;word-break:break-word}
-#live div.err{color:var(--error-foreground)}
-#live div:last-child{color:var(--foreground)}
+/* A run in progress is drawn as the same activity rows a finished one
+   leaves behind, so watching it happen and reading it afterwards look
+   like the same thing. The pulse marks the step being worked on now. */
+.live .act .nm{color:var(--foreground)}
+.live-head{align-self:center;font-size:12px;color:var(--muted-foreground);
+  display:flex;align-items:center;gap:7px;margin:4px 0}
+.live-head .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);
+  animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
 .spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -263,7 +262,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   </div>
 
   <div id="scroll"><div id="tl"></div></div>
-  <div id="live" hidden></div>
 
   <div id="dock">
     <div id="comp">
@@ -475,6 +473,10 @@ function activity(name, detail, body, failed) {
 }
 
 function render(msgs) {
+  // Repainting from the saved transcript detaches whatever the live view
+  // had appended, so its handles have to go with it or the next step is
+  // written into a node that is no longer on the page.
+  liveClose();
   tl.textContent = "";
   tl.classList.toggle("blank", !msgs.length);
   document.body.classList.toggle("blank-chat", !msgs.length);
@@ -552,33 +554,96 @@ async function refresh() {
 // happening instead of a spinner and a guess.
 let tailAt = 0, tailTimer = null;
 
-let tailSrc = null;
+let tailSrc = null, liveBlock = null, liveActs = null;
+
+// The console prints one line per turn of the loop. Drawn as raw text it
+// is a log; drawn as the activity rows the finished transcript uses, it is
+// the run happening. Same shape either way, so watching and reading back
+// do not look like two different things.
+function liveOpen(label) {
+  liveClose();
+  liveBlock = el("div", "live");
+  const head = el("div", "live-head");
+  head.appendChild(el("span", "dot"));
+  head.appendChild(el("span", null, label));
+  liveBlock.appendChild(head);
+  liveActs = el("div", "acts");
+  liveBlock.appendChild(liveActs);
+  tl.appendChild(liveBlock);
+}
+
+function liveClose() {
+  liveBlock = null;
+  liveActs = null;
+}
+
+function liveRow(node) {
+  if (!liveBlock) liveOpen("working");
+  liveBlock.appendChild(node);
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+function liveStep(line) {
+  // RECEIPT say model=X open=N -- a turn is starting.
+  let m = line.match(/^RECEIPT say model=(\S+)/);
+  if (m) return void liveOpen("running on " + m[1]);
+
+  // STEP <tool>: <detail>
+  m = line.match(/^STEP (\S+?):\s*([\s\S]*)$/);
+  if (m) {
+    if (!liveActs) liveOpen("working");
+    liveActs.appendChild(activity(m[1], m[2].slice(0, 110), m[2], false));
+    scroll.scrollTop = scroll.scrollHeight;
+    return;
+  }
+  m = line.match(/^REFUSED (.*)$/);
+  if (m) {
+    if (!liveActs) liveOpen("working");
+    liveActs.appendChild(activity("refused", m[1].slice(0, 110), m[1], true));
+    scroll.scrollTop = scroll.scrollHeight;
+    return;
+  }
+  m = line.match(/^ANSWER ([\s\S]*)$/);
+  if (m) {
+    const d = el("div", "bot");
+    d.innerHTML = md(m[1]);
+    liveRow(d);
+    return void liveClose();
+  }
+  m = line.match(/^STOPPED (.*)$/);
+  if (m) {
+    liveRow(el("div", "fail", m[1]));
+    return void liveClose();
+  }
+  m = line.match(/^ERROR (.*)$/);
+  if (m) return void liveRow(el("div", "fail", m[1]));
+  m = line.match(/^RECEIPT retry model=(\S+)/);
+  if (m) return void liveRow(el("div", "note", "that model was busy — retrying with " + m[1]));
+}
 
 async function tail() {
   try {
     const r = await fetch("/events?since=" + tailAt);
     if (!r.ok) return;
     const d = await r.json();
-    const pane = $("live");
-    // A different run took over. Start its output from the top rather than
-    // splicing it onto the tail of the last one.
+    // A different run took over. Read it from the top rather than splicing
+    // it onto the tail of the last one.
     if (d.source !== tailSrc) {
       tailSrc = d.source;
       tailAt = 0;
-      pane.textContent = "";
+      if (liveBlock) liveBlock.remove();
+      liveClose();
+      if (!d.source) return;
       return void tail();
     }
     tailAt = d.n;
-    for (const line of d.lines || []) {
-      pane.appendChild(el("div", line.startsWith("ERROR") ? "err" : "", line));
+    for (const line of d.lines || []) liveStep(line);
+    // A run that has finished printing leaves its steps on screen, but
+    // stops claiming to be in progress.
+    if (!d.running && liveBlock) {
+      liveBlock.querySelector(".live-head .dot")?.remove();
+      liveClose();
     }
-    // Keep it short: this is a progress strip, not a log viewer.
-    while (pane.childElementCount > 200) pane.removeChild(pane.firstChild);
-    if (d.lines && d.lines.length) pane.scrollTop = pane.scrollHeight;
-    // Show it for any run that is still printing, not only for a turn this
-    // page started. A run in another window is the case that sent me
-    // looking for this in the first place.
-    document.body.classList.toggle("watching", !!d.running && pane.childElementCount > 0);
   } catch { /* a dropped poll is not worth a message; the next one retries */ }
 }
 

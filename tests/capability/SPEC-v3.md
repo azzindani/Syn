@@ -191,14 +191,32 @@ one who wrote both the engine and the scorer:
   own grouping says "Fall" where the fixture says "Autumn", so four
   correct totals scored zero.
 
-Three runs, two models, 9 to 19 out of 100 against a control that scores
+Four runs, three models, 8 to 19 out of 100 against a control that scores
 90/90 on the same rubric and the same fixture. None finished Excel. None
-opened PowerPoint. Between them they found two ways for a run to end
-early, and neither is a missing capability:
+opened PowerPoint. Three of the four managed a single operation.
 
-- twice, an empty completion with the budget barely touched;
+Between them they found two ways for a run to end early, and neither is a
+missing capability:
+
+- three times, an empty completion with the budget barely touched;
 - once, prose narrating the plan before any work -- "I'll start by
   exploring the dataset" -- which the loop accepted as the finished job.
+
+Both are now patched, and run 4 was the first with both in place. It was
+nudged after its empty turn and returned a second empty turn. The nudges
+buy steps from a model that has a plan and lost its place; they cannot
+supply a plan to one that never had one.
+
+Every model here is on a free tier. That is the condition the runs were
+made under and it bounds what they can conclude: they establish that these
+four free models cannot hold a job of this size, and they say nothing
+about models in general.
+
+A floor worth knowing when reading the table: the six process checks are
+worth ten points and mostly pass for any run that does not crash, so 8/100
+is roughly what a run scores for making one tool call and stopping. The
+discriminating range is 8 to 100, not 0 to 100. Noted for v4 alongside the
+P5 defect.
 
 A note on P5, which run 3 passed. It scores "ended with a prose answer,
 not a stop", and a run that narrates its intention and quits earns those
@@ -274,6 +292,7 @@ the boolean form fails the cast rather than the call.
 | 2026-09-19, model-driven, `nemotron-3-ultra-550b:free` | **19/100** | Real Excel Table, four derived columns, a scorecard naming all 11 sites, four pivots, three named ranges. Then it ended the turn with no answer and no tool call, 45 calls in and well inside the budget. Word: 5 words. Deck: 0 slides. |
 | 2026-09-19, same model, repeat | **10/100** | Same brief, same fixture, repaired scorer, empty-turn nudge in place. Got nine calls in: the Table, and derived headers written one cell at a time. The nudge fired and it did carry on, then ended the same way. Word: 5 words. Deck: 0 slides. |
 | 2026-09-19, `ling-3.0-flash-vl:free` | **9/100** | Asked for `qwen3.8-27b`, which was rate-limited on the first call, so the fallback chain ran it on ling instead. One successful operation, a read. Reached for `echo` and `python3`, both refused. Then answered "I'll start by exploring the dataset... in parallel" and the turn ended. |
+| 2026-09-19, `deepseek-v4-flash-0731:free` | **8/100** | Both early-exit paths patched before this run. One successful operation, a read, then an empty completion. Nudged, and returned a second empty completion. |
 | provider run | not yet run | |
 
 The control is run with `score-v3.ps1 -Control` and is deliberately scored

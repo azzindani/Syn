@@ -1,0 +1,14 @@
+attach excel plan.xlsx Sheet1
+attach excel actual.xlsx Sheet1
+attach word report.docx
+attach ppt deck.pptx
+write excel:plan.xlsx:Sheet1 Sheet1!A1:B3 item,plan;ads,100;ops,200
+write excel:actual.xlsx:Sheet1 Sheet1!A1:B3 item,actual;ads,130;ops,180
+xfer excel:plan.xlsx:Sheet1 Sheet1!A1:B3 word:report.docx:body Plan
+xfer excel:actual.xlsx:Sheet1 Sheet1!A1:B3 word:report.docx:body Actual
+para word:report.docx:body Q3 rollup complete
+slide ppt:deck.pptx:deck Q3 Numbers plan-vs-actual|see-report
+registry
+route code
+send routine Summarize this run in one line
+events

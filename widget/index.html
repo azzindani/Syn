@@ -1,0 +1,124 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Syn — one brain, many hands</title>
+<style>
+:root{--bg:#141311;--panel:#1e1c19;--line:#35322c;--txt:#ece7dd;--mut:#a49d90;--acc:#e0a63c;--ok:#7fb069;--err:#d1604f}
+body{font:13px/1.45 system-ui;background:var(--bg);color:var(--txt);margin:0;padding:10px;max-width:560px}
+header{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+select,input,button{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+#kill{border-color:var(--err);color:var(--err)}
+#feed{height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0;background:#100f0e}
+.ev{margin:0 0 6px}.ev .t{color:var(--mut);font-size:11px}
+.ev.done{border-left:3px solid var(--ok);padding-left:6px}
+.ev.start{border-left:3px solid var(--acc);padding-left:6px}
+.ev.err{border-left:3px solid var(--err);padding-left:6px}
+.ev.chat{border-left:3px solid #6f9fd8;padding-left:6px;white-space:pre-wrap}
+#box{width:100%;box-sizing:border-box}
+#budgetbar{height:4px;background:var(--line);border-radius:2px;margin-top:6px}
+#budgetfill{height:100%;width:0;background:var(--acc);border-radius:2px}
+.row{display:flex;gap:6px;margin-top:6px}
+.row input{flex:1}
+small{color:var(--mut)}
+</style></head>
+<body>
+<header>
+  <b>Syn</b>
+  <select id="sess"><option value="cli">cli</option></select>
+  <select id="model">
+    <option value="auto">Auto (router)</option>
+    <option value="openai/gpt-5.6-luna">Luna (skim)</option>
+    <option value="openai/gpt-5.6-terra">Terra (routine)</option>
+    <option value="openai/gpt-5.6-sol">Sol (code)</option>
+    <option value="openai/gpt-6-astra">Astra (vision/deep)</option>
+  </select>
+  <button id="pause">Pause</button>
+  <button id="resume">Resume</button>
+  <button id="kill">Kill</button>
+</header>
+<div id="feed"></div>
+<div class="row"><input id="box" placeholder="chat — Enter sends to model, streams back here"></div>
+<div class="row"><input id="key" type="password" placeholder="OpenRouter key (memory only, never stored)"><input id="cap" type="number" value="40" style="max-width:90px" title="session cost-rank budget"></div>
+<div id="budgetbar"><div id="budgetfill"></div></div>
+<small id="spent">spent 0 / cap 40</small>
+<script>
+"use strict";
+// Syn widget: chat + live orchestration feed + model picker + budget + kill.
+// Bridge: window.__SYN__ (Tauri invoke harness_op/harness_event) when hosted;
+// otherwise DEMO bus with the exact core event shapes, so the UI is testable
+// in any browser. Streaming parse mirrors core provider::parse_sse_text.
+const $=id=>document.getElementById(id);
+const feed=$("feed"), box=$("box"), sess=$("sess"), model=$("model"), key=$("key"), cap=$("cap");
+let spent=0, paused=false;
+const COST={luna:1,terra:2,sol:3,astra:4};
+
+function ev(cls,title,body){
+  const d=document.createElement("div");d.className="ev "+cls;
+  d.innerHTML="<div class=t></div><div class=b></div>";
+  d.querySelector(".t").textContent=title;
+  d.querySelector(".b").textContent=body||"";
+  feed.appendChild(d);feed.scrollTop=feed.scrollHeight;
+}
+// Core event shape: {session, t:"step.start"|"step.done"|"receipt"|"error", handle, detail}
+function onCoreEvent(e){ 
+  const cls=e.t==="step.done"||e.t==="receipt"?"done":e.t==="error"?"err":"start";
+  ev(cls,`[${e.session}] ${e.t} ${e.handle||""}`,e.detail||"");
+}
+const Bus={
+  async op(name,args){
+    if(window.__SYN__&&window.__SYN__.invoke) return window.__SYN__.invoke("harness_op",{name,...args});
+    onCoreEvent({session:sess.value,t:"step.start",handle:args.handle||"",detail:name+" "+JSON.stringify(args)});
+    await new Promise(r=>setTimeout(r,150));
+    const out={session:sess.value,t:"step.done",handle:args.handle||"",detail:"demo-ok (no Tauri bridge; hosted widget runs this live)"};
+    onCoreEvent(out);return out;
+  },
+  onEvent(fn){ if(window.__SYN__&&window.__SYN__.listen) window.__SYN__.listen("syn-event",fn); }
+};
+Bus.onEvent(onCoreEvent);
+
+function routeTask(prompt){
+  if(/look|see|screenshot|pixel|ui gap/i.test(prompt)) return "astra";
+  if(/code|script|function|regex/i.test(prompt)) return "sol";
+  if(/summar|skim|list/i.test(prompt)) return "luna";
+  return "terra";
+}
+function spend(rank){
+  spent+=rank;const c=+cap.value||40;
+  $("budgetfill").style.width=Math.min(100,100*spent/c)+"%";
+  $("spent").textContent=`spent ${spent} / cap ${c}${spent>=c?" — BUDGET HIT, auto-paused":""}`;
+  if(spent>=c){paused=true;ev("err","budget","cap reached — queue auto-paused. Raise cap or start a new session.");}
+}
+async function send(){
+  const prompt=box.value.trim();if(!prompt)return;box.value="";
+  ev("chat","you",prompt);
+  const fam=model.value==="auto"?routeTask(prompt):model.value.split("/")[1].split("-")[2];
+  if(paused){ev("err","queue","paused — Resume first.");return;}
+  const k=key.value.trim();
+  if(!k){ // no key: route through core demo path so orchestration still works
+    await Bus.op("chat",{prompt,model:fam});spend(COST[fam]||2);return;
+  }
+  const id=model.value==="auto"?{luna:"openai/gpt-5.6-luna",terra:"openai/gpt-5.6-terra",sol:"openai/gpt-5.6-sol",astra:"openai/gpt-6-astra"}[fam]:model.value;
+  const res=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer "+k},
+    body:JSON.stringify({model:id,stream:true,messages:[{role:"user",content:prompt}]})});
+  if(!res.ok){ev("err","model",`HTTP ${res.status}`);return;}
+  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
+  const div=document.createElement("div");div.className="ev chat";
+  div.innerHTML="<div class=t>model · "+fam+"</div><div class=b></div>";
+  feed.appendChild(div);const b=div.querySelector(".b");
+  for(;;){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    const parts=buf.split("\n\n");buf=parts.pop();
+    for(const p of parts)for(const line of p.split("\n")){
+      const t=line.trim();if(!t.startsWith("data:"))continue;
+      const pay=t.slice(5).trim();if(pay==="[DONE]")continue;
+      try{const j=JSON.parse(pay);const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content||"";
+        full+=d;b.textContent=full;feed.scrollTop=feed.scrollHeight;}catch(e){/* skip partial */}
+    }}
+  spend(COST[fam]||2);
+}
+box.addEventListener("keydown",e=>{if(e.key==="Enter")send();});
+$("pause").onclick=()=>{paused=true;Bus.op("pause",{session:sess.value});ev("start","queue","paused — files stay open.")};
+$("resume").onclick=()=>{paused=false;Bus.op("resume",{session:sess.value});ev("done","queue","resumed — handles revalidated.")};
+$("kill").onclick=()=>{if(confirm("Latch the kill switch? Dispatch stops now.")){Bus.op("kill",{session:sess.value});ev("err","kill","latched. Fresh session required to re-arm.");}};
+ev("done","syn","widget ready. session=cli · pick a model or Auto · key stays in memory.");
+</script>
+</body></html>

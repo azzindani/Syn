@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>office-host</AssemblyName>
+    <!-- Late binding only: no COM references, no NuGet. STA via [STAThread]. -->
+  </PropertyGroup>
+</Project>

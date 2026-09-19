@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.log
+
+# Reference clones for the digests (see docs/DIGEST-00-inventory.md)
+.tmp/
+
+# .NET sidecar build output
+bin/
+obj/
+!core/src/bin/

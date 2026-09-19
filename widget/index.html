@@ -93,32 +93,40 @@ button{background:none;border:0;cursor:pointer}
   display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
 .chat:hover .del{display:grid}
 .chat .del:hover{background:var(--accent);color:var(--error-foreground)}
-#wirebox{flex:none;padding:9px 8px 9px;border-top:1px solid var(--border)}
-#wirebox h3{margin:0 0 7px;padding:0 10px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
-#wire{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px}
+#chats{padding-bottom:10px}
+/* Everything that is machinery rather than conversation lives behind one
+   status control. A sidebar with three jobs reads as a debug console; this
+   one has exactly one, which is the threads. */
+#statuswrap{position:relative;flex:none}
+#pop{display:none;position:absolute;right:0;top:32px;z-index:20;width:232px;padding:9px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
+  box-shadow:0 1px 2px rgb(0 0 0/5%),0 16px 32px -12px rgb(0 0 0/35%)}
+#pop.on{display:block}
+#pop h4{margin:0 0 7px;padding:0 3px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+#pop hr{margin:9px -9px;border:0;border-top:1px solid var(--border)}
+#wire{display:flex;flex-wrap:wrap;gap:4px;padding:0 3px}
 #wire button{height:24px;padding:0 9px;border:1px solid var(--border);border-radius:99px;
   font-size:12px;color:var(--muted-foreground);white-space:nowrap}
 #wire button:hover{border-color:var(--input);color:var(--foreground)}
-.hint{display:block;padding:7px 10px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
-#side footer{flex:none;display:flex;gap:2px;align-items:center;padding:8px;
-  border-top:1px solid var(--border)}
-#side footer button{height:28px;padding:0 9px;border-radius:var(--control-radius);
-  font-size:13px;color:var(--muted-foreground)}
-#side footer button:hover{background:var(--sidebar-row-hover);color:var(--foreground)}
-#killbtn:hover{color:var(--error-foreground)}
+.hint{display:block;padding:8px 3px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
+.popitem{display:flex;align-items:center;width:100%;height:30px;padding:0 8px;
+  border-radius:var(--control-radius);font-size:13px;color:var(--foreground)}
+.popitem:hover{background:var(--accent)}
+.popitem.danger{color:var(--error-foreground)}
 
 /* ---------------- main ---------------- */
 main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;
   border-bottom:1px solid var(--border)}
 #title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hands{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;
-  color:var(--muted-foreground)}
+#hands{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
+  border:1px solid transparent;border-radius:99px;font-size:12px;color:var(--muted-foreground)}
+#hands:hover{border-color:var(--border);color:var(--foreground)}
 #hands i{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}
 #hands.live i{background:var(--ok)}
 #scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
-#tl{width:100%;max-width:48rem;margin:0 auto;padding:28px 24px 12px;flex:1;
-  display:flex;flex-direction:column;gap:20px}
+#tl{width:100%;max-width:48rem;margin:0 auto;padding:28px 24px 14px;flex:1;
+  display:flex;flex-direction:column;gap:22px}
 #tl.blank{justify-content:center;padding-bottom:12vh}
 
 .you{align-self:flex-end;max-width:80%;background:var(--message-surface);
@@ -141,8 +149,8 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 .act .tw{flex:none;width:9px;font-size:9px;transition:transform .12s}
 .act.open .tw{transform:rotate(90deg)}
 .act .nm{color:var(--foreground);font-weight:500}
-.act .dt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.act .bad{margin-left:auto;flex:none;font-size:11px;color:var(--error-foreground)}
+.act .dt{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act .bad{flex:none;font-size:11px;color:var(--error-foreground)}
 .body{margin:0 0 6px 22px;padding:6px 10px;border-left:2px solid var(--border);
   font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted-foreground);
   white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
@@ -163,7 +171,7 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 /* ---------------- composer ---------------- */
 #dock{flex:none;padding:0 24px 16px}
 #comp{max-width:48rem;margin:0 auto;background:var(--card);border:1px solid var(--border);
-  border-radius:18px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
+  border-radius:16px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
   transition:border-color .12s}
 #comp:focus-within{border-color:var(--input)}
 /* The approval attaches to the composer, where attention already is, and so
@@ -171,6 +179,7 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #ask{display:none;padding:11px 16px 12px;border-bottom:1px solid var(--border);
   background:var(--warning-surface);border-radius:17px 17px 0 0}
 #ask.on{display:block}
+#ask{border-radius:15px 15px 0 0}
 #ask .hd{margin-bottom:6px;font-size:11px;font-weight:600;color:var(--warning-foreground)}
 #ask .cmd{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;
   word-break:break-word;max-height:5rem;overflow:auto}
@@ -183,19 +192,21 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
   box-shadow:inset 0 1px rgb(255 255 255/16%)}
 .btn.primary:hover{filter:brightness(1.08)}
 #no:hover{color:var(--error-foreground);border-color:var(--error-foreground)}
-#box{width:100%;padding:12px 16px 2px;border:0;outline:0;resize:none;background:none;
-  min-height:42px;max-height:40vh;line-height:1.55}
+#box{width:100%;padding:11px 24px 1px;border:0;outline:0;resize:none;background:none;
+  min-height:24px;max-height:40vh;line-height:1.55}
 #box::placeholder{color:var(--muted-foreground)}
-#bar{display:flex;align-items:center;gap:8px;padding:0 10px 10px 14px}
-#task{height:28px;max-width:16rem;padding:0 6px;border:1px solid transparent;
+#bar{display:flex;align-items:center;gap:8px;padding:0 16px 9px 21px}
+#task{height:26px;max-width:16rem;padding:0 6px;border:1px solid transparent;
   border-radius:var(--control-radius);background:none;font-size:12px;color:var(--muted-foreground)}
 #task:hover{border-color:var(--border)}
-#send{margin-left:auto;display:grid;place-items:center;width:32px;height:32px;
+#send{margin-left:auto;display:grid;place-items:center;width:28px;height:28px;
   border-radius:var(--control-radius);background:var(--primary);color:var(--primary-foreground);
   font-size:15px;box-shadow:inset 0 1px rgb(255 255 255/16%);transition:.12s}
 #send:hover:not(:disabled){filter:brightness(1.08)}
 #send:disabled{opacity:.4;box-shadow:none}
-#hint{max-width:48rem;margin:8px auto 0;text-align:center;font-size:11px;color:var(--muted-foreground)}
+#hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
+  font-size:11px;color:var(--muted-foreground)}
+body.blank-chat #hint{display:block}
 .spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -216,16 +227,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   <div id="brand"><i></i>Syn</div>
   <button id="new">＋&nbsp;New chat</button>
   <div id="chats"></div>
-  <div id="wirebox">
-    <h3>Hands</h3>
-    <div id="wire"></div>
-    <span class="hint" id="wirehint">Reading your .env…</span>
-  </div>
-  <footer>
-    <button id="handsbtn">Attached</button>
-    <button id="evbtn">Events</button>
-    <button id="killbtn" style="margin-left:auto">Kill</button>
-  </footer>
 </aside>
 
 <main>
@@ -237,7 +238,18 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
     </button>
     <div id="title">New chat</div>
     <span style="flex:1"></span>
-    <span id="hands"><i></i><span>no hands</span></span>
+    <div id="statuswrap">
+      <button id="hands" aria-haspopup="menu" aria-expanded="false"><i></i><span>no hands</span></button>
+      <div id="pop" role="menu">
+        <h4>Connect a hand</h4>
+        <div id="wire"></div>
+        <span class="hint" id="wirehint">Reading your .env…</span>
+        <hr>
+        <button class="popitem" id="handsbtn">Attached hands</button>
+        <button class="popitem" id="evbtn">Recent events</button>
+        <button class="popitem danger" id="killbtn">Stop everything</button>
+      </div>
+    </div>
   </div>
 
   <div id="scroll"><div id="tl"></div></div>
@@ -380,7 +392,7 @@ async function loadWiring() {
     const cmd = w.kind === "cdp" ? `cdp ${w.at} ${w.app}` : `hand ${w.at} ${w.app}`;
     const b = el("button", null, w.kind === "cdp" ? "Browser" : w.app);
     b.title = cmd;
-    b.onclick = () => run(cmd);
+    b.onclick = () => { closePop(); run(cmd); };
     host.appendChild(b);
   }
   $("wirehint").textContent = wires.length
@@ -397,10 +409,19 @@ async function run(cmd) {
 }
 
 /* ---------------- threads ---------------- */
+async function openChat(id) {
+  await cli("chat open " + id);
+  current = id;
+  if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+  await loadChats();
+  await refresh();
+}
+
 async function loadChats() {
   const out = await cli("chat list");
   const cur = (out.match(/current=(\S+)/) || [])[1];
   if (cur) current = cur;
+  if (current) history.replaceState(null, "", "#" + current);
   const list = $("chats");
   list.textContent = "";
   let lastBand = null;
@@ -419,13 +440,7 @@ async function loadChats() {
       if (c.id === current) await refresh();
     };
     row.appendChild(x);
-    row.onclick = async () => {
-      if (busy) return;
-      await cli("chat open " + c.id);
-      current = c.id;
-      await loadChats();
-      await refresh();
-    };
+    row.onclick = () => { if (!busy) void openChat(c.id); };
     list.appendChild(row);
   }
 }
@@ -452,6 +467,7 @@ function activity(name, detail, body, failed) {
 function render(msgs) {
   tl.textContent = "";
   tl.classList.toggle("blank", !msgs.length);
+  document.body.classList.toggle("blank-chat", !msgs.length);
   if (!msgs.length) {
     const e = el("div", "empty");
     const badge = el("div", "badge");
@@ -584,9 +600,23 @@ $("ok").onclick = () => decide(true);
 $("no").onclick = () => decide(false);
 $("task").onchange = e => cli("task " + e.target.value);
 $("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); box.focus(); };
-$("killbtn").onclick = () => run("kill");
-$("handsbtn").onclick = () => run("hands");
-$("evbtn").onclick = () => run("events");
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (id && id !== current && !busy) void openChat(id);
+});
+const pop = $("pop");
+function closePop() { pop.classList.remove("on"); $("hands").setAttribute("aria-expanded", "false"); }
+$("hands").onclick = e => {
+  e.stopPropagation();
+  const open = !pop.classList.contains("on");
+  pop.classList.toggle("on", open);
+  $("hands").setAttribute("aria-expanded", String(open));
+};
+document.addEventListener("click", e => { if (!pop.contains(e.target)) closePop(); });
+window.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+$("killbtn").onclick = () => { closePop(); run("kill"); };
+$("handsbtn").onclick = () => { closePop(); run("hands"); };
+$("evbtn").onclick = () => { closePop(); run("events"); };
 // Collapsed state is a per-viewer convenience, so localStorage is the right
 // home for it — and it must survive the accessor throwing in a private window.
 function setSide(hidden) {
@@ -606,7 +636,14 @@ window.addEventListener("keydown", e => {
 });
 
 (async () => {
-  try { await loadSlots(); await loadWiring(); await loadChats(); await refresh(); await hands(); }
+  try {
+    // Read the requested thread before loadChats() rewrites the hash to
+    // whatever the CLI considers current.
+    const want = location.hash.slice(1);
+    await loadSlots(); await loadWiring(); await loadChats();
+    if (want && want !== current) await openChat(want); else await refresh();
+    await hands();
+  }
   catch (e) { tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message)); }
   box.focus();
 })();

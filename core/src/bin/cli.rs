@@ -220,6 +220,10 @@ fn main() {
         match cmd {
             "" | "#" => {}
             "quit" | "exit" => break,
+            // Not a no-op: the console frames one run of CLI output by
+            // sending `mark <nonce>` and reading until the echo comes back.
+            // Marking a handle live is `live`.
+            "mark" => println!("RECEIPT mark={}", rest.trim()),
             "session" => {
                 session = rest.to_string();
                 relay.handshake(&session, "cli");
@@ -243,7 +247,6 @@ fn main() {
             // A sentinel so a non-interactive driver knows where one
             // command's output ends. Commands print a variable number of
             // lines, so a reader with no marker either guesses or blocks.
-            "mark" => println!("RECEIPT mark={}", rest.trim()),
             // What this deployment actually has, so nothing downstream has
             // to hardcode a model name, a pipe or a port.
             "slots" => {

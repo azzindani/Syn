@@ -206,6 +206,14 @@ fn do_read(relay: &mut Relay, session: &str, handle: &str, args: &ReadArgs) -> R
 }
 
 fn do_export(relay: &mut Relay, session: &str, handle: &str, args: &ExportArgs) -> Result<OpOut> {
+    // A screenshot is of a window, not of the in-memory model, so it only
+    // exists on a live handle. Falling through to the per-kind summary here
+    // is what once let a capture report success while writing no file.
+    if args.format == "png" {
+        return Err(Error::ClosedSchema(
+            "png export needs a live handle: mark it live with a hand that can see the window".into(),
+        ));
+    }
     if args.format == "xlsx" || args.format == "docx" {
         args.path.clone().ok_or_else(|| Error::ClosedSchema("xlsx/docx export needs path".into()))?;
     }
@@ -528,6 +536,13 @@ mod tests {
         }))
         .is_err());
         assert!(execute(&mut r, &s, &wh, Call::Export(ExportArgs { format: "xlsx".into(), path: None, sheet: None })).is_err());
+        // A png has no meaning off a live handle, and reporting a summary
+        // instead of refusing hid a capture that wrote no file at all.
+        let png = execute(&mut r, &s, &wh, Call::Export(ExportArgs {
+            format: "png".into(), path: Some(dir.join("w.png").to_string_lossy().into_owned()), sheet: None,
+        }));
+        assert!(format!("{:?}", png.unwrap_err()).contains("live handle"));
+        assert!(!dir.join("w.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

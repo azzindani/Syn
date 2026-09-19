@@ -6,7 +6,11 @@ use crate::protocol::{BULK_CAP_CELLS, Op, Result, Error};
 use crate::{acp, security};
 
 /// Allowed cosmetic keys. Unknown keys rejected, never ignored.
-const STYLE_KEYS: &[&str] = &["font", "fill", "bold", "size", "color"];
+/// The style keys `format` accepts. The live hand and the in-memory model
+/// must agree on this list, or a style the sidecar applies happily is
+/// refused before it ever gets there.
+const STYLE_KEYS: &[&str] =
+    &["font", "fill", "bold", "italic", "size", "color", "numberFormat", "width", "autofit", "wrap"];
 /// Zero-based inclusive cell rect: (row0, col0, row1, col1).
 pub type CellRect = (usize, usize, usize, usize);
 /// Parsed excel selector: sheet + optional rect.
@@ -45,6 +49,16 @@ pub enum StructArgs {
     /// controls nowhere, so it fails there rather than reporting a press
     /// that never happened.
     Invoke { selector: String, action: String },
+    /// Summarise a range: one row per distinct `rows` value, one column per
+    /// distinct `cols` value, `values` aggregated inside.
+    ///
+    /// Live-only, like Invoke: the in-memory model holds a grid of strings
+    /// and has no aggregation in it, so pretending to pivot there would
+    /// report a table that does not exist.
+    Pivot { source: String, rows: String, cols: String, values: String, at: String },
+    /// Draw a chart over a range and anchor it on a sheet. Live-only for the
+    /// same reason.
+    Chart { kind: String, source: String, title: String, at: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -317,7 +331,7 @@ fn do_write(relay: &mut Relay, session: &str, handle: &str, args: &WriteArgs) ->
 
 fn do_format(relay: &mut Relay, session: &str, handle: &str, args: &FormatArgs) -> Result<OpOut> {
     for (k, _) in &args.style {
-        if !STYLE_KEYS.contains(&k.as_str()) {
+        if !STYLE_KEYS.iter().any(|known| known.eq_ignore_ascii_case(k)) {
             return Err(Error::ClosedSchema(format!("unknown style key {k:?}")));
         }
     }
@@ -399,6 +413,23 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             Err(Error::ClosedSchema(format!(
                 "invoke {selector:?} needs a live handle: mark it live with a hand that drives controls"
+            )))
+        }
+        // Same rule as Invoke, same reason. The in-memory model is a grid of
+        // strings: it has no aggregation and no drawing surface, so a pivot
+        // or a chart reported here would be a success for nothing.
+        StructArgs::Pivot { source, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "pivot over {source:?} needs a live handle: mark it live with a hand that drives the app"
+            )))
+        }
+        StructArgs::Chart { kind, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "a {kind} chart needs a live handle: mark it live with a hand that drives the app"
             )))
         }
     }

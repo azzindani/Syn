@@ -326,6 +326,49 @@ fn main() {
                 let call = Call::Struct(StructArgs::Transfer { from: a[0].into(), selector: a[1].into(), title: a[3].into() });
                 run_op(&mut runner, &mut relay, a[2], "xfer", call);
             }
+            "sheet" => {
+                let a: Vec<&str> = rest.splitn(2, ' ').collect();
+                if a.len() < 2 {
+                    println!("ERROR usage: sheet <handle> <name>");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::AddSheet { name: a[1].trim().into() });
+                run_op(&mut runner, &mut relay, a[0], "sheet", call);
+            }
+            "pivot" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                // cols is optional: a pivot down one axis is still a pivot.
+                let (h, src, rows, values, at, cols) = match a.as_slice() {
+                    [h, src, rows, values, at] => (*h, *src, *rows, *values, *at, ""),
+                    [h, src, rows, values, at, cols] => (*h, *src, *rows, *values, *at, *cols),
+                    _ => {
+                        println!("ERROR usage: pivot <handle> <source> <rowField> <valueField> <at> [colField]");
+                        continue;
+                    }
+                };
+                let call = Call::Struct(StructArgs::Pivot {
+                    source: src.into(),
+                    rows: rows.into(),
+                    cols: cols.into(),
+                    values: values.into(),
+                    at: at.into(),
+                });
+                run_op(&mut runner, &mut relay, h, "pivot", call);
+            }
+            "chart" => {
+                let a: Vec<&str> = rest.splitn(5, ' ').collect();
+                if a.len() < 4 {
+                    println!("ERROR usage: chart <handle> <line|bar|column|pie> <source> <at> [title]");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::Chart {
+                    kind: a[1].into(),
+                    source: a[2].into(),
+                    at: a[3].into(),
+                    title: a.get(4).unwrap_or(&"").trim().to_string(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "chart", call);
+            }
             "undo" => run_op(&mut runner, &mut relay, rest.trim(), "undo", Call::Undo),
             "export" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -337,11 +380,13 @@ fn main() {
             "format" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: format <handle> <selector> <k=v,k=v>");
+                    println!("ERROR usage: format <handle> <selector> <k=v;k=v>  e.g. bold=1;numberFormat=#,##0");
                     continue;
                 }
+                // Semicolon, not comma: a number format is "#,##0" and
+                // splitting styles on a comma cuts it in half.
                 let mut style = Vec::new();
-                for kv in a[2].split(',') {
+                for kv in a[2].split(';') {
                     match kv.split_once('=') {
                         Some((k, v)) => style.push((k.to_string(), v.to_string())),
                         None => {

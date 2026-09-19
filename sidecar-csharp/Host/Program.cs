@@ -77,28 +77,51 @@ namespace Syn.Sidecar
                 // Byte mode, not Message: the client is an ordinary
                 // StreamReader/StreamWriter pair, and a message-mode server
                 // framed against a byte-mode client never completes a read.
-                using var server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
-                    PipeTransmissionMode.Byte, PipeOptions.None);
-                Trace($"pipe {_pipe}: waiting for client");
-                server.WaitForConnection();
-                Trace("pipe: client connected");
-                // UTF8Encoding(false): the default Encoding.UTF8 carries a
-                // byte-order-mark preamble, and StreamWriter emits it on the
-                // first flush — three stray bytes in front of the first JSON
-                // reply, which every client then fails to parse.
-                var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-                using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
-                Trace("pipe: reader ready");
-                using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
-                Trace("pipe: writer ready");
+                // Serve clients one after another. The first version served
+                // exactly one and exited on its disconnect, so the sidecar
+                // died the moment anything reconnected -- which is precisely
+                // when it should be settling down to wait for the next one.
+                // The UIA sidecar learned this already; this one had not.
                 while (!_stop)
                 {
-                    Trace("pipe: awaiting line");
-                    var line = reader.ReadLine();
-                    if (line == null) { Trace("pipe: EOF, client gone"); break; }
-                    Trace($"pipe: got {line.Length} chars");
-                    writer.WriteLine(Dispatch(app, line));
-                    Trace("pipe: reply sent");
+                    NamedPipeServerStream? server = null;
+                    try
+                    {
+                        server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
+                            PipeTransmissionMode.Byte, PipeOptions.None);
+                        Trace($"pipe {_pipe}: waiting for client");
+                        server.WaitForConnection();
+                        Trace("pipe: client connected");
+                        // UTF8Encoding(false): the default Encoding.UTF8 carries
+                        // a byte-order-mark preamble, and StreamWriter emits it
+                        // on the first flush -- three stray bytes in front of the
+                        // first JSON reply, which every client then fails to parse.
+                        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                        using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
+                        using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
+                        Trace("pipe: reader and writer ready");
+                        while (!_stop)
+                        {
+                            var line = reader.ReadLine();
+                            if (line == null) { Trace("pipe: EOF, client gone"); break; }
+                            Trace($"pipe: got {line.Length} chars");
+                            writer.WriteLine(Dispatch(app, line));
+                            Trace("pipe: reply sent");
+                        }
+                    }
+                    catch (IOException e)
+                    {
+                        // A client that vanishes mid-write breaks the pipe. That
+                        // ends the connection, not the sidecar.
+                        Trace($"pipe: {e.Message}");
+                    }
+                    finally
+                    {
+                        // Disposing over a dead pipe throws from the final
+                        // flush, and an escape here kills the process for the
+                        // one thing it is supposed to shrug off.
+                        try { server?.Dispose(); } catch (IOException) { }
+                    }
                 }
             }
             finally
@@ -261,11 +284,18 @@ namespace Syn.Sidecar
             Guarded(() =>
             {
                 var wb = FindWorkbook(app, handle) ?? throw new InvalidOperationException($"workbook not open for {handle}");
+                var args = JsonField(line, "args");
                 return method switch
                 {
                     "read" => Ok(ReadRange(wb, selector)),
                     "write" => WriteRange(wb, handle, selector, JsonField(line, "payload")),
                     "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    "format" => FormatRange(wb, handle, selector, JsonField(line, "payload")),
+                    "addSheet" => AddSheet(wb, handle, JsonField(args, "name")),
+                    "pivot" => Pivot(wb, handle, JsonField(args, "source"), JsonField(args, "rows"),
+                                     JsonField(args, "cols"), JsonField(args, "values"), JsonField(args, "at")),
+                    "chart" => Chart(wb, handle, JsonField(args, "kind"), JsonField(args, "source"),
+                                     JsonField(args, "title"), JsonField(args, "at")),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
             });
@@ -408,6 +438,111 @@ namespace Syn.Sidecar
                 else row[^1] += ch;
             }
             return rows.Select(r => r.ToArray()).ToArray();
+        }
+
+        // ---- the four that made an analyst job impossible -------------------
+
+        private static string FormatRange(dynamic wb, string handle, string selector, string style)
+        {
+            Snapshot(handle);
+            var (sheet, addr) = SplitRange(selector);
+            if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("format needs Sheet!A1:B2");
+            dynamic ws = Sheet(wb, sheet);
+            dynamic rng = ws.Range[addr];
+            var applied = new List<string>();
+            foreach (var pair in style.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var kv = pair.Split('=', 2);
+                if (kv.Length != 2) continue;
+                var (k, v) = (kv[0].Trim().ToLowerInvariant(), kv[1].Trim());
+                switch (k)
+                {
+                    case "bold": rng.Font.Bold = Truthy(v); applied.Add("bold"); break;
+                    case "italic": rng.Font.Italic = Truthy(v); applied.Add("italic"); break;
+                    case "size": rng.Font.Size = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("size"); break;
+                    case "numberformat": case "format": rng.NumberFormat = v; applied.Add("numberFormat"); break;
+                    case "width": rng.ColumnWidth = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("width"); break;
+                    case "autofit": rng.EntireColumn.AutoFit(); applied.Add("autofit"); break;
+                    case "wrap": rng.WrapText = Truthy(v); applied.Add("wrap"); break;
+                    default: throw new InvalidOperationException(
+                        $"format does not know {k}: it takes bold, italic, size, numberFormat, width, autofit, wrap");
+                }
+            }
+            if (applied.Count == 0) throw new InvalidOperationException("format was given no style: try bold=1;numberFormat=#,##0");
+            return Ok($"formatted {sheet}!{addr}: {string.Join(", ", applied)}");
+        }
+
+        private static bool Truthy(string v) =>
+            v is "1" or "true" or "True" or "yes" or "on";
+
+        private static string AddSheet(dynamic wb, string handle, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("addSheet needs a name");
+            Snapshot(handle);
+            int n = wb.Worksheets.Count;
+            for (var i = 1; i <= n; i++)
+                if (string.Equals((string)wb.Worksheets[i].Name, name, StringComparison.OrdinalIgnoreCase))
+                    return Ok($"sheet {name} already exists");
+            dynamic ws = wb.Worksheets.Add(After: wb.Worksheets[n]);
+            ws.Name = name;
+            return Ok($"added sheet {name} ({wb.Worksheets.Count} now)");
+        }
+
+        private static string Pivot(dynamic wb, string handle, string source, string rowField,
+                                   string colField, string valueField, string at)
+        {
+            Snapshot(handle);
+            var (srcSheet, srcAddr) = SplitRange(source);
+            if (string.IsNullOrEmpty(srcAddr)) throw new InvalidOperationException("pivot needs a source like data!A1:H1000");
+            var (dstSheet, dstAddr) = SplitRange(at);
+            if (string.IsNullOrEmpty(dstAddr)) throw new InvalidOperationException("pivot needs a destination like Dashboard!A1");
+            if (string.IsNullOrWhiteSpace(rowField) || string.IsNullOrWhiteSpace(valueField))
+                throw new InvalidOperationException("pivot needs rows and values as HEADER NAMES from the source range");
+
+            dynamic sws = Sheet(wb, srcSheet);
+            dynamic dws = Sheet(wb, dstSheet);
+            // xlDatabase = 1
+            dynamic cache = wb.PivotCaches().Create(1, sws.Range[srcAddr]);
+            var name = "Pivot" + (DateTime.UtcNow.Ticks % 1000000);
+            dynamic pt = cache.CreatePivotTable(dws.Range[dstAddr], name);
+            // xlRowField = 1, xlColumnField = 2, xlDataField = 4, xlSum = -4157
+            pt.PivotFields(rowField).Orientation = 1;
+            if (!string.IsNullOrWhiteSpace(colField)) pt.PivotFields(colField).Orientation = 2;
+            dynamic data = pt.PivotFields(valueField);
+            data.Orientation = 4;
+            data.Function = -4157;
+            var across = string.IsNullOrWhiteSpace(colField) ? "" : $" x {colField}";
+            return Ok($"pivot {name} at {dstSheet}!{dstAddr}: sum of {valueField} by {rowField}{across}");
+        }
+
+        private static string Chart(dynamic wb, string handle, string kind, string source, string title, string at)
+        {
+            Snapshot(handle);
+            var (srcSheet, srcAddr) = SplitRange(source);
+            if (string.IsNullOrEmpty(srcAddr)) throw new InvalidOperationException("chart needs a source like Summary!A1:B12");
+            var (dstSheet, dstAddr) = SplitRange(at);
+            if (string.IsNullOrEmpty(dstAddr)) throw new InvalidOperationException("chart needs a destination like Dashboard!A1");
+            // xlLine = 4, xlColumnClustered = 51, xlBarClustered = 57, xlPie = 5
+            int type = kind.ToLowerInvariant() switch
+            {
+                "line" => 4,
+                "column" => 51,
+                "bar" => 57,
+                "pie" => 5,
+                _ => throw new InvalidOperationException($"chart does not know {kind}: it draws line, bar, column or pie"),
+            };
+            dynamic sws = Sheet(wb, srcSheet);
+            dynamic dws = Sheet(wb, dstSheet);
+            dynamic cell = dws.Range[dstAddr];
+            dynamic shape = dws.Shapes.AddChart2(-1, type, cell.Left, cell.Top, 440.0, 260.0);
+            dynamic chart = shape.Chart;
+            chart.SetSourceData(sws.Range[srcAddr]);
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                chart.HasTitle = true;
+                chart.ChartTitle.Text = title;
+            }
+            return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr}");
         }
 
         private static string ExportWb(dynamic wb, string handle, string format, string path)

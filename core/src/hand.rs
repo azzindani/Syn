@@ -15,7 +15,7 @@
 //! object per line. Both of those were learned the hard way against live
 //! Excel; see `docs/runbook-windows.md`.
 
-use crate::ops::{Call, ExportArgs, ReadArgs, StructArgs, WriteArgs};
+use crate::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use std::io::{BufRead, BufReader, Read, Write};
 
 /// One decoded sidecar reply. `ok` false carries `error` instead of `preview`.
@@ -122,11 +122,11 @@ pub fn grid_payload(values: &[Vec<String>]) -> String {
 
 /// Map one primitive op onto a sidecar method + envelope.
 ///
-/// `Format` and the document-structure verbs return None: the sidecar has no
-/// methods for them yet, and inventing a silent no-op would let a caller
-/// believe a change landed in a live document when nothing happened.
-/// `Struct::Invoke` does map, because pressing a control is exactly what the
-/// UIA sidecar exists to do.
+/// `Read`, `Write`, `Export`, `Undo`, `Format` and the `AddSheet`, `Pivot`,
+/// `Chart`, `Invoke` and `InsertParagraph` verbs map. The rest return None:
+/// the sidecar has no method for them, and inventing a silent no-op would
+/// let a caller believe a change landed in a live document when nothing
+/// happened.
 pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
     match call {
         Call::Read(ReadArgs { selector }) => {
@@ -155,7 +155,55 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             None,
         )),
         Call::Undo => Some(envelope("undo", handle, "{}", None)),
-        Call::Format(_) | Call::Struct(_) => None,
+        // Style as a payload in the same key=value shape the tool takes, so
+        // the sidecar reads what the model wrote without a second grammar.
+        Call::Format(FormatArgs { selector, style }) => Some(envelope(
+            "format",
+            handle,
+            &format!("{{\"selector\":\"{}\"}}", esc(selector)),
+            Some(
+                &style
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(";"),
+            ),
+        )),
+        Call::Struct(StructArgs::AddSheet { name }) => {
+            Some(envelope("addSheet", handle, &format!("{{\"name\":\"{}\"}}", esc(name)), None))
+        }
+        Call::Struct(StructArgs::Pivot { source, rows, cols, values, at }) => Some(envelope(
+            "pivot",
+            handle,
+            &format!(
+                "{{\"source\":\"{}\",\"rows\":\"{}\",\"cols\":\"{}\",\"values\":\"{}\",\"at\":\"{}\"}}",
+                esc(source),
+                esc(rows),
+                esc(cols),
+                esc(values),
+                esc(at)
+            ),
+            None,
+        )),
+        Call::Struct(StructArgs::Chart { kind, source, title, at }) => Some(envelope(
+            "chart",
+            handle,
+            &format!(
+                "{{\"kind\":\"{}\",\"source\":\"{}\",\"title\":\"{}\",\"at\":\"{}\"}}",
+                esc(kind),
+                esc(source),
+                esc(title),
+                esc(at)
+            ),
+            None,
+        )),
+        Call::Struct(StructArgs::InsertParagraph { text }) => Some(envelope(
+            "insertParagraph",
+            handle,
+            "{}",
+            Some(text),
+        )),
+        Call::Struct(_) => None,
     }
 }
 
@@ -340,14 +388,16 @@ mod tests {
 
     #[test]
     fn unsupported_ops_refuse_rather_than_pretend() {
-        use crate::ops::{FormatArgs, StructArgs};
+        use crate::ops::StructArgs;
+        // What is still unmapped must refuse, and must put nothing on the
+        // wire: a silent no-op would report a change that never happened.
         let (mut h, w) = hand("");
-        let f = Call::Format(FormatArgs { selector: "A1".into(), style: vec![("bold".into(), "1".into())] });
-        let r = h.dispatch(&f, "excel:p.xlsx:Sheet1").unwrap();
-        assert!(!r.ok);
+        let s = Call::Struct(StructArgs::CreateSlide { title: "T".into(), bullets: vec![] });
+        assert!(!h.dispatch(&s, "ppt:d.pptx:deck").unwrap().ok);
         assert!(sent(&w).is_empty(), "nothing may go on the wire for an unmapped op");
-        let s = Call::Struct(StructArgs::AddSheet { name: "S2".into() });
-        assert!(!h.dispatch(&s, "excel:p.xlsx:Sheet1").unwrap().ok);
+        let t = Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]] });
+        assert!(!h.dispatch(&t, "word:d.docx:body").unwrap().ok);
+        assert!(sent(&w).is_empty());
     }
 
     #[test]
@@ -404,11 +454,51 @@ mod tests {
     }
 
     #[test]
-    fn document_struct_verbs_still_refuse() {
-        use crate::ops::StructArgs;
-        // Only Invoke maps; the document verbs must not silently no-op.
-        let (mut h, w) = hand("");
-        assert!(!h.dispatch(&Call::Struct(StructArgs::AddSheet { name: "S".into() }), "x").unwrap().ok);
-        assert!(sent(&w).is_empty());
+    fn the_analyst_verbs_reach_the_wire() {
+        use crate::ops::{FormatArgs, StructArgs};
+        // An analyst job needs a sheet, a style, a summary and a picture.
+        // Each must arrive as its own method rather than being refused.
+        let reply = "{\"ok\":true,\"preview\":\"done\"}
+".repeat(4);
+        let (mut h, w) = hand(&reply);
+        h.dispatch(&Call::Struct(StructArgs::AddSheet { name: "Summary".into() }), "excel:p.xlsx:S").unwrap();
+        h.dispatch(
+            &Call::Format(FormatArgs {
+                selector: "Summary!A1:D1".into(),
+                style: vec![("bold".into(), "1".into()), ("numberFormat".into(), "#,##0".into())],
+            }),
+            "excel:p.xlsx:S",
+        )
+        .unwrap();
+        h.dispatch(
+            &Call::Struct(StructArgs::Pivot {
+                source: "data!A1:H99".into(),
+                rows: "name".into(),
+                cols: String::new(),
+                values: "kWh".into(),
+                at: "Summary!F1".into(),
+            }),
+            "excel:p.xlsx:S",
+        )
+        .unwrap();
+        h.dispatch(
+            &Call::Struct(StructArgs::Chart {
+                kind: "line".into(),
+                source: "Summary!A1:B13".into(),
+                title: "Monthly".into(),
+                at: "Dashboard!A1".into(),
+            }),
+            "excel:p.xlsx:S",
+        )
+        .unwrap();
+        let out = sent(&w);
+        for method in ["addSheet", "format", "pivot", "chart"] {
+            assert!(out.contains(&format!("\"method\":\"{method}\"")), "{method} never reached the wire: {out}");
+        }
+        // The style rides as a payload in the shape the tool takes, so the
+        // sidecar needs no second grammar for it.
+        assert!(out.contains("bold=1;numberFormat=#,##0"), "{out}");
+        assert!(out.contains("\"values\":\"kWh\""), "{out}");
+        assert!(out.contains("\"kind\":\"line\""), "{out}");
     }
 }

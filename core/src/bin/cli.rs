@@ -536,7 +536,7 @@ fn main() {
                     );
                     continue;
                 }
-                let style = a.get(4).map(|s| *s).unwrap_or(".");
+                let style = a.get(4).copied().unwrap_or(".");
                 let call = Call::Struct(StructArgs::Chart {
                     kind: a[1].into(),
                     source: a[2].into(),

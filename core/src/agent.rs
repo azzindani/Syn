@@ -109,6 +109,37 @@ pub struct Agent {
 }
 
 impl Agent {
+    /// Tell the model what is open, refreshed before every turn.
+    ///
+    /// The system prompt has always said to use only the handles the registry
+    /// lists, and the registry was never actually shown: the model had to be
+    /// handed a handle in the prose or guess one. Handles come and go between
+    /// messages, so this replaces its own note rather than appending, and a
+    /// stale list would be worse than none.
+    pub fn show_registry(&mut self, open: &[(String, bool)]) {
+        let text = if open.is_empty() {
+            "Registry: nothing is open yet. Ask the human to open a document              and attach a hand before calling a tool."
+                .to_string()
+        } else {
+            let mut t = String::from("Registry, the only handles you may name:
+");
+            for (h, live) in open {
+                t.push_str(&format!(
+                    "- {h}{}
+",
+                    if *live { " (live: reaches the window they are looking at)" } else { " (model only: no hand is driving it)" }
+                ));
+            }
+            t
+        };
+        // Slot 1 is this note and nothing else, so replacing it cannot eat
+        // the goal that a fresh agent put there.
+        match self.msgs.get_mut(1) {
+            Some(Msg::System(s)) => *s = text,
+            _ => self.msgs.insert(1, Msg::System(text)),
+        }
+    }
+
     pub fn new(session: &str, goal: &str, model: &str, route: Route) -> Self {
         Self {
             session: session.to_string(),

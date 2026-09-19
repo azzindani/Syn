@@ -4,6 +4,11 @@
 //
 //   node inject.mjs "your prompt"
 //   node inject.mjs "your prompt" --headed --shot ../../testbed/inject.png
+//   node inject.mjs "..." --setup "hand synuia uia" --setup "live uia:poem::doc"
+//
+// --setup runs a console command through the page before the prompt, which
+// is the only way to reach the CLI child the console owns: a second cli.exe
+// has its own Runner and its own registry.
 //
 // The URL comes from the file console.ps1 writes, so the token is never
 // guessed and never pasted.
@@ -20,6 +25,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? null : argv[i + 1] ?? true;
 };
+const flags = (name) => argv.flatMap((a, i) => (a === name && argv[i + 1] ? [argv[i + 1]] : []));
 const prompt = argv.filter((a, i) => !a.startsWith("--") && !String(argv[i - 1] ?? "").startsWith("--")).join(" ");
 if (!prompt) {
   console.error('usage: node inject.mjs "your prompt" [--url <url>] [--headed] [--shot <png>]');
@@ -40,6 +46,16 @@ try {
   await page.goto(url, { timeout: 20_000 });
   await page.locator("#brand").waitFor({ timeout: 10_000 });
   await page.locator("#new").click();
+
+  for (const cmd of flags("--setup")) {
+    const out = await page.evaluate((c) => cli(c), cmd);
+    const lines = out.trim().split(/\r?\n/).filter(Boolean);
+    console.log(`setup: ${cmd}`);
+    for (const l of lines) console.log(`  ${l}`);
+    if (lines.some((l) => l.startsWith("ERROR"))) {
+      throw new Error(`setup failed: ${cmd}`);
+    }
+  }
 
   const box = page.locator("#box");
   await box.fill(prompt);

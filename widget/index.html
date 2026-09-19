@@ -567,6 +567,9 @@ async function send() {
     tl.appendChild(el("div", "fail", "Console unreachable: " + e.message));
   } finally {
     thinking(false);
+    // A turn can attach or lose a hand, so the pill is only honest if it is
+    // re-read afterwards rather than left as it was at boot.
+    await hands();
     scroll.scrollTop = scroll.scrollHeight;
     box.focus();
   }

@@ -232,6 +232,17 @@ fn main() {
             }
             "attach" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
+                // A handle is app:file:unit split on ':', so a Windows drive
+                // letter mints one with four parts that every reader then
+                // mis-splits. It attached happily and failed on the first op.
+                // The file component is a name here, not a path: the hand
+                // finds the open document by it.
+                if let Some(bad) = a.iter().skip(1).find(|p| p.contains(':')) {
+                    println!(
+                        "ERROR attach {bad:?} contains ':', which is what separates a handle: name the open document, not its path"
+                    );
+                    continue;
+                }
                 let (file, kind) = match a.as_slice() {
                     ["excel", f, unit] => (blank_excel(), new_handle("excel", f, unit)),
                     ["word", f] => (blank_word(), new_handle("word", f, "body")),
@@ -433,7 +444,20 @@ fn main() {
                     None => agent = Some(Agent::new(&session, text, &model, r)),
                 }
                 let a = agent.as_mut().expect("just set");
-                println!("RECEIPT say model={model}");
+                // Before every turn, not once at construction: a hand
+                // attached mid-conversation has to be visible to the next
+                // message, or the model keeps saying it cannot reach anything.
+                let open: Vec<(String, bool)> = relay
+                    .registry(&session)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|h| {
+                        let live = runner.is_live(&h);
+                        (h, live)
+                    })
+                    .collect();
+                a.show_registry(&open);
+                println!("RECEIPT say model={model} open={}", open.len());
                 let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 // Free-tier slots rate-limit independently, so a 429 on one

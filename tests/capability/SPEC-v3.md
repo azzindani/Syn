@@ -191,6 +191,19 @@ one who wrote both the engine and the scorer:
   own grouping says "Fall" where the fixture says "Autumn", so four
   correct totals scored zero.
 
+> **All four results below are void.** The runs did not fail the way the
+> notes say. An upstream outage — `{"error":{"message":"Upstream error
+> from Nvidia: Service temporarily overloaded","code":503}}` — arrives
+> from OpenRouter with **HTTP 200**, and the engine only treated a
+> non-200 as a failure. The error body reached the agent, which found no
+> content and no tool calls in it and reported that the model had ended
+> the turn with nothing to say. Three of the four "empty completions"
+> were that. The models were not giving up; they were never asked.
+>
+> Fixed, with a test, and every run below must be repeated before any of
+> it means anything. Kept here rather than deleted, because a rubric that
+> quietly loses its wrong answers cannot be checked.
+
 Four runs, three models, 8 to 19 out of 100 against a control that scores
 90/90 on the same rubric and the same fixture. None finished Excel. None
 opened PowerPoint. Three of the four managed a single operation.

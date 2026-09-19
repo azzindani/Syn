@@ -46,6 +46,12 @@ impl Brain for CurlBrain {
         if status != 200 {
             return Err(provider::explain_error(status, &text));
         }
+        // A 200 is not the same as a completion. An upstream outage comes
+        // back with an error object where the choices should be, and the
+        // status code says nothing about it.
+        if let Some(why) = provider::error_in_ok_body(&text) {
+            return Err(why);
+        }
         Ok(text)
     }
 }
@@ -319,9 +325,15 @@ impl Agent {
                         "That turn was empty. If the work is done, say so and summarise it. If it is not, carry on with the next step."
                             .into(),
                     ));
-                    return Step::Refused("the model returned an empty turn: asked it to continue".into());
+                    return Step::Refused(format!(
+                        "the model returned an empty turn ({}): asked it to continue",
+                        provider::empty_turn_diagnosis(&reply)
+                    ));
                 }
-                return Step::Stopped("the model ended the turn with no answer and no tool call".into());
+                return Step::Stopped(format!(
+                    "the model ended the turn with no answer and no tool call ({})",
+                    provider::empty_turn_diagnosis(&reply)
+                ));
             }
             // Prose ends the turn. That is right when the work is done and
             // wrong when none has started: a run answered "I'll start by

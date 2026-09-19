@@ -154,6 +154,66 @@ fn unescape(s: &str) -> String {
 }
 
 /// Pull every `"content":"..."` value out of one JSON payload (std only).
+/// Why a turn came back with nothing in it.
+///
+/// "The model ended the turn with no answer and no tool call" was true and
+/// useless: four capability runs died that way and the message threw away
+/// every fact that would have said which of several very different causes
+/// it was. A reasoning model that spent its whole completion budget
+/// thinking looks identical, in that sentence, to one that simply refused.
+///
+/// Hand-scanned like the rest of this module, because core carries no JSON
+/// dependency.
+pub fn empty_turn_diagnosis(body: &str) -> String {
+    let body = body.trim();
+    let finish = scan_field(body, "\"finish_reason\"").unwrap_or_else(|| "?".into());
+    let reasoning = scan_field(body, "\"reasoning\"").map(|r| r.len()).unwrap_or(0);
+    let refusal = scan_field(body, "\"refusal\"").filter(|r| !r.is_empty());
+    let mut why = format!("finish_reason={finish}");
+    if reasoning > 0 {
+        // The tell for a model that thought and then said nothing: the
+        // budget went somewhere, just not into an answer.
+        why.push_str(&format!(", reasoning={reasoning} chars but no content"));
+    }
+    if let Some(r) = refusal {
+        why.push_str(&format!(", refusal={r:?}"));
+    }
+    if finish == "length" {
+        why.push_str(" — the completion was cut off, so raise the budget or lower reasoning effort");
+    }
+    // When none of the expected fields are there, the body is not the shape
+    // this code thinks it is, and no amount of scanning for the right keys
+    // will say so. Show what actually arrived.
+    if finish == "?" && reasoning == 0 {
+        let head: String = body.chars().take(400).collect();
+        why.push_str(&format!(", body={head:?}"));
+    }
+    why
+}
+
+/// The first string value of a field, or None when it is absent or null.
+fn scan_field(json: &str, key: &str) -> Option<String> {
+    let i = json.find(key)? + key.len();
+    let rest = json[i..].trim_start_matches([' ', ':']);
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let mut out = String::new();
+    let mut it = rest[1..].chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\\' => {
+                if let Some(e) = it.next() {
+                    out.push(e);
+                }
+            }
+            '"' => return Some(out),
+            _ => out.push(c),
+        }
+    }
+    None
+}
+
 fn extract_contents(json: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = json;
@@ -293,7 +353,51 @@ pub fn explain_error(status: u16, body: &str) -> String {
 /// everywhere, and retrying those just burns the other slots.
 pub fn worth_another_model(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
-    e.contains("429") || e.contains("rate limit") || e.contains("rate-limit") || e.contains("(502)") || e.contains("(503)")
+    e.contains("429")
+        || e.contains("rate limit")
+        || e.contains("rate-limit")
+        || e.contains("(502)")
+        || e.contains("(503)")
+        || e.contains("overloaded")
+        || e.contains("temporarily unavailable")
+}
+
+/// An upstream failure reported inside a 200.
+///
+/// OpenRouter answers a provider outage with HTTP 200 and an `error` object
+/// where the choices should be:
+///
+/// ```text
+/// {"id":"gen-...","error":{"message":"Upstream error from Nvidia: Service
+///  temporarily overloaded","code":503,"metadata":{...}}}
+/// ```
+///
+/// Checking the status code alone let that body through to the agent, which
+/// found no content and no tool calls in it and reported that the model had
+/// ended the turn with nothing to say. Four capability runs were scored on
+/// that reading. The models had not given up; they were never asked.
+pub fn error_in_ok_body(body: &str) -> Option<String> {
+    // An `error` key before any `choices` key: a normal completion can
+    // mention "error" inside a message, so position is what distinguishes
+    // an error envelope from a reply that talks about one.
+    let at = body.find(r#""error""#)?;
+    if let Some(ch) = body.find(r#""choices""#)
+        && ch < at
+    {
+        return None;
+    }
+    let msg = scan_field(&body[at..], r#""message""#).unwrap_or_else(|| "no message".into());
+    let code = scan_field(&body[at..], r#""error_type""#)
+        .or_else(|| digits_after(&body[at..], r#""code""#))
+        .unwrap_or_else(|| "unknown".into());
+    Some(format!("upstream failed inside a 200 ({code}): {msg}"))
+}
+
+fn digits_after(json: &str, key: &str) -> Option<String> {
+    let i = json.find(key)? + key.len();
+    let rest = json[i..].trim_start_matches([' ', ':']);
+    let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!n.is_empty()).then_some(n)
 }
 
 /// Returns (http_status, response_body).
@@ -504,5 +608,47 @@ mod cover_tests {
         p.note_spend(route(TaskKind::Skim)); // +1
         assert_eq!(p.spent, 3);
         assert!(p.over_budget(3));
+    }
+
+    #[test]
+    fn an_empty_turn_says_which_kind_of_empty_it_was() {
+        // A reasoning model that burned its budget thinking and a model
+        // that refused both arrive as "no answer and no tool call". The
+        // whole point of the diagnosis is that they are not the same
+        // problem and do not have the same fix.
+        let cut = r#"{"choices":[{"finish_reason":"length","message":{"content":null,"reasoning":"thinking hard about the workbook"}}]}"#;
+        let d = empty_turn_diagnosis(cut);
+        assert!(d.contains("finish_reason=length"), "{d}");
+        assert!(d.contains("reasoning="), "{d}");
+        assert!(d.contains("cut off"), "{d}");
+
+        let refused = r#"{"choices":[{"finish_reason":"stop","message":{"content":null,"refusal":"I cannot help with that"}}]}"#;
+        let d2 = empty_turn_diagnosis(refused);
+        assert!(d2.contains("finish_reason=stop"), "{d2}");
+        assert!(d2.contains("refusal"), "{d2}");
+        assert!(!d2.contains("cut off"), "a clean stop is not a truncation: {d2}");
+
+        // Nothing to report is still a sentence, not a panic.
+        let bare = r#"{"choices":[{"finish_reason":"stop","message":{"content":null}}]}"#;
+        assert!(empty_turn_diagnosis(bare).contains("finish_reason=stop"));
+    }
+
+    #[test]
+    fn an_upstream_failure_inside_a_200_is_an_error_not_an_empty_turn() {
+        // The body that cost four capability runs their result. It arrives
+        // with HTTP 200, so the status check passed it straight through to
+        // the agent, which read "no content, no tool calls" as the model
+        // giving up.
+        let overloaded = r#"{"id":"gen-1789834235-vZqrie8","error":{"message":"Upstream error from Nvidia: Service temporarily overloaded","code":503,"metadata":{"error_type":"provider_overloaded"}}}"#;
+        let got = error_in_ok_body(overloaded).expect("an error envelope is an error");
+        assert!(got.contains("provider_overloaded"), "{got}");
+        assert!(got.contains("temporarily overloaded"), "{got}");
+        // And it has to reach the fallback chain, or the run dies on one
+        // provider having a bad minute.
+        assert!(worth_another_model(&got), "an overloaded provider is worth another model: {got}");
+
+        // A real completion is not an error, even when it says the word.
+        let fine = r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"the write returned an error, so I tried again"}}]}"#;
+        assert_eq!(error_in_ok_body(fine), None, "a reply that mentions an error is still a reply");
     }
 }

@@ -59,6 +59,15 @@ pub enum StructArgs {
     /// Draw a chart over a range and anchor it on a sheet. Live-only for the
     /// same reason.
     Chart { kind: String, source: String, title: String, at: String },
+    /// Turn a range into a real Excel Table, so it sorts, filters and grows.
+    Table { source: String, name: String },
+    /// Give a range a name, so a formula can say what it means.
+    Name { name: String, at: String },
+    /// Shade a range by its values: dataBar, colorScale, iconSet, top10,
+    /// greaterThan=N, lessThan=N.
+    Conditional { selector: String, rule: String },
+    /// A filter control the human drives, wired to a pivot.
+    Slicer { pivot: String, field: String, at: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -430,6 +439,25 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             Err(Error::ClosedSchema(format!(
                 "a {kind} chart needs a live handle: mark it live with a hand that drives the app"
+            )))
+        }
+        // A table, a name, a shading rule and a filter control are all things
+        // an application owns. The in-memory model is a grid of strings and
+        // has none of them, so it says so rather than reporting one made.
+        StructArgs::Table { name, .. }
+        | StructArgs::Name { name, .. }
+        | StructArgs::Slicer { field: name, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "{name:?} needs a live handle: mark it live with a hand that drives the app"
+            )))
+        }
+        StructArgs::Conditional { rule, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "conditional {rule:?} needs a live handle: mark it live with a hand that drives the app"
             )))
         }
     }

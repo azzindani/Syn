@@ -355,6 +355,50 @@ fn main() {
                 });
                 run_op(&mut runner, &mut relay, h, "pivot", call);
             }
+            "table" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                let [h, src, name] = a.as_slice() else {
+                    println!("ERROR usage: table <handle> <source> <name>");
+                    continue;
+                };
+                let call = Call::Struct(StructArgs::Table { source: (*src).into(), name: (*name).into() });
+                run_op(&mut runner, &mut relay, h, "table", call);
+            }
+            "name" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                let [h, name, at] = a.as_slice() else {
+                    println!("ERROR usage: name <handle> <name> <target>");
+                    continue;
+                };
+                let call = Call::Struct(StructArgs::Name { name: (*name).into(), at: (*at).into() });
+                run_op(&mut runner, &mut relay, h, "name", call);
+            }
+            "conditional" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                let [h, sel, rule] = a.as_slice() else {
+                    println!("ERROR usage: conditional <handle> <selector> <dataBar|colorScale|iconSet|top10|greaterThan=N>");
+                    continue;
+                };
+                let call = Call::Struct(StructArgs::Conditional { selector: (*sel).into(), rule: (*rule).into() });
+                run_op(&mut runner, &mut relay, h, "conditional", call);
+            }
+            "slicer" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                let (h, field, at, pivot) = match a.as_slice() {
+                    [h, field, at] => (*h, *field, *at, ""),
+                    [h, field, at, pivot] => (*h, *field, *at, *pivot),
+                    _ => {
+                        println!("ERROR usage: slicer <handle> <field> <at> [pivotName]");
+                        continue;
+                    }
+                };
+                let call = Call::Struct(StructArgs::Slicer {
+                    pivot: pivot.into(),
+                    field: field.into(),
+                    at: at.into(),
+                });
+                run_op(&mut runner, &mut relay, h, "slicer", call);
+            }
             "chart" => {
                 let a: Vec<&str> = rest.splitn(5, ' ').collect();
                 if a.len() < 4 {

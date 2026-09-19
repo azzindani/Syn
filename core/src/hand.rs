@@ -197,6 +197,38 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             ),
             None,
         )),
+        Call::Struct(StructArgs::Table { source, name }) => Some(envelope(
+            "table",
+            handle,
+            &format!("{{\"source\":\"{}\",\"name\":\"{}\"}}", esc(source), esc(name)),
+            None,
+        )),
+        Call::Struct(StructArgs::Name { name, at }) => Some(envelope(
+            "name",
+            handle,
+            &format!("{{\"name\":\"{}\",\"at\":\"{}\"}}", esc(name), esc(at)),
+            None,
+        )),
+        // The rule rides as the payload, the way a style does for `format`.
+        Call::Struct(StructArgs::Conditional { selector, rule }) => Some(envelope(
+            "conditional",
+            handle,
+            &format!("{{\"selector\":\"{}\"}}", esc(selector)),
+            Some(rule),
+        )),
+        // `rows` carries the field: the sidecar reads pivot args from the
+        // same envelope shape and this keeps one grammar rather than two.
+        Call::Struct(StructArgs::Slicer { pivot, field, at }) => Some(envelope(
+            "slicer",
+            handle,
+            &format!(
+                "{{\"name\":\"{}\",\"rows\":\"{}\",\"at\":\"{}\"}}",
+                esc(pivot),
+                esc(field),
+                esc(at)
+            ),
+            None,
+        )),
         Call::Struct(StructArgs::InsertParagraph { text }) => Some(envelope(
             "insertParagraph",
             handle,

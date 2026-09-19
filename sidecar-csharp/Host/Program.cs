@@ -20,6 +20,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using Microsoft.CSharp.RuntimeBinder;
 using System.IO;
 using System.Linq;
 using System.IO.Pipes;
@@ -69,6 +70,16 @@ namespace Syn.Sidecar
 
         private static void Run()
         {
+            // Late-bound COM into Office resolves member names and marshals
+            // arguments against the calling thread's culture. On a machine
+            // whose locale is not en-US that surfaces as
+            // `0x80028018 TYPE_E_INVDATAREAD - old format or invalid type
+            // library` on perfectly ordinary calls: SlicerCaches.Add2 was the
+            // one that caught it here. Office's own object model is en-US, so
+            // the thread that talks to it says en-US.
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
+            Thread.CurrentThread.CurrentUICulture = new CultureInfo("en-US");
+
             dynamic app = AttachOrStart(_app);
             try
             {
@@ -296,6 +307,11 @@ namespace Syn.Sidecar
                                      JsonField(args, "cols"), JsonField(args, "values"), JsonField(args, "at")),
                     "chart" => Chart(wb, handle, JsonField(args, "kind"), JsonField(args, "source"),
                                      JsonField(args, "title"), JsonField(args, "at")),
+                    "table" => MakeTable(wb, handle, JsonField(args, "source"), JsonField(args, "name")),
+                    "name" => NameRange(wb, handle, JsonField(args, "name"), JsonField(args, "at")),
+                    "conditional" => Conditional(wb, handle, selector, JsonField(line, "payload")),
+                    "slicer" => Slicer(wb, handle, JsonField(args, "name"), JsonField(args, "rows"),
+                                       JsonField(args, "at")),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
             });
@@ -405,11 +421,32 @@ namespace Syn.Sidecar
             if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("write needs Sheet!A1:B2");
             dynamic ws = Sheet(wb, sheet);
             var rows = ParseGrid(payload);
-            var r0 = ws.Range[addr].Row;
-            var c0 = ws.Range[addr].Column;
+            dynamic target = ws.Range[addr];
+
+            // One value into a range of many cells means fill, not "write to
+            // the corner". This is the only way to put a derived column
+            // beside 258,423 rows: sending that many values is impossible and
+            // Excel adjusts the relative references itself.
+            long span = (long)target.Rows.Count * target.Columns.Count;
+            if (span > 1 && rows.Length == 1 && rows[0].Length == 1)
+            {
+                var one = rows[0][0];
+                if (one.StartsWith("=", StringComparison.Ordinal)) SetFormula(target, one);
+                else target.Value2 = one;
+                // InvariantCulture: this locale groups with a period, so 258,423
+                // cells was reporting itself as "258.423".
+                return Ok($"filled {sheet}!{addr} ({span.ToString("N0", CultureInfo.InvariantCulture)} cells) from {Trunc(one)}");
+            }
+
+            var r0 = target.Row;
+            var c0 = target.Column;
             for (var i = 0; i < rows.Length; i++)
                 for (var j = 0; j < rows[i].Length; j++)
-                    ws.Cells[r0 + i, c0 + j].Value2 = rows[i][j];
+                {
+                    var v = rows[i][j];
+                    if (v.StartsWith("=", StringComparison.Ordinal)) SetFormula(ws.Cells[r0 + i, c0 + j], v);
+                    else ws.Cells[r0 + i, c0 + j].Value2 = v;
+                }
             // Name the range that actually took the values, not just a shape.
             // "1x9" reads as success to a model that meant to write a column;
             // "A1:I1" is the same fact in a form it cannot skim past.
@@ -488,6 +525,143 @@ namespace Syn.Sidecar
             dynamic ws = wb.Worksheets.Add(After: wb.Worksheets[n]);
             ws.Name = name;
             return Ok($"added sheet {name} ({wb.Worksheets.Count} now)");
+        }
+
+        // ---- the structures a stakeholder actually drives -------------------
+
+        // Formula2 first, Formula second.
+        //
+        // `.Formula` is the legacy property: on a modern Excel it applies
+        // implicit intersection, so =MEDIAN(IF(range=x,range)) quietly
+        // evaluates to 0 instead of spilling. Every array formula an analyst
+        // reaches for -- MEDIAN(IF()), PERCENTILE(IF()), FILTER, UNIQUE,
+        // SORT -- needs Formula2. Older Excels do not have the property at
+        // all, hence the fallback rather than a hard requirement.
+        private static void SetFormula(dynamic target, string formula)
+        {
+            try { target.Formula2 = formula; }
+            catch (RuntimeBinderException) { target.Formula = formula; }
+            catch (COMException) { target.Formula = formula; }
+        }
+
+        private static string MakeTable(dynamic wb, string handle, string source, string name)
+        {
+            Snapshot(handle);
+            var (sheet, addr) = SplitRange(source);
+            if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("table needs a source like data!A1:H100");
+            if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("table needs a name");
+            dynamic ws = Sheet(wb, sheet);
+            int have = ws.ListObjects.Count;
+            for (var i = 1; i <= have; i++)
+                if (string.Equals((string)ws.ListObjects[i].Name, name, StringComparison.OrdinalIgnoreCase))
+                    return Ok($"table {name} already exists");
+            // xlSrcRange = 1, xlYes = 1 (the first row is headers)
+            dynamic lo = ws.ListObjects.Add(1, ws.Range[addr], Type.Missing, 1);
+            lo.Name = name;
+            return Ok($"table {name} over {sheet}!{addr} ({((int)lo.ListRows.Count).ToString("N0", CultureInfo.InvariantCulture)} rows)");
+        }
+
+        private static string NameRange(dynamic wb, string handle, string name, string target)
+        {
+            Snapshot(handle);
+            var (sheet, addr) = SplitRange(target);
+            if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("name needs a target like Summary!A2:A12");
+            if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("name needs a name");
+            dynamic ws = Sheet(wb, sheet);
+            wb.Names.Add(name, ws.Range[addr]);
+            return Ok($"named {name} = {sheet}!{addr}");
+        }
+
+        // rule is one of: dataBar, colorScale, iconSet, or an operator form
+        // like "greaterThan=1000" / "lessThan=10" / "top10".
+        private static string Conditional(dynamic wb, string handle, string selector, string rule)
+        {
+            Snapshot(handle);
+            var (sheet, addr) = SplitRange(selector);
+            if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("conditional needs Sheet!A2:A12");
+            dynamic ws = Sheet(wb, sheet);
+            dynamic rng = ws.Range[addr];
+            var parts = rule.Split('=', 2);
+            var kind = parts[0].Trim().ToLowerInvariant();
+            switch (kind)
+            {
+                case "databar":
+                    rng.FormatConditions.AddDatabar();
+                    break;
+                case "colorscale":
+                    // 3 = three-colour scale
+                    rng.FormatConditions.AddColorScale(3);
+                    break;
+                case "iconset":
+                    rng.FormatConditions.AddIconSetCondition();
+                    break;
+                case "top10":
+                    rng.FormatConditions.AddTop10().Interior.Color = 13561798; // light green
+                    break;
+                case "greaterthan":
+                case "lessthan":
+                {
+                    if (parts.Length < 2) throw new InvalidOperationException($"{kind} needs a value, e.g. {kind}=1000");
+                    // xlCellValue = 1, xlGreater = 5, xlLess = 6
+                    var op = kind == "greaterthan" ? 5 : 6;
+                    dynamic fc = rng.FormatConditions.Add(1, op, parts[1].Trim());
+                    fc.Interior.Color = kind == "greaterthan" ? 13561798 : 13551615; // green / red
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException(
+                        $"conditional does not know {kind}: it takes dataBar, colorScale, iconSet, top10, greaterThan=N, lessThan=N");
+            }
+            return Ok($"conditional {kind} on {sheet}!{addr} ({rng.FormatConditions.Count} rule(s) there now)");
+        }
+
+        private static string Slicer(dynamic wb, string handle, string pivotName, string field, string at)
+        {
+            Snapshot(handle);
+            var (dstSheet, dstAddr) = SplitRange(at);
+            if (string.IsNullOrEmpty(dstAddr)) throw new InvalidOperationException("slicer needs a place like Dashboard!K2");
+            if (string.IsNullOrWhiteSpace(field)) throw new InvalidOperationException("slicer needs the field to filter by");
+
+            // Index by position, never foreach. Enumerating a COM collection
+            // through `dynamic` binds IEnumVARIANT late, and Excel answers
+            // with 0x80028018 TYPE_E_INVDATAREAD -- which reads as a broken
+            // type library and is really just the wrong way to walk the
+            // collection. FindWorkbook learned this already.
+            dynamic pt = null;
+            for (var i = 1; i <= wb.Worksheets.Count && pt == null; i++)
+            {
+                dynamic ws = wb.Worksheets[i];
+                int n = ws.PivotTables().Count;
+                for (var j = 1; j <= n; j++)
+                {
+                    dynamic candidate = ws.PivotTables(j);
+                    var nameMatches = string.IsNullOrWhiteSpace(pivotName)
+                        || string.Equals((string)candidate.Name, pivotName, StringComparison.OrdinalIgnoreCase);
+                    if (nameMatches) { pt = candidate; break; }
+                }
+            }
+            if (pt == null) throw new InvalidOperationException("no pivot table to attach a slicer to: build the pivot first");
+
+            dynamic dws = Sheet(wb, dstSheet);
+            dynamic cell = dws.Range[dstAddr];
+
+            // Add2 on newer Excels, Add on older ones.
+            dynamic cache;
+            try { cache = wb.SlicerCaches.Add2(pt, field); }
+            catch (RuntimeBinderException) { cache = wb.SlicerCaches.Add(pt, field); }
+
+            // Only the destination. Passing Type.Missing for the optional
+            // arguments marshals badly through late binding and comes back as
+            // 0x80028018 TYPE_E_INVDATAREAD, which reads like a broken type
+            // library and is really just too many arguments. Geometry is set
+            // on the slicer afterwards, where it is plain property access.
+            dynamic slicer = cache.Slicers.Add(dws);
+            slicer.Top = cell.Top;
+            slicer.Left = cell.Left;
+            slicer.Width = 180.0;
+            slicer.Height = 200.0;
+            slicer.Caption = field;
+            return Ok($"slicer on {field} at {dstSheet}!{dstAddr}, filtering {pt.Name}");
         }
 
         private static string Pivot(dynamic wb, string handle, string source, string rowField,

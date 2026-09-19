@@ -15,6 +15,8 @@
 //!   invoke <h> <sel> [act]  press a control on a live handle
 //!   hands                   attached hands, in routing order
 //!   mark <token>            echo a sentinel (used by the web console)
+//!   say <text>              one conversational turn (keeps the history)
+//!   chat new|list|open <id>|del <id>|msgs   saved conversations
 //!   live <handle>           route that handle's ops to the open document
 //!   lread <h> <sel>         queued read of a live handle
 //!                           (once `live`, plain `write` also hits the document)
@@ -28,6 +30,7 @@ use core::agent::{Agent, Brain, CurlBrain, Step};
 use core::bus::{FileContent, FileKind, OpenFile};
 use core::config;
 use core::cdp::Cdp;
+use core::chats;
 use core::hand::Hand;
 use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use core::protocol::new_handle;
@@ -80,6 +83,26 @@ fn blank_ppt() -> OpenFile {
 }
 
 /// Drive the loop until it finishes, stops, or stops for a human.
+/// Persist the conversation after every turn.
+///
+/// A chat that is only written on a clean exit loses the run that crashed,
+/// which is the one the human most wants to look at afterwards.
+fn save_chat(id: &str, a: &Agent) {
+    let msgs = a.transcript().to_vec();
+    let chat = chats::Chat {
+        meta: chats::ChatMeta {
+            id: id.to_string(),
+            title: chats::title_from(&msgs),
+            updated: chats::now(),
+            turns: 0,
+        },
+        msgs,
+    };
+    if let Err(e) = chats::save(&chat) {
+        println!("ERROR chat save {e}");
+    }
+}
+
 fn drive(
     a: &mut Agent,
     brain: &mut dyn Brain,
@@ -130,6 +153,10 @@ fn main() {
     // The agent loop and the one hand that leaves the documents behind.
     // The allowlist starts empty: nothing may run until it is named.
     let mut agent: Option<Agent> = None;
+    // The conversation `say` appends to. One per CLI process until `chat
+    // open` switches it; saved after every turn so history survives a crash
+    // rather than only a clean exit.
+    let mut chat_id: String = chats::new_id();
     let mut shell_policy = ShellPolicy::default();
     // Which router slot `do` runs on. Switchable because free-tier models
     // rate-limit independently: a 429 on one slot is not a reason to stop.
@@ -329,6 +356,104 @@ fn main() {
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 agent = Some(a);
             }
+            "say" => {
+                // One conversational turn. Unlike `do`, this keeps the
+                // transcript: a chat where every message starts a new agent
+                // is not a chat, it is a series of strangers.
+                let text = rest.trim();
+                if text.is_empty() {
+                    println!("ERROR usage: say <text>");
+                    continue;
+                }
+                if !config::has_api_key() {
+                    println!("ERROR say: env {} not set (see .env.example)", config::API_KEY_ENV);
+                    continue;
+                }
+                let r = route(task);
+                let model = config::model_id(r.model);
+                match agent.as_mut() {
+                    Some(a) => {
+                        if let Err(e) = a.follow_up(text) {
+                            println!("ERROR say {e}");
+                            continue;
+                        }
+                        // Apply the current slot every turn, so switching
+                        // after a 429 actually moves the next request.
+                        a.retarget(&model, r);
+                    }
+                    None => agent = Some(Agent::new(&session, text, &model, r)),
+                }
+                let a = agent.as_mut().expect("just set");
+                println!("RECEIPT say model={model}");
+                let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                save_chat(&chat_id, a);
+            }
+            "chat" => {
+                let mut a = rest.split_whitespace();
+                match a.next().unwrap_or("msgs") {
+                    "new" => {
+                        chat_id = chats::new_id();
+                        agent = None;
+                        println!("RECEIPT chat={chat_id}");
+                    }
+                    "list" => {
+                        for m in chats::list() {
+                            println!("CHAT {}", chats::meta_json(&m));
+                        }
+                        println!("RECEIPT chat current={chat_id}");
+                    }
+                    "open" => {
+                        let Some(id) = a.next() else {
+                            println!("ERROR usage: chat open <id>");
+                            continue;
+                        };
+                        match chats::load(id) {
+                            Ok(c) => {
+                                let r = route(task);
+                                agent = Some(Agent::resume(&session, c.msgs, &config::model_id(r.model), r));
+                                chat_id = c.meta.id;
+                                println!("RECEIPT chat={chat_id} title={:?}", c.meta.title);
+                            }
+                            Err(e) => println!("ERROR chat open {e}"),
+                        }
+                    }
+                    "del" => {
+                        let Some(id) = a.next() else {
+                            println!("ERROR usage: chat del <id>");
+                            continue;
+                        };
+                        match chats::delete(id) {
+                            Ok(()) => {
+                                if id == chat_id {
+                                    chat_id = chats::new_id();
+                                    agent = None;
+                                }
+                                println!("RECEIPT deleted={id}");
+                            }
+                            Err(e) => println!("ERROR chat del {e}"),
+                        }
+                    }
+                    "msgs" => {
+                        // The transcript as the UI wants it, plus whatever
+                        // the run is currently waiting on, so the page never
+                        // has to infer state from receipt text.
+                        if let Some(ag) = agent.as_ref() {
+                            for m in ag.transcript() {
+                                println!("MSG {}", chats::msg_json(m));
+                            }
+                            if let Some(p) = ag.pending() {
+                                println!(
+                                    "PENDING {{\"program\":{:?},\"preview\":{:?},\"why\":{:?}}}",
+                                    p.program, p.preview, p.why
+                                );
+                            }
+                        }
+                        println!("RECEIPT chat={chat_id}");
+                    }
+                    other => println!("ERROR chat: unknown {other:?}, want new|list|open|del|msgs"),
+                }
+            }
             "approve" | "deny" => {
                 let Some(a) = agent.as_mut() else {
                     println!("ERROR {cmd}: no run in progress");
@@ -348,6 +473,7 @@ fn main() {
                     let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
                     drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
+                save_chat(&chat_id, a);
             }
             "hand" => {
                 // `hand <pipe> [app...]`: with apps, this hand claims them;

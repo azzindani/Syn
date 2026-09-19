@@ -30,10 +30,13 @@ software hands (Office first) in one live session, any model via OpenRouter.
     because `core` has no dependencies.
   - bins: `cli` (REPL: `do`/`approve`/`deny`, `hand`/`live`, `shellallow`),
     `mcpgate` (stdio bridge).
-- `widget/index.html` — the web console, served by the `ui` binary. It posts
-  one command line to a loopback server that types it into a real `cli`
-  process, so the page can only do what the CLI can do and shows exactly
-  what the CLI said. (Tauri shell in `widget/src-tauri`, still unbuilt.)
+- `widget/index.html` — the chat app, served by the `ui` binary: thread list,
+  conversation, composer. It posts one command line to a loopback server
+  that types it into a real `cli` process, so the page can only do what the
+  CLI can do. Layout digested from t3code (`docs/DIGEST-05-t3code-ui.md`).
+  (Tauri shell in `widget/src-tauri`, still unbuilt.)
+  - `chats` — saved conversations as JSON Lines under `.syn/chats`
+    (gitignored). One file per thread, appended per turn.
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
   named-pipe office-rpc/1, timeout-guarded calls, .bak snapshots).
   Needs Windows + .NET 8 + Office to compile/run.
@@ -143,15 +146,22 @@ presses the neighbouring button.
 
 Reproduce with `scripts/live-uia-smoke.ps1`.
 
-## Drive it from a browser
+## The app
 
 ```
 powershell -File scripts\console.ps1 -WithUia
 ```
 
-Starts the console (and the UIA sidecar), prints a tokenised URL and opens
-it. Buttons for `hands` / `registry` / `events`, one click to attach each
-hand, a command box with history, and a goal box that runs the agent.
+Starts the app (and the UIA sidecar), prints a tokenised URL and opens it.
+A thread list down the side, a conversation in the middle, a composer at the
+bottom. Tool calls render as quiet one-line rows you can expand, so a run
+that makes a dozen of them still reads as a conversation rather than a log.
+An approval attaches to the composer with Approve / Deny, where your
+attention already is, instead of scrolling past as a message.
+
+Conversations are saved to `.syn/chats` after every turn and listed newest
+first. Switching the model slot applies to the next turn of the conversation
+you are in, which is what makes a 429 on a free-tier model survivable.
 
 It binds 127.0.0.1 and every request carries a per-run token in a custom
 header. A custom header forces a CORS preflight, which the server refuses,

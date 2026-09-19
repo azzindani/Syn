@@ -22,3 +22,6 @@ testbed/*
 
 # Rust build output (core has its own; the widget crate now builds too)
 target/
+
+# Saved conversations: the user's, not the project's.
+.syn/

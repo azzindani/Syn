@@ -6,6 +6,7 @@ pub mod acp;
 pub mod agent;
 pub mod bus;
 pub mod cdp;
+pub mod chats;
 pub mod config;
 pub mod guard;
 pub mod hand;

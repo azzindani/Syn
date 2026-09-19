@@ -122,6 +122,52 @@ impl Agent {
         }
     }
 
+    /// Rebuild an agent from a saved transcript, so reopening a conversation
+    /// continues it instead of starting a stranger with the same name.
+    ///
+    /// The surface is re-fingerprinted rather than restored: the tools this
+    /// run may call are the ones this build exposes, and pretending an old
+    /// fingerprint still holds would hide exactly the change it exists to
+    /// catch.
+    pub fn resume(session: &str, msgs: Vec<Msg>, model: &str, route: Route) -> Self {
+        let mut a = Self::new(session, "", model, route);
+        a.msgs = if msgs.is_empty() { vec![Msg::System(SYSTEM.into())] } else { msgs };
+        a
+    }
+
+    /// Add the human's next turn to an ongoing conversation.
+    ///
+    /// The step budget is per turn, not per conversation: a long chat would
+    /// otherwise run out of steps for reasons the human cannot see.
+    ///
+    /// Refused while an approval is outstanding. Letting a new message queue
+    /// behind a pending `shell` would mean the human answers a question they
+    /// have already moved on from, and the approval they gave was for the
+    /// context they were looking at.
+    pub fn follow_up(&mut self, text: &str) -> Result<(), String> {
+        if let Some(p) = &self.pending {
+            return Err(format!("still waiting on approval for {}: answer approve or deny first", p.program));
+        }
+        self.msgs.push(Msg::User(text.into()));
+        self.steps = 0;
+        Ok(())
+    }
+
+    /// Point an ongoing conversation at a different model.
+    ///
+    /// The whole reason the router slots are switchable is that free-tier
+    /// models rate-limit independently, so a 429 must be survivable without
+    /// abandoning the conversation. Baking the model in at construction made
+    /// switching slots silently do nothing to a chat already under way.
+    pub fn retarget(&mut self, model: &str, route: Route) {
+        self.model = model.to_string();
+        self.route = route;
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     /// Route a goal by task class (the picker's default for this run).
     pub fn for_task(session: &str, goal: &str, model: &str, task: TaskKind) -> Self {
         Self::new(session, goal, model, crate::router::route(task))

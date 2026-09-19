@@ -203,6 +203,8 @@ fn main() {
     };
     let tok = token();
     let page = PAGE.replace("__SYN_TOKEN__", &tok);
+    let allowed_origins =
+        [format!("http://127.0.0.1:{port}"), format!("http://localhost:{port}")];
     let url = format!("http://127.0.0.1:{port}/?t={tok}");
     // Write the address where a launcher can read it, so nothing has to
     // capture our stdout to learn it. Redirecting a long-lived server's
@@ -220,9 +222,12 @@ fn main() {
         let Ok(mut s) = conn else { continue };
         let Ok(req) = read_request(&s) else { continue };
 
-        // A browser sends Origin on any cross-origin request. Ours is
-        // same-origin and sends none, so anything with one is not our page.
-        if req.origin.is_some() {
+        // Reject an Origin that is not ours. Note it must be a MATCH, not
+        // an absence: browsers send Origin on same-origin POSTs as well, so
+        // refusing every request that carries one refuses our own page.
+        if let Some(o) = &req.origin
+            && !allowed_origins.iter().any(|a| a == o)
+        {
             let _ = respond(&mut s, "403 Forbidden", "text/plain", "cross-origin requests are refused");
             continue;
         }

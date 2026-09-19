@@ -50,6 +50,9 @@ test("a typed prompt reaches the model and the reply lands in the thread", async
 });
 
 test("a reload lands back on the same thread", async ({ page }) => {
+  // The hash is written once the thread list has loaded, which is a fetch
+  // after first paint, so reading it straight off #brand races the boot.
+  await page.waitForFunction(() => location.hash.length > 1);
   const id = await page.evaluate(() => location.hash.slice(1));
   expect(id).toMatch(/^c\d+-[0-9a-f]+$/);
   const title = await page.locator("#title").innerText();

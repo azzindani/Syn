@@ -11,11 +11,17 @@
 //! Security, because this is a local server that can run commands:
 //!   * It binds 127.0.0.1 only. Never 0.0.0.0 -- the CLI can attach to your
 //!     open documents and, once a program is allowlisted, run it.
-//!   * Every request needs an `X-Syn-Token` header carrying this install's
-//!     token. A custom header forces a CORS preflight, which is refused, so
-//!     a web page you happen to visit cannot post commands to this port.
-//!     That is the real defence; the token covers the simple-request case.
-//!     It is kept in `.syn/console-token` so the address survives a restart.
+//!   * `Origin` does the gatekeeping. A command POST is refused unless its
+//!     Origin is this server's own, and refused outright if it carries none.
+//!     Browsers attach Origin to every cross-origin POST and cannot forge
+//!     it, so a page you happen to visit cannot drive this port even with a
+//!     simple request that needs no preflight. Preflights are refused too.
+//!
+//!     There was a per-install token on top of this. It is gone: the address
+//!     is now just http://127.0.0.1:<port>/ with nothing to copy around. The
+//!     Origin rule is what was stopping a hostile page either way; what the
+//!     token additionally covered was a non-browser caller on this machine,
+//!     and anything running locally can drive Office directly regardless.
 //!   * One request at a time. The child has one stdin, and serialising here
 //!     means a command and a poll can never interleave mid-reply.
 
@@ -88,61 +94,9 @@ impl Drop for Cli {
     }
 }
 
-/// Where the console keeps its token, beside the conversations: the private,
-/// gitignored corner of the install rather than anywhere the repo tracks.
-fn token_path() -> std::path::PathBuf {
-    core::chats::home().join("console-token")
-}
-
-fn mint_token() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(1);
-    let seed = format!("{now}-{}-{:p}", std::process::id(), &now as *const u128);
-    core::ws::sha1(seed.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A token that is the same every run.
-///
-/// It exists to make a cross-origin simple request fail, and it does that
-/// just as well when it is stable. Minting a new one per run only meant a
-/// new URL per run: the tab you left open stopped working and the address
-/// had to be hunted down again after every restart. `SYN_CONSOLE_TOKEN`
-/// overrides the stored one.
-fn token() -> String {
-    if let Ok(t) = std::env::var("SYN_CONSOLE_TOKEN")
-        && !t.trim().is_empty()
-    {
-        return t.trim().to_string();
-    }
-    let path = token_path();
-    if let Ok(found) = std::fs::read_to_string(&path)
-        && is_token(found.trim())
-    {
-        return found.trim().to_string();
-    }
-    let fresh = mint_token();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Err(e) = std::fs::write(&path, &fresh) {
-        eprintln!("WARN cannot keep the console token in {}: {e}", path.display());
-        eprintln!("WARN the address will change on the next run");
-    }
-    fresh
-}
-
-/// A truncated or hand-edited file is not a token, and silently accepting a
-/// short one would weaken the check it exists to make.
-fn is_token(s: &str) -> bool {
-    s.len() >= 32 && s.chars().all(|c| c.is_ascii_hexdigit())
-}
-
 struct Req {
     method: String,
     path: String,
-    token: String,
     origin: Option<String>,
     body: String,
 }
@@ -154,7 +108,7 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
     let mut parts = start.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("/").to_string();
-    let (mut len, mut token, mut origin) = (0usize, String::new(), None);
+    let (mut len, mut origin) = (0usize, None);
     loop {
         let mut line = String::new();
         if r.read_line(&mut line)? == 0 {
@@ -168,7 +122,6 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
             let (k, v) = (k.trim().to_ascii_lowercase(), v.trim().to_string());
             match k.as_str() {
                 "content-length" => len = v.parse().unwrap_or(0),
-                "x-syn-token" => token = v,
                 "origin" => origin = Some(v),
                 _ => {}
             }
@@ -180,7 +133,7 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
     if len > 0 {
         r.read_exact(&mut body)?;
     }
-    Ok(Req { method, path, token, origin, body: String::from_utf8_lossy(&body).into_owned() })
+    Ok(Req { method, path, origin, body: String::from_utf8_lossy(&body).into_owned() })
 }
 
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &str) -> std::io::Result<()> {
@@ -242,11 +195,9 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let tok = token();
-    let page = PAGE.replace("__SYN_TOKEN__", &tok);
     let allowed_origins =
         [format!("http://127.0.0.1:{port}"), format!("http://localhost:{port}")];
-    let url = format!("http://127.0.0.1:{port}/?t={tok}");
+    let url = format!("http://127.0.0.1:{port}/");
     // Write the address where a launcher can read it, so nothing has to
     // capture our stdout to learn it. Redirecting a long-lived server's
     // output makes the launcher's own stdout handle inheritable, and it then
@@ -282,11 +233,20 @@ fn main() {
         let path = req.path.split('?').next().unwrap_or("/");
         match (req.method.as_str(), path) {
             ("GET", "/") => {
-                let _ = respond(&mut s, "200 OK", "text/html; charset=utf-8", &page);
+                let _ = respond(&mut s, "200 OK", "text/html; charset=utf-8", PAGE);
             }
             ("POST", "/cmd") => {
-                if req.token != tok {
-                    let _ = respond(&mut s, "401 Unauthorized", "text/plain", "bad or missing X-Syn-Token");
+                // Origin is now the whole guard on this path, so it must be
+                // present as well as matching. A browser always sends it on a
+                // POST, so our own page is unaffected; a caller that sends
+                // none is not a page and has to say where it is from.
+                if req.origin.is_none() {
+                    let _ = respond(
+                        &mut s,
+                        "403 Forbidden",
+                        "text/plain",
+                        "POST /cmd needs an Origin header of http://127.0.0.1:<port>",
+                    );
                     continue;
                 }
                 let line = req.body.replace(['\r', '\n'], " ");
@@ -314,22 +274,40 @@ fn main() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_damaged_token_file_is_not_accepted_as_a_token() {
-        assert!(is_token(&mint_token()));
-        assert!(is_token(&"a".repeat(32)));
-        // Too short, or not hex: a truncated write and a hand-edit both land
-        // here, and taking either would quietly weaken the check.
-        assert!(!is_token(&"a".repeat(31)));
-        assert!(!is_token(""));
-        assert!(!is_token("not-a-token-but-certainly-long-enough"));
-        assert!(!is_token(&format!("{} ", "a".repeat(32))), "trim before checking");
+    fn req(method: &str, origin: Option<&str>) -> Req {
+        Req {
+            method: method.into(),
+            path: "/cmd".into(),
+            origin: origin.map(str::to_string),
+            body: "hands".into(),
+        }
+    }
+
+    /// The rule the token used to share: a command may only come from this
+    /// server's own page. With the token gone this is the whole guard, so a
+    /// POST carrying no Origin is refused rather than trusted.
+    fn allowed(port: u16, r: &Req) -> bool {
+        let ours = [format!("http://127.0.0.1:{port}"), format!("http://localhost:{port}")];
+        match &r.origin {
+            Some(o) => ours.iter().any(|a| a == o),
+            None => false,
+        }
     }
 
     #[test]
-    fn the_token_is_minted_fresh_each_time_but_kept_beside_the_chats() {
-        assert_ne!(mint_token(), mint_token());
-        assert_eq!(mint_token().len(), 40, "sha1 hex");
-        assert!(token_path().ends_with("console-token"));
+    fn a_command_post_is_refused_unless_it_comes_from_our_own_page() {
+        assert!(allowed(7777, &req("POST", Some("http://127.0.0.1:7777"))));
+        assert!(allowed(7777, &req("POST", Some("http://localhost:7777"))));
+        // A page you happen to be visiting, and a caller that names nobody.
+        assert!(!allowed(7777, &req("POST", Some("https://evil.example"))));
+        assert!(!allowed(7777, &req("POST", None)));
+        // Another port on this machine is still not us.
+        assert!(!allowed(7777, &req("POST", Some("http://127.0.0.1:7788"))));
+    }
+
+    #[test]
+    fn the_served_page_carries_no_token_to_leak() {
+        assert!(!PAGE.contains("__SYN_TOKEN__"));
+        assert!(!PAGE.contains("X-Syn-Token"));
     }
 }

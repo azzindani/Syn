@@ -280,7 +280,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 // The page holds no logic of its own: it posts a command line to the local
 // server, which types it into a real `cli` process, and renders what the CLI
 // printed. It can only do what the CLI can do.
-const TOKEN = "__SYN_TOKEN__";
 const $ = id => document.getElementById(id);
 const tl = $("tl"), box = $("box"), scroll = $("scroll");
 let busy = false, current = null, pending = null;
@@ -288,7 +287,7 @@ let busy = false, current = null, pending = null;
 async function cli(line) {
   const r = await fetch("/cmd", {
     method: "POST",
-    headers: { "X-Syn-Token": TOKEN, "Content-Type": "text/plain" },
+    headers: { "Content-Type": "text/plain" },
     body: line,
   });
   if (!r.ok) throw new Error(r.status + " " + (await r.text()));

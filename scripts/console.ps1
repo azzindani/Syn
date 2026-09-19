@@ -1,8 +1,9 @@
 # console.ps1 - start the Syn web console and open it.
 #
 # The console is a local page that types commands into the real CLI. It binds
-# 127.0.0.1 and every request carries a per-run token, so nothing off this
-# machine can reach it and no web page you visit can post to it.
+# 127.0.0.1 only, and a command POST is refused unless its Origin is the
+# console's own, so nothing off this machine can reach it and no web page you
+# happen to visit can post to it.
 #
 #   powershell -File scripts/console.ps1              # console only
 #   powershell -File scripts/console.ps1 -WithUia     # also start the UIA hand
@@ -52,7 +53,7 @@ $urlFile = Join-Path $bed 'console-url.txt'
 Remove-Item $urlFile -ErrorAction SilentlyContinue
 $proc = Start-Process -FilePath $ui -ArgumentList '--port', $Port, '--url-file', $urlFile -PassThru -WindowStyle Hidden
 
-# The URL carries the token, so read it from the server rather than guessing.
+# Read the address from the server rather than guessing at the port.
 $url = $null
 foreach ($i in 1..25) {
     Start-Sleep -Milliseconds 400

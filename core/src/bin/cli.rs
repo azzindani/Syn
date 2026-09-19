@@ -11,7 +11,8 @@
 //!   config                  print resolved models + endpoint (never the key)
 //!   hand <pipe> [app...]    connect a hand; names the apps it claims
 //!   cdp <host:port> [app..] connect a Chrome DevTools hand (Electron too)
-//!   page <app> <match> [u]  register a browser page as a handle
+//!   page <app> <match> [u]  register a page/window as a handle (alias: win)
+//!   invoke <h> <sel> [act]  press a control on a live handle
 //!   hands                   attached hands, in routing order
 //!   live <handle>           route that handle's ops to the open document
 //!   lread <h> <sel>         queued read of a live handle
@@ -387,7 +388,17 @@ fn main() {
                     Err(e) => println!("ERROR cdp {e}"),
                 }
             }
-            "page" => {
+            "invoke" => {
+                let a: Vec<&str> = rest.splitn(3, ' ').collect();
+                if a.len() < 2 {
+                    println!("ERROR usage: invoke <handle> <selector> [invoke|toggle|expand|collapse|select|focus]");
+                    continue;
+                }
+                let action = a.get(2).unwrap_or(&"invoke").to_string();
+                let call = Call::Struct(StructArgs::Invoke { selector: a[1].into(), action });
+                run_op(&mut runner, &mut relay, a[0], "invoke", call);
+            }
+            "page" | "win" => {
                 // Register a browser page in the registry so ops can address
                 // it. The in-memory body stays empty on purpose: a live
                 // handle never reads it, and filling it would invite an op
@@ -398,7 +409,7 @@ fn main() {
                     [app, m] => (*app, *m, ":doc"),
                     [app, m, u] => (*app, *m, *u),
                     _ => {
-                        println!("ERROR usage: page <app> <title-or-url-match> [css-unit]");
+                        println!("ERROR usage: page|win <app> <title-or-url-match> [unit]");
                         continue;
                     }
                 };

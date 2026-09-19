@@ -45,8 +45,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "struct",
-        description: "Structural change to a document: insertParagraph, insertTable, addSheet, createSlide, transfer. `transfer` moves typed data between handles with provenance recorded. Unknown verbs are rejected.",
-        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer"]},"text":{"type":"string","maxLength":8000},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by , rows by ;"},"name":{"type":"string","maxLength":200},"title":{"type":"string","maxLength":300},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle"},"selector":{"type":"string","maxLength":200}},"required":["handle","verb"],"additionalProperties":false}"#,
+        description: "Structural change to a document: insertParagraph, insertTable, addSheet, createSlide, transfer, invoke. `transfer` moves typed data between handles with provenance recorded. `invoke` presses a control (button, checkbox, tree node) on a LIVE handle and does nothing on a document model. Unknown verbs are rejected.",
+        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer","invoke"]},"text":{"type":"string","maxLength":8000},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by , rows by ;"},"name":{"type":"string","maxLength":200},"title":{"type":"string","maxLength":300},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle"},"selector":{"type":"string","maxLength":200},"action":{"type":"string","enum":["invoke","click","toggle","select","expand","collapse","focus"],"description":"for invoke: what to do to the control"}},"required":["handle","verb"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "export",
@@ -323,6 +323,12 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
                     bullets: field(a, "bullets").filter(|b| !b.is_empty()).map(|b| b.split('|').map(str::to_string).collect()).unwrap_or_default(),
                 },
                 "transfer" => StructArgs::Transfer { from: need("from")?, selector: need("selector")?, title: need("title")? },
+                "invoke" => StructArgs::Invoke {
+                    selector: need("selector")?,
+                    // Default rather than reject: "press this" is the common
+                    // case, and the closed enum above already bounds it.
+                    action: field(a, "action").filter(|s| !s.is_empty()).unwrap_or_else(|| "invoke".into()),
+                },
                 other => return Err(format!("struct: unknown verb {other:?}: rejected, not guessed")),
             };
             Call::Struct(s)
@@ -497,3 +503,42 @@ mod tests {
         }
     }
 }
+
+    #[test]
+    fn struct_invoke_parses_and_defaults_its_action() {
+        let tc = ToolCall {
+            id: "c1".into(),
+            name: "struct".into(),
+            arguments: r#"{"handle":"ui:Calculator::self","verb":"invoke","selector":"id=num7Button"}"#.into(),
+        };
+        match to_action(&tc).unwrap() {
+            Action::Doc { handle, call } => {
+                assert_eq!(handle, "ui:Calculator::self");
+                match call {
+                    Call::Struct(StructArgs::Invoke { selector, action }) => {
+                        assert_eq!(selector, "id=num7Button");
+                        assert_eq!(action, "invoke", "omitted action means press it");
+                    }
+                    other => panic!("wrong call: {other:?}"),
+                }
+            }
+            other => panic!("wrong action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn struct_invoke_requires_a_selector() {
+        let tc = ToolCall {
+            id: "c1".into(),
+            name: "struct".into(),
+            arguments: r#"{"handle":"ui:Calc::self","verb":"invoke"}"#.into(),
+        };
+        // Pressing an unnamed control is never what was meant.
+        assert!(to_action(&tc).unwrap_err().contains("selector"));
+    }
+
+    #[test]
+    fn invoke_is_on_the_published_surface() {
+        let j = tools_json();
+        assert!(j.contains("invoke"), "the model cannot call a verb it is never told about");
+    }

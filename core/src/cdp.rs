@@ -366,6 +366,14 @@ pub fn script_for(call: &Call, unit: &str) -> Option<String> {
             };
             wrap(unit, "", &body)
         }
+        Call::Struct(StructArgs::Invoke { selector, action }) => {
+            let act = match action.as_str() {
+                "invoke" | "click" | "toggle" | "select" => "e.click();",
+                "focus" => "e.focus();",
+                _ => return None,
+            };
+            wrap(unit, selector, &format!("{act}return {a}+' on '+(e.tagName||'element');", a = js_string(action)))
+        }
         Call::Struct(_) | Call::Undo => return None,
     })
 }
@@ -858,5 +866,21 @@ mod tests {
             .dispatch_call(&Call::Read(ReadArgs { selector: "h1".into() }), "code:plan.md:#editor")
             .unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn invoke_clicks_and_only_known_actions_map() {
+        let c = |a: &str| {
+            script_for(&Call::Struct(StructArgs::Invoke { selector: "#go".into(), action: a.into() }), ":doc")
+        };
+        let s = c("click").unwrap();
+        assert!(s.contains("var s=\"#go\""), "the selector is still bound as a literal");
+        assert!(s.contains("e.click();"));
+        assert!(c("focus").unwrap().contains("e.focus();"));
+        assert!(c("toggle").is_some());
+        // A browser has no expand/collapse: refuse rather than click and
+        // claim the node expanded.
+        assert!(c("expand").is_none());
+        assert!(c("wiggle").is_none());
     }
 }

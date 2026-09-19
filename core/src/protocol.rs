@@ -46,6 +46,7 @@ pub enum StructVerb {
     WriteRange,
     CreateSlide,
     Transfer,
+    Invoke,
 }
 
 /// Closed error taxonomy: every failure names its class for model rewrite.

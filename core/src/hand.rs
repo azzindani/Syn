@@ -15,7 +15,7 @@
 //! object per line. Both of those were learned the hard way against live
 //! Excel; see `docs/runbook-windows.md`.
 
-use crate::ops::{Call, ExportArgs, ReadArgs, WriteArgs};
+use crate::ops::{Call, ExportArgs, ReadArgs, StructArgs, WriteArgs};
 use std::io::{BufRead, BufReader, Read, Write};
 
 /// One decoded sidecar reply. `ok` false carries `error` instead of `preview`.
@@ -112,9 +112,11 @@ pub fn grid_payload(values: &[Vec<String>]) -> String {
 
 /// Map one primitive op onto a sidecar method + envelope.
 ///
-/// `Format` and `Struct` return None: the sidecar has no verbs for them yet,
-/// and inventing a silent no-op would let a caller believe a change landed
-/// in a live document when nothing happened.
+/// `Format` and the document-structure verbs return None: the sidecar has no
+/// methods for them yet, and inventing a silent no-op would let a caller
+/// believe a change landed in a live document when nothing happened.
+/// `Struct::Invoke` does map, because pressing a control is exactly what the
+/// UIA sidecar exists to do.
 pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
     match call {
         Call::Read(ReadArgs { selector }) => {
@@ -134,6 +136,12 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
                 esc(format),
                 esc(path.as_deref().unwrap_or(""))
             ),
+            None,
+        )),
+        Call::Struct(StructArgs::Invoke { selector, action }) => Some(envelope(
+            "invoke",
+            handle,
+            &format!("{{\"selector\":\"{}\",\"action\":\"{}\"}}", esc(selector), esc(action)),
             None,
         )),
         Call::Undo => Some(envelope("undo", handle, "{}", None)),
@@ -369,5 +377,28 @@ mod tests {
     #[test]
     fn pipe_path_is_the_windows_form() {
         assert_eq!(pipe_path("synhand-excel"), r"\\.\pipe\synhand-excel");
+    }
+
+    #[test]
+    fn invoke_maps_to_the_sidecar_method() {
+        use crate::ops::StructArgs;
+        let (mut h, w) = hand("{\"ok\":true,\"preview\":\"invoked Seven\"}
+");
+        let c = Call::Struct(StructArgs::Invoke { selector: "id=num7Button".into(), action: "invoke".into() });
+        assert_eq!(h.dispatch(&c, "ui:Calculator::self").unwrap().preview, "invoked Seven");
+        let out = sent(&w);
+        assert!(out.contains("\"method\":\"invoke\""));
+        assert!(out.contains("\"selector\":\"id=num7Button\""));
+        assert!(out.contains("\"action\":\"invoke\""));
+        assert!(out.contains("\"handle\":\"ui:Calculator::self\""));
+    }
+
+    #[test]
+    fn document_struct_verbs_still_refuse() {
+        use crate::ops::StructArgs;
+        // Only Invoke maps; the document verbs must not silently no-op.
+        let (mut h, w) = hand("");
+        assert!(!h.dispatch(&Call::Struct(StructArgs::AddSheet { name: "S".into() }), "x").unwrap().ok);
+        assert!(sent(&w).is_empty());
     }
 }

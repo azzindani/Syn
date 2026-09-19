@@ -35,9 +35,15 @@ software hands (Office first) in one live session, any model via OpenRouter.
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
   named-pipe office-rpc/1, timeout-guarded calls, .bak snapshots).
   Needs Windows + .NET 8 + Office to compile/run.
+- `sidecar-csharp/Uia/` — the UI Automation sidecar (`uia-host`): reads any
+  native window's control tree and presses controls by identity. Same
+  office-rpc/1 wire, so core reaches it through the same `Hand`. MTA, not
+  STA — a UIA client must not be STA or it can deadlock against an STA
+  provider, which is the opposite of what the Office sidecar needs.
 - `office-pane/` — Office.js task pane (Mac/Web hand), sideload to verify.
 - `scripts/` — Windows bring-up: `new-testbed-docs.ps1` (fixtures via COM),
-  `live-excel-smoke.ps1` (M1/M2 acceptance vs real Excel), `pipe-client.ps1`.
+  `live-excel-smoke.ps1` (M1/M2 acceptance vs real Excel), `pipe-client.ps1`,
+  `live-cdp-smoke.ps1` (a real browser), `live-uia-smoke.ps1` (Calculator).
 - `testbed/` — gitignored run area for live Office tests (docs/out/logs).
 - `.env.example` — provider key, endpoint, and the four model slots
   (`SYN_MODEL_LUNA|TERRA|SOL|ASTRA`); copy to `.env`, which is gitignored.
@@ -87,8 +93,9 @@ named claim beats a catch-all; one dead transport drops only its own hand.
 ```
 cli.exe
   hand synhand-excel excel word ppt   # COM sidecar, Office apps
+  hand synuia ui                      # UI Automation: any native window
   cdp 127.0.0.1:9222 web              # a browser or any Electron app
-  hands                               # both, in routing order
+  hands                               # all three, in routing order
   page web testbed #report            # register a page as a handle
   live web:testbed:#report            # -> hand=cdp-127.0.0.1:9222
   read web:testbed:#report h1
@@ -105,6 +112,34 @@ Start a Chromium for it with `--remote-debugging-port=9222` and its own
 `--user-data-dir`. That port is unauthenticated: anything local that reaches
 it controls the browser and its logged-in sessions, so keep it on 127.0.0.1
 and off your everyday profile.
+
+## Apps with no API at all
+
+The UIA hand is the answer to "what about everything else". UI Automation
+exposes a tree of elements with names, roles and values, so a model reads
+**structure**, not pixels, and presses a control by identity rather than by
+coordinate — a window that moves does not break it, and looking at the
+screen costs no image tokens.
+
+```
+read   ui:Calculator::self :tree           # the map: Button id=num7Button name=Seven ...
+invoke ui:Calculator::self id=num7Button   # press it by identity
+read   ui:Calculator::self id=CalculatorResults   -> "Display is 12"
+```
+
+Verified live: 7 + 5 = 12 then Square = 144 driven entirely through the six
+ops, plus `write` into Notepad's editor via ValuePattern. A selector that
+matches nothing is refused with the display unchanged, and `allow word`
+stops a `ui` op like any other. `invoke` is a `struct` verb, so it queues,
+passes every gate and lands in the event feed; against a document model it
+fails loudly rather than reporting a press that never happened.
+
+Selectors are a closed `k=v` language (`name`, `id`, `type`, `class`, joined
+by `,`). `name` falls back to a contains match because real names carry
+punctuation and shortcut hints; `id` never does, since a fuzzy id match
+presses the neighbouring button.
+
+Reproduce with `scripts/live-uia-smoke.ps1`.
 
 ## Drive it from a terminal
 

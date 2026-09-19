@@ -39,6 +39,12 @@ pub enum StructArgs {
     WriteRange { selector: String, values: Vec<Vec<String>> },
     CreateSlide { title: String, bullets: Vec<String> },
     Transfer { from: String, selector: String, title: String },
+    /// Act on a control: press a button, toggle a checkbox, expand a node.
+    ///
+    /// Live-only. It has no meaning against the in-memory model, which has
+    /// controls nowhere, so it fails there rather than reporting a press
+    /// that never happened.
+    Invoke { selector: String, action: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -356,6 +362,15 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             }
         }
         StructArgs::Transfer { from, selector, title } => do_transfer(relay, session, handle, &from, &selector, &title),
+        StructArgs::Invoke { selector, .. } => {
+            // Prove the handle exists so the error names the real problem,
+            // then refuse: a model of a document has no controls to press.
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "invoke {selector:?} needs a live handle: mark it live with a hand that drives controls"
+            )))
+        }
     }
 }
 
@@ -514,6 +529,23 @@ mod tests {
         .is_err());
         assert!(execute(&mut r, &s, &wh, Call::Export(ExportArgs { format: "xlsx".into(), path: None, sheet: None })).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invoke_refuses_against_a_document_model() {
+        let (mut r, s, _xh, wh, _ph) = relay3();
+        let c = Call::Struct(StructArgs::Invoke { selector: "id=ok".into(), action: "invoke".into() });
+        let e = execute(&mut r, &s, &wh, c).unwrap_err();
+        // A model of a document has no controls. Reporting a press here
+        // would be a success message for something that never happened.
+        assert!(matches!(e, Error::ClosedSchema(ref m) if m.contains("live handle")), "{e:?}");
+    }
+
+    #[test]
+    fn invoke_on_an_unknown_handle_names_the_handle() {
+        let (mut r, s, ..) = relay3();
+        let c = Call::Struct(StructArgs::Invoke { selector: "id=ok".into(), action: "invoke".into() });
+        assert!(matches!(execute(&mut r, &s, "ui:ghost::self", c), Err(Error::UnknownHandle(_))));
     }
 }
 

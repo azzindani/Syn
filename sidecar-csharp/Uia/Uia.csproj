@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>uia-host</AssemblyName>
+    <!--
+      UseWPF pulls in UIAutomationClient/UIAutomationTypes, which is where
+      System.Windows.Automation lives. It is the only reason this is a
+      separate project from Host: that one is deliberately reference-free
+      late binding, and IUIAutomation is IUnknown-derived, not IDispatch, so
+      it cannot be driven by `dynamic` the way the Office object models are.
+      No window is ever created; WPF is here for the automation client only.
+    -->
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+</Project>

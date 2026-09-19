@@ -37,6 +37,36 @@ composer share a centred column.
    raised card carrying a hairline outline and, in dark mode, an inset top
    highlight. That single card is most of why these apps feel like apps.
 
+## The design system (this is the part I missed first time)
+
+`apps/web/src/index.css` is where the look actually lives, and it is a **zinc
+neutral scale with a single blue primary** — not a warm palette, and not a
+colourful one. Reading the components without reading this file produces
+something with the right boxes and the wrong face.
+
+Light:
+```
+--background  zinc-25  oklch(99.2% 0 0)   --accent  zinc-100 #f4f4f5
+--foreground  zinc-800 #27272a            --border  zinc-200 #e4e4e7
+--card        #ffffff                     --input   zinc-300 #d4d4d8
+--muted-foreground zinc-500 #71717a       --primary oklch(0.488 0.217 264)
+--sidebar     zinc-50  #fafafa            --sidebar-row-selected #ffffff
+```
+Dark is the same names over `--background: #0a0a0a` (neutral-950), with
+`--card` as `color-mix(in srgb, var(--background) 97%, #fff)` and the borders
+as white at 6–10% rather than a lighter grey.
+
+Metrics that matter more than they look:
+- `--radius: 0.625rem` (10px) app-wide, `--control-radius: 0.5rem` (8px) for
+  controls. The composer is the one exception at 22px. Mixing 9/16/20px, as I
+  did, is most of what reads as amateur.
+- Sidebar rows: `h-8` (32px), one line, `truncate`, 10px side padding. Not two
+  lines with a timestamp — that turns a thread list into a feed reader.
+- Buttons: `h-8` (32px), 8px radius; primary carries
+  `inset-shadow 0 1px white/16%` over the primary fill.
+- `--workspace-topbar-height: 52px`.
+- Font: `-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`.
+
 ## What we take, given no React and no bundler
 Layout, information architecture, the collapsed-tool-row idea, the composer-
 attached approval, and the token vocabulary. All of it is plain CSS and a few

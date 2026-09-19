@@ -3,161 +3,208 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Syn</title>
 <style>
-/* Semantic tokens, one set of names per theme, so nothing below knows which
-   theme is on. Digested from t3code; see docs/DIGEST-05-t3code-ui.md. */
+/* Tokens lifted from t3code's apps/web/src/index.css, not invented: a zinc
+   neutral scale with one blue primary. See docs/DIGEST-05-t3code-ui.md.
+   The names are theirs too, so everything below reads as semantics rather
+   than colours. */
 :root{
-  --bg:#faf9f7; --surface:#fff; --raised:#fff; --line:#e7e3dc; --line-soft:#efece6;
-  --fg:#1c1b19; --fg-muted:#6b6560; --fg-faint:#9a938b;
-  --accent:#b4761f; --accent-soft:#f5ead6;
-  --warn:#9a5b12; --warn-soft:#fdf3e3; --danger:#b4443a;
-  --shadow:0 1px 2px rgb(0 0 0/.04), 0 8px 24px -16px rgb(0 0 0/.25);
-  --radius:20px;
+  color-scheme:light;
+  --radius:0.625rem;              /* 10px, the app-wide corner */
+  --control-radius:0.5rem;        /* 8px, buttons and inputs */
+  --topbar:52px;
+
+  --background:oklch(99.2% 0 0);          /* zinc-25 */
+  --foreground:#27272a;                   /* zinc-800 */
+  --card:#fff;
+  --muted-foreground:#71717a;             /* zinc-500 */
+  --accent:#f4f4f5;                       /* zinc-100 */
+  --border:#e4e4e7;                       /* zinc-200 */
+  --input:#d4d4d8;                        /* zinc-300 */
+  --primary:oklch(0.488 0.217 264);
+  --primary-foreground:#fff;
+  --message-surface:var(--accent);
+
+  --sidebar:#fafafa;                      /* zinc-50 */
+  --sidebar-row-hover:oklch(99.2% 0 0);
+  --sidebar-row-selected:#fff;
+
+  --error-foreground:oklch(0.505 0.213 27.518);
+  --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 8%, transparent);
+  --warning-foreground:oklch(0.555 0.163 48.998);
+  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 8%, transparent);
+  --ok:oklch(0.696 0.17 162.48);
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#141311; --surface:#1a1917; --raised:#211f1c; --line:#302d28; --line-soft:#26241f;
-  --fg:#ece7dd; --fg-muted:#a49d90; --fg-faint:#7b746a;
-  --accent:#e0a63c; --accent-soft:#2b2318;
-  --warn:#e0a63c; --warn-soft:#2a2216; --danger:#d1604f;
-  --shadow:0 1px 2px rgb(0 0 0/.3), 0 12px 28px -18px rgb(0 0 0/.6);
+  color-scheme:dark;
+  --background:#0a0a0a;                   /* neutral-950 */
+  --foreground:#f5f5f5;                   /* neutral-100 */
+  --card:color-mix(in srgb, var(--background) 97%, #fff);
+  --muted-foreground:#a1a1aa;
+  --accent:rgb(255 255 255/4%);
+  --border:rgb(255 255 255/6%);
+  --input:rgb(255 255 255/10%);
+  --primary:oklch(0.571 0.21 264);
+  --sidebar:var(--card);
+  --sidebar-row-hover:rgb(255 255 255/3%);
+  --sidebar-row-selected:rgb(255 255 255/6%);
+  --error-foreground:oklch(0.704 0.191 22.216);
+  --warning-foreground:oklch(0.828 0.189 84.429);
 }}
+
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:14px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
-  -webkit-font-smoothing:antialiased;display:flex;overflow:hidden}
+body{margin:0;display:flex;overflow:hidden;background:var(--background);color:var(--foreground);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
 button,input,textarea,select{font:inherit;color:inherit}
 button{background:none;border:0;cursor:pointer}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:rgb(0 0 0/12%);border-radius:3px}
+@media (prefers-color-scheme:dark){::-webkit-scrollbar-thumb{background:rgb(255 255 255/8%)}}
 
-/* ---------- sidebar ---------- */
-#side{width:248px;flex:none;background:var(--surface);border-right:1px solid var(--line);
-  display:flex;flex-direction:column;height:100vh}
-#side header{padding:14px 14px 10px;display:flex;align-items:center;gap:8px}
-#side header b{font-size:14px;letter-spacing:.2px}
-#side header span{color:var(--fg-faint);font-size:11px}
-#new{margin:0 10px 10px;padding:8px 11px;border:1px solid var(--line);border-radius:10px;
-  display:flex;align-items:center;gap:8px;color:var(--fg-muted);transition:.12s}
-#new:hover{border-color:var(--accent);color:var(--fg);background:var(--raised)}
-#chats{flex:1;overflow-y:auto;padding:0 8px 8px}
-.chat{padding:8px 10px;border-radius:9px;cursor:pointer;display:flex;flex-direction:column;gap:1px;
-  position:relative;transition:background .12s}
-.chat:hover{background:var(--raised)}
-.chat.on{background:var(--accent-soft)}
-.chat .ti{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chat .ag{font-size:11px;color:var(--fg-faint)}
-.chat .del{position:absolute;right:6px;top:7px;opacity:0;color:var(--fg-faint);padding:2px 5px;
-  border-radius:6px;font-size:14px;line-height:1}
-.chat:hover .del{opacity:1}
-.chat .del:hover{color:var(--danger);background:var(--bg)}
-#side footer{border-top:1px solid var(--line-soft);padding:9px 12px;display:flex;gap:8px;align-items:center}
-#side footer button{font-size:12px;color:var(--fg-muted);padding:4px 8px;border-radius:7px}
-#side footer button:hover{background:var(--raised);color:var(--fg)}
-#wirebox{border-top:1px solid var(--line-soft);padding:10px 12px}
-#wirebox h3{margin:0 0 7px;font-size:10px;text-transform:uppercase;letter-spacing:.7px;
-  color:var(--fg-faint);font-weight:600}
-#wire button{display:block;width:100%;text-align:left;margin-bottom:5px;padding:5px 8px;
-  border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--fg-muted)}
-#wire button:hover{border-color:var(--accent);color:var(--fg)}
-.hint{font-size:11px;color:var(--fg-faint);display:block;line-height:1.4}
-#killbtn:hover{color:var(--danger)}
+/* ---------------- sidebar ---------------- */
+#side{width:256px;flex:none;height:100vh;display:flex;flex-direction:column;
+  background:var(--sidebar);border-right:1px solid var(--border)}
+#brand{height:var(--topbar);flex:none;display:flex;align-items:center;gap:8px;padding:0 15px;
+  font-weight:600}
+#brand i{width:7px;height:7px;border-radius:50%;background:var(--primary)}
+#new{margin:0 8px 8px;height:32px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;
+  border:1px solid var(--border);border-radius:var(--control-radius);background:var(--card);
+  transition:border-color .12s}
+#new:hover{border-color:var(--input)}
+#chats{flex:1;overflow-y:auto;padding:0 8px}
+.grouplabel{padding:10px 10px 4px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+/* One line, 32px, truncated: the row shape every app in this class uses. A
+   second line of metadata turns a thread list into a feed reader. */
+.chat{position:relative;display:flex;align-items:center;height:32px;padding:0 10px;
+  border-radius:var(--control-radius);cursor:pointer;white-space:nowrap;overflow:hidden;
+  transition:background .1s}
+.chat span{overflow:hidden;text-overflow:ellipsis}
+.chat:hover{background:var(--sidebar-row-hover)}
+.chat.on{background:var(--sidebar-row-selected);font-weight:500;box-shadow:0 0 0 1px var(--border)}
+.chat .del{position:absolute;right:4px;top:4px;width:24px;height:24px;border-radius:6px;
+  display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
+.chat:hover .del{display:grid}
+.chat .del:hover{background:var(--accent);color:var(--error-foreground)}
+#wirebox{flex:none;padding:10px 8px 8px;border-top:1px solid var(--border)}
+#wirebox h3{margin:0 0 6px;padding:0 10px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+#wire button{display:flex;align-items:center;width:100%;height:30px;padding:0 10px;
+  border-radius:var(--control-radius);font-size:13px;color:var(--muted-foreground);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#wire button:hover{background:var(--sidebar-row-hover);color:var(--foreground)}
+.hint{display:block;padding:3px 10px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
+#side footer{flex:none;display:flex;gap:2px;align-items:center;padding:8px;
+  border-top:1px solid var(--border)}
+#side footer button{height:28px;padding:0 9px;border-radius:var(--control-radius);
+  font-size:13px;color:var(--muted-foreground)}
+#side footer button:hover{background:var(--sidebar-row-hover);color:var(--foreground)}
+#killbtn:hover{color:var(--error-foreground)}
 
-/* ---------- main ---------- */
-main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
-#top{height:46px;flex:none;display:flex;align-items:center;gap:10px;padding:0 18px;
-  border-bottom:1px solid var(--line-soft)}
-#title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pill{font-size:11px;color:var(--fg-muted);border:1px solid var(--line);border-radius:99px;padding:2px 9px;
-  white-space:nowrap}
-#scroll{flex:1;overflow-y:auto;scroll-behavior:smooth}
-#tl{max-width:46rem;margin:0 auto;padding:26px 24px 8px;display:flex;flex-direction:column;gap:18px}
+/* ---------------- main ---------------- */
+main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
+#top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;
+  border-bottom:1px solid var(--border)}
+#title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hands{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  color:var(--muted-foreground)}
+#hands i{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}
+#hands.live i{background:var(--ok)}
+#scroll{flex:1;overflow-y:auto}
+#tl{max-width:48rem;margin:0 auto;padding:28px 24px 12px;display:flex;flex-direction:column;gap:20px}
 
-/* messages */
-.turn{display:flex;flex-direction:column;gap:6px}
-.you{align-self:flex-end;max-width:85%;background:var(--raised);border:1px solid var(--line);
-  border-radius:16px 16px 4px 16px;padding:9px 13px;white-space:pre-wrap;word-break:break-word}
-.bot{white-space:pre-wrap;word-break:break-word}
-.bot p{margin:0 0 .7em}.bot p:last-child{margin:0}
-.bot code{background:var(--raised);border:1px solid var(--line-soft);border-radius:5px;
-  padding:1px 5px;font:12px ui-monospace,Consolas,monospace}
+.you{align-self:flex-end;max-width:80%;background:var(--message-surface);
+  border-radius:var(--radius);padding:9px 13px;white-space:pre-wrap;word-break:break-word}
+.bot{white-space:pre-wrap;word-break:break-word;line-height:1.7}
 
-/* Tool calls: a thin list, never a stack of bubbles. Twelve of them must
+/* Tool calls: a thin list, never a stack of bubbles. A dozen of them must
    still read as one quiet paragraph of activity. */
-.acts{display:flex;flex-direction:column;gap:1px;margin:-4px 0}
-.act{display:flex;align-items:center;gap:7px;padding:2px 6px;border-radius:7px;
-  font-size:12.5px;color:var(--fg-muted);cursor:pointer;text-align:left;width:100%;transition:background .12s}
-.act:hover{background:var(--raised);color:var(--fg)}
-.act .tw{color:var(--fg-faint);font-size:9px;width:8px;flex:none;transition:transform .12s}
+.acts{display:flex;flex-direction:column;margin:-6px 0}
+.act{display:flex;align-items:center;gap:7px;width:100%;height:26px;padding:0 6px;
+  border-radius:6px;font-size:13px;color:var(--muted-foreground);text-align:left;
+  transition:background .1s}
+.act:hover{background:var(--accent);color:var(--foreground)}
+.act .tw{flex:none;width:9px;font-size:9px;transition:transform .12s}
 .act.open .tw{transform:rotate(90deg)}
-.act .nm{font-weight:500;color:var(--fg)}
-.act .dt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.act .bad{margin-left:auto;flex:none;color:var(--danger);font-size:11px}
-.body{margin:2px 0 6px 21px;border-left:2px solid var(--line);padding:4px 0 4px 10px;
-  font:11.5px/1.55 ui-monospace,Consolas,monospace;color:var(--fg-muted);
+.act .nm{color:var(--foreground);font-weight:500}
+.act .dt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act .bad{margin-left:auto;flex:none;font-size:11px;color:var(--error-foreground)}
+.body{margin:0 0 6px 22px;padding:6px 10px;border-left:2px solid var(--border);
+  font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted-foreground);
   white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
 
-.note{align-self:center;font-size:11.5px;color:var(--fg-faint);text-align:center;padding:2px 10px;
-  border:1px solid var(--line-soft);border-radius:99px}
-.fail{align-self:center;font-size:12px;color:var(--danger);background:var(--warn-soft);
-  border:1px solid var(--line);border-radius:10px;padding:8px 12px;max-width:34rem;text-align:center}
-.empty{margin:18vh auto 0;text-align:center;color:var(--fg-faint);max-width:30rem}
-.empty h2{font-size:19px;color:var(--fg);font-weight:600;margin:0 0 6px}
-.empty p{margin:0;font-size:13px}
+.note{align-self:center;font-size:12px;color:var(--muted-foreground)}
+.fail{font-size:13px;color:var(--error-foreground);background:var(--error-surface);
+  border-radius:var(--radius);padding:10px 13px}
+.empty{margin:16vh auto 0;text-align:center;max-width:30rem}
+.empty h2{margin:0 0 7px;font-size:20px;font-weight:600}
+.empty p{margin:0;color:var(--muted-foreground)}
 
-/* ---------- composer ---------- */
-#dock{flex:none;padding:10px 24px 18px}
-#comp{max-width:46rem;margin:0 auto;background:var(--raised);border:1px solid var(--line);
-  border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
-#comp:focus-within{border-color:var(--accent)}
-/* The approval attaches to the composer, where attention already is --
-   never as a message that can scroll away. */
-#ask{display:none;border-bottom:1px solid var(--line);background:var(--warn-soft);padding:10px 13px}
+/* ---------------- composer ---------------- */
+#dock{flex:none;padding:0 24px 20px}
+#comp{max-width:48rem;margin:0 auto;background:var(--card);border:1px solid var(--border);
+  border-radius:22px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
+  transition:border-color .12s}
+#comp:focus-within{border-color:var(--input)}
+/* The approval attaches to the composer, where attention already is, and so
+   cannot scroll away the way a message can. */
+#ask{display:none;padding:11px 16px 12px;border-bottom:1px solid var(--border);
+  background:var(--warning-surface);border-radius:21px 21px 0 0}
 #ask.on{display:block}
-#ask .hd{font-size:11px;color:var(--warn);font-weight:600;margin-bottom:5px}
-#ask .cmd{font:12px ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word;
-  max-height:5rem;overflow:auto;color:var(--fg)}
-#ask .wy{font-size:11.5px;color:var(--fg-muted);margin-top:5px}
-#ask .btns{display:flex;gap:7px;margin-top:9px}
-#ask button{font-size:12px;padding:5px 13px;border-radius:8px;border:1px solid var(--line)}
-#ok{background:var(--accent);border-color:var(--accent);color:#1c1b19;font-weight:600}
-#no:hover{border-color:var(--danger);color:var(--danger)}
-#box{width:100%;border:0;outline:0;resize:none;background:none;padding:13px 14px 4px;
-  max-height:40vh;min-height:46px;line-height:1.55}
-#bar{display:flex;align-items:center;gap:8px;padding:5px 10px 9px 14px}
-#bar select{font-size:11.5px;color:var(--fg-muted);background:none;border:1px solid var(--line);
-  border-radius:7px;padding:3px 6px}
-#send{margin-left:auto;width:30px;height:30px;border-radius:9px;background:var(--accent);color:#1c1b19;
-  display:grid;place-items:center;font-size:15px;transition:.12s}
-#send:disabled{opacity:.35}
-#hint{max-width:46rem;margin:7px auto 0;font-size:11px;color:var(--fg-faint);text-align:center}
-.spin{display:inline-block;width:9px;height:9px;border:1.5px solid var(--fg-faint);
+#ask .hd{margin-bottom:6px;font-size:11px;font-weight:600;color:var(--warning-foreground)}
+#ask .cmd{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;
+  word-break:break-word;max-height:5rem;overflow:auto}
+#ask .wy{margin-top:6px;font-size:12px;color:var(--muted-foreground)}
+#ask .btns{display:flex;gap:8px;margin-top:10px}
+.btn{height:32px;padding:0 12px;border:1px solid var(--border);border-radius:var(--control-radius);
+  background:var(--card);font-size:13px;font-weight:500;transition:.12s}
+.btn:hover{border-color:var(--input)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground);
+  box-shadow:inset 0 1px rgb(255 255 255/16%)}
+.btn.primary:hover{filter:brightness(1.08)}
+#no:hover{color:var(--error-foreground);border-color:var(--error-foreground)}
+#box{width:100%;padding:14px 16px 6px;border:0;outline:0;resize:none;background:none;
+  min-height:48px;max-height:40vh;line-height:1.6}
+#box::placeholder{color:var(--muted-foreground)}
+#bar{display:flex;align-items:center;gap:8px;padding:4px 12px 12px 16px}
+#task{height:28px;max-width:16rem;padding:0 6px;border:1px solid transparent;
+  border-radius:var(--control-radius);background:none;font-size:12px;color:var(--muted-foreground)}
+#task:hover{border-color:var(--border)}
+#send{margin-left:auto;display:grid;place-items:center;width:32px;height:32px;
+  border-radius:var(--control-radius);background:var(--primary);color:var(--primary-foreground);
+  font-size:15px;box-shadow:inset 0 1px rgb(255 255 255/16%);transition:.12s}
+#send:hover:not(:disabled){filter:brightness(1.08)}
+#send:disabled{opacity:.4;box-shadow:none}
+#hint{max-width:48rem;margin:8px auto 0;text-align:center;font-size:11px;color:var(--muted-foreground)}
+.spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
-@media(max-width:760px){#side{position:fixed;left:-248px;z-index:9;transition:left .16s}
-  #side.show{left:0}#tl,#comp,#hint{max-width:none}}
+@media(max-width:780px){#side{position:fixed;left:-256px;z-index:9;transition:left .16s}
+  #side.show{left:0}#tl,#comp,#hint{max-width:none}#dock{padding:0 14px 14px}}
 </style></head>
 
 <body>
 <aside id="side">
-  <header><b>Syn</b><span>one brain, many hands</span></header>
-  <button id="new">＋&nbsp; New chat</button>
+  <div id="brand"><i></i>Syn</div>
+  <button id="new">＋&nbsp;New chat</button>
   <div id="chats"></div>
   <div id="wirebox">
-    <h3>Connect a hand</h3>
+    <h3>Hands</h3>
     <div id="wire"></div>
     <span class="hint" id="wirehint">Reading your .env…</span>
   </div>
   <footer>
-    <button id="handsbtn" title="Show attached hands">Hands</button>
-    <button id="evbtn" title="Recent orchestration events">Events</button>
-    <button id="killbtn" title="Latch the kill switch" style="margin-left:auto">Kill</button>
+    <button id="handsbtn">Attached</button>
+    <button id="evbtn">Events</button>
+    <button id="killbtn" style="margin-left:auto">Kill</button>
   </footer>
 </aside>
 
 <main>
   <div id="top">
-    <button id="menu" class="pill" style="display:none">☰</button>
+    <button id="menu" class="btn" style="display:none;height:28px;padding:0 9px">☰</button>
     <div id="title">New chat</div>
     <span style="flex:1"></span>
-    <span class="pill" id="hands">no hands</span>
+    <span id="hands"><i></i><span>no hands</span></span>
   </div>
 
   <div id="scroll"><div id="tl"></div></div>
@@ -165,14 +212,17 @@ main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
   <div id="dock">
     <div id="comp">
       <div id="ask">
-        <div class="hd" id="askhd">Command approval</div>
+        <div class="hd">Command approval</div>
         <div class="cmd" id="askcmd"></div>
         <div class="wy" id="askwhy"></div>
-        <div class="btns"><button id="ok">Approve</button><button id="no">Deny</button></div>
+        <div class="btns">
+          <button id="ok" class="btn primary">Approve</button>
+          <button id="no" class="btn">Deny</button>
+        </div>
       </div>
       <textarea id="box" rows="1" placeholder="Ask Syn to do something with your open apps…"></textarea>
       <div id="bar">
-        <select id="task" title="Which model slot to think with"></select>
+        <select id="task" title="Which model to think with"></select>
         <button id="send" title="Send">↑</button>
       </div>
     </div>
@@ -183,8 +233,8 @@ main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
 <script>
 "use strict";
 // The page holds no logic of its own: it posts a command line to the local
-// server, which types it into a real `cli` process, and renders the JSON the
-// CLI prints back. It can only do what the CLI can do.
+// server, which types it into a real `cli` process, and renders what the CLI
+// printed. It can only do what the CLI can do.
 const TOKEN = "__SYN_TOKEN__";
 const $ = id => document.getElementById(id);
 const tl = $("tl"), box = $("box"), scroll = $("scroll");
@@ -200,33 +250,25 @@ async function cli(line) {
   return (await r.json()).out || "";
 }
 
-// Receipts are line-prefixed; pull out the ones that carry JSON.
+// Receipts are line-prefixed; pull out the ones carrying JSON.
 function tagged(out, tag) {
   return out.split("\n")
     .filter(l => l.startsWith(tag + " "))
     .map(l => { try { return JSON.parse(l.slice(tag.length + 1)); } catch { return null; } })
     .filter(Boolean);
 }
+
 // A turn that recovered on another slot is a success, not an error: showing
-// the 429 it walked past would teach the reader to distrust a working answer.
+// the 429 it walked past would teach the reader to distrust a good answer.
 function verdict(out) {
   const lines = out.split("\n");
-  const answered = lines.some(l => l.startsWith("ANSWER") || l.startsWith("CONFIRM"));
-  const retried = (out.match(/^RECEIPT retry model=(\S+)/m) || [])[1];
-  const failure = lines
-    .filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"))
-    .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, ""))
-    .pop();
-  return { answered, retried, failure };
+  return {
+    answered: lines.some(l => l.startsWith("ANSWER") || l.startsWith("CONFIRM")),
+    retried: (out.match(/^RECEIPT retry model=(\S+)/m) || [])[1],
+    failure: lines.filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"))
+      .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, "")).pop(),
+  };
 }
-
-const ago = s => {
-  const d = Math.max(0, Math.floor(Date.now() / 1000) - s);
-  if (d < 60) return "just now";
-  if (d < 3600) return Math.floor(d / 60) + "m ago";
-  if (d < 86400) return Math.floor(d / 3600) + "h ago";
-  return Math.floor(d / 86400) + "d ago";
-};
 
 const el = (t, cls, txt) => {
   const e = document.createElement(t);
@@ -235,42 +277,49 @@ const el = (t, cls, txt) => {
   return e;
 };
 
-/* ---------------- what this deployment has ----------------
+const ago = s => {
+  const d = Math.max(0, Math.floor(Date.now() / 1000) - s);
+  if (d < 60) return "just now";
+  if (d < 3600) return Math.floor(d / 60) + " min ago";
+  if (d < 86400) return Math.floor(d / 3600) + " hr ago";
+  return Math.floor(d / 86400) + " days ago";
+};
+const band = s => {
+  const d = Math.floor(Date.now() / 1000) - s;
+  return d < 86400 ? "Today" : d < 604800 ? "This week" : "Earlier";
+};
+
+/* ---------- what this deployment has ----------
    The picker and the hand buttons are built from what the CLI reports, not
-   from names written into this page. A model swapped in .env appears here
-   without touching the UI, and a hand this deployment has not wired is not
-   offered as a button that cannot work. */
+   from names written into this page: a model swapped in .env appears here
+   untouched, and a hand nobody wired is not offered as a dead button. */
 async function loadSlots() {
-  const sel = $("task");
-  const out = await cli("slots");
+  const sel = $("task"), out = await cli("slots");
   const cur = (out.match(/current=(\S+)/) || [])[1];
   sel.textContent = "";
   for (const s of tagged(out, "SLOT")) {
     const o = document.createElement("option");
     o.value = s.task;
-    o.textContent = s.slot + " · " + (s.model || "unset");
-    o.title = s.model || "";
+    o.textContent = s.model || s.slot;
+    o.title = s.slot + " · " + s.task;
     if (s.task === cur) o.selected = true;
     sel.appendChild(o);
   }
 }
 
 async function loadWiring() {
-  const out = await cli("wiring");
-  const wires = tagged(out, "WIRE");
-  const box = $("wire");
-  box.textContent = "";
+  const out = await cli("wiring"), wires = tagged(out, "WIRE"), host = $("wire");
+  host.textContent = "";
   for (const w of wires) {
-    const cmd = w.kind === "cdp" ? "cdp " + w.at + " " + w.app : "hand " + w.at + " " + w.app;
-    const b = document.createElement("button");
-    b.textContent = (w.kind === "cdp" ? "Browser" : w.app) + " · " + w.at;
+    const cmd = w.kind === "cdp" ? `cdp ${w.at} ${w.app}` : `hand ${w.at} ${w.app}`;
+    const b = el("button", null, w.kind === "cdp" ? "Browser" : w.app);
     b.title = cmd;
     b.onclick = () => run(cmd);
-    box.appendChild(b);
+    host.appendChild(b);
   }
   $("wirehint").textContent = wires.length
-    ? "From your .env — the sidecar or browser must already be running."
-    : "Nothing wired yet: set SYN_PIPE_* or SYN_CDP in .env.";
+    ? "Its sidecar or browser must already be running."
+    : "Nothing wired: set SYN_PIPE_* or SYN_CDP in .env.";
 }
 
 // Run one command and show what it said, for the buttons above.
@@ -281,19 +330,22 @@ async function run(cmd) {
   await hands();
 }
 
-/* ---------------- sidebar ---------------- */
+/* ---------------- threads ---------------- */
 async function loadChats() {
   const out = await cli("chat list");
   const cur = (out.match(/current=(\S+)/) || [])[1];
   if (cur) current = cur;
   const list = $("chats");
   list.textContent = "";
+  let lastBand = null;
   for (const c of tagged(out, "CHAT")) {
+    const b = band(c.updated);
+    if (b !== lastBand) { list.appendChild(el("div", "grouplabel", b)); lastBand = b; }
     const row = el("div", "chat" + (c.id === current ? " on" : ""));
-    row.appendChild(el("div", "ti", c.title || "New chat"));
-    row.appendChild(el("div", "ag", ago(c.updated)));
+    row.title = (c.title || "New chat") + " · " + ago(c.updated);
+    row.appendChild(el("span", null, c.title || "New chat"));
     const x = el("button", "del", "×");
-    x.title = "Delete this chat";
+    x.title = "Delete";
     x.onclick = async e => {
       e.stopPropagation();
       await cli("chat del " + c.id);
@@ -313,8 +365,6 @@ async function loadChats() {
 }
 
 /* ---------------- timeline ---------------- */
-// A tool call is one quiet row. Twelve of them stay a thin list rather than
-// twelve blocks competing with the answer.
 function activity(name, detail, body, failed) {
   const wrap = el("div");
   const b = el("button", "act");
@@ -329,8 +379,7 @@ function activity(name, detail, body, failed) {
     pre.style.display = open ? "block" : "none";
     b.classList.toggle("open", open);
   };
-  wrap.appendChild(b);
-  wrap.appendChild(pre);
+  wrap.append(b, pre);
   return wrap;
 }
 
@@ -340,11 +389,10 @@ function render(msgs) {
     const e = el("div", "empty");
     e.appendChild(el("h2", null, "What should Syn do?"));
     e.appendChild(el("p", null,
-      "It drives the apps you already have open — Office, a browser, any window. Connect a hand, then ask."));
+      "It drives the apps you already have open — Office, a browser, any window."));
     tl.appendChild(e);
     return;
   }
-  // Pair each tool result with the call that asked for it.
   const results = {};
   for (const m of msgs) if (m.role === "tool") results[m.id] = m.text;
 
@@ -353,24 +401,22 @@ function render(msgs) {
     if (m.role === "system" || m.role === "tool") continue;
     if (m.role === "calls") {
       let calls = [];
-      try { calls = JSON.parse(m.text); } catch { calls = []; }
+      try { calls = JSON.parse(m.text); } catch {}
       if (!acts) { acts = el("div", "acts"); tl.appendChild(acts); }
       for (const c of calls) {
-        const fn = (c.function || {});
+        const fn = c.function || {};
         let args = {};
         try { args = JSON.parse(fn.arguments || "{}"); } catch {}
-        const detail = args.handle || args.program || args.selector || "";
         const out = results[c.id] || "";
-        acts.appendChild(activity(fn.name || "tool", detail,
+        acts.appendChild(activity(fn.name || "tool",
+          args.handle || args.program || args.selector || "",
           "arguments: " + (fn.arguments || "{}") + "\n\n" + out,
           /refused|error|not on the allowlist/i.test(out)));
       }
       continue;
     }
     acts = null;
-    const t = el("div", "turn");
-    t.appendChild(el("div", m.role === "user" ? "you" : "bot", m.text));
-    tl.appendChild(t);
+    tl.appendChild(el("div", m.role === "user" ? "you" : "bot", m.text));
   }
 }
 
@@ -379,9 +425,9 @@ function showAsk(p) {
   $("ask").classList.toggle("on", !!p);
   if (!p) return;
   $("askcmd").textContent = p.preview;
-  // The model's stated reason is untrusted text: shown as a quote, never as
-  // an instruction, and always beside the command it is arguing for.
-  $("askwhy").textContent = p.why ? "model's reason: " + p.why : "";
+  // The model's stated reason is untrusted text: shown as a quote beside the
+  // command it argues for, never as an instruction.
+  $("askwhy").textContent = p.why ? "reason given: " + p.why : "";
 }
 
 async function refresh() {
@@ -390,18 +436,16 @@ async function refresh() {
   if (cur) current = cur;
   const msgs = tagged(out, "MSG");
   render(msgs);
-  const p = tagged(out, "PENDING")[0];
-  showAsk(p || null);
+  showAsk(tagged(out, "PENDING")[0] || null);
   const first = msgs.find(m => m.role === "user");
-  $("title").textContent = first ? first.text.split("\n")[0].slice(0, 70) : "New chat";
+  $("title").textContent = first ? first.text.split("\n")[0].slice(0, 80) : "New chat";
   scroll.scrollTop = scroll.scrollHeight;
 }
 
 function thinking(on) {
   busy = on;
   $("send").disabled = on;
-  $("hint").innerHTML = on
-    ? '<span class="spin"></span> working…'
+  $("hint").innerHTML = on ? '<span class="spin"></span> working…'
     : "Enter sends · Shift+Enter for a new line";
 }
 
@@ -409,23 +453,22 @@ async function send() {
   const v = box.value.trim();
   if (!v || busy) return;
   box.value = ""; box.style.height = "auto";
-  // Paint the turn immediately: a chat that goes blank while the model
-  // thinks feels broken even when it is working.
-  const t = el("div", "turn"); t.appendChild(el("div", "you", v)); tl.appendChild(t);
+  // Paint the turn at once: a chat that goes blank while the model thinks
+  // feels broken even when it is working.
+  tl.appendChild(el("div", "you", v));
   scroll.scrollTop = scroll.scrollHeight;
   thinking(true);
   try {
-    const out = await cli("say " + v.replace(/\n/g, " "));
-    const r = verdict(out);
+    const r = verdict(await cli("say " + v.replace(/\n/g, " ")));
     await refresh();
     if (r.answered && r.retried) {
-      tl.appendChild(el("div", "note", "that slot was busy — answered with " + r.retried));
+      tl.appendChild(el("div", "note", "that model was busy — answered with " + r.retried));
     } else if (!r.answered && r.failure) {
       tl.appendChild(el("div", "fail", r.failure));
     }
     await loadChats();
   } catch (e) {
-    tl.appendChild(el("div", "bot", "Console unreachable: " + e.message));
+    tl.appendChild(el("div", "fail", "Console unreachable: " + e.message));
   } finally {
     thinking(false);
     scroll.scrollTop = scroll.scrollHeight;
@@ -437,13 +480,19 @@ async function decide(yes) {
   if (!pending || busy) return;
   showAsk(null);
   thinking(true);
-  try {
-    await cli(yes ? "approve" : "deny not now");
-    await refresh();
-  } finally { thinking(false); }
+  try { await cli(yes ? "approve" : "deny not now"); await refresh(); }
+  finally { thinking(false); }
 }
 
-/* ---------------- wiring ---------------- */
+async function hands() {
+  try {
+    const n = (await cli("hands")).split("\n").filter(l => l.startsWith("HAND ")).length;
+    const p = $("hands");
+    p.classList.toggle("live", n > 0);
+    p.lastChild.textContent = n ? n + (n === 1 ? " hand" : " hands") : "no hands";
+  } catch {}
+}
+
 box.addEventListener("input", () => {
   box.style.height = "auto";
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + "px";
@@ -456,26 +505,15 @@ $("ok").onclick = () => decide(true);
 $("no").onclick = () => decide(false);
 $("task").onchange = e => cli("task " + e.target.value);
 $("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); box.focus(); };
-$("killbtn").onclick = async () => {
-  await cli("kill");
-  $("hands").textContent = "killed";
-};
+$("killbtn").onclick = () => run("kill");
 $("handsbtn").onclick = () => run("hands");
 $("evbtn").onclick = () => run("events");
 $("menu").onclick = () => $("side").classList.toggle("show");
-if (window.innerWidth <= 760) $("menu").style.display = "block";
-
-async function hands() {
-  try {
-    const out = await cli("hands");
-    const n = out.split("\n").filter(l => l.startsWith("HAND ")).length;
-    $("hands").textContent = n ? n + (n === 1 ? " hand" : " hands") + " attached" : "no hands";
-  } catch {}
-}
+if (window.innerWidth <= 780) $("menu").style.display = "grid";
 
 (async () => {
   try { await loadSlots(); await loadWiring(); await loadChats(); await refresh(); await hands(); }
-  catch (e) { tl.appendChild(el("div", "bot", "Cannot reach the console: " + e.message)); }
+  catch (e) { tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message)); }
   box.focus();
 })();
 </script>

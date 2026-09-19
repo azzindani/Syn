@@ -207,6 +207,16 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
   font-size:11px;color:var(--muted-foreground)}
 body.blank-chat #hint,body.busy #hint{display:block}
+/* What the run is doing, while it does it. A turn that drives three
+   applications takes minutes, and a spinner alone cannot tell the
+   difference between working and wedged. */
+#live{display:none;margin:0 16px 8px;padding:8px 10px;max-height:168px;overflow-y:auto;
+  border:1px solid var(--border);border-radius:8px;background:var(--accent);
+  font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted-foreground)}
+body.busy #live{display:block}
+#live div{white-space:pre-wrap;word-break:break-word}
+#live div.err{color:var(--error-foreground)}
+#live div:last-child{color:var(--foreground)}
 .spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -253,6 +263,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   </div>
 
   <div id="scroll"><div id="tl"></div></div>
+  <div id="live" hidden></div>
 
   <div id="dock">
     <div id="comp">
@@ -536,12 +547,49 @@ async function refresh() {
   scroll.scrollTop = scroll.scrollHeight;
 }
 
+// The console prints a RECEIPT per operation as it goes. /events hands
+// those over while the turn is still running, so the page can show the run
+// happening instead of a spinner and a guess.
+let tailAt = 0, tailTimer = null;
+
+async function tail() {
+  try {
+    const r = await fetch("/events?since=" + tailAt);
+    if (!r.ok) return;
+    const d = await r.json();
+    tailAt = d.n;
+    const pane = $("live");
+    for (const line of d.lines || []) {
+      const row = el("div", line.startsWith("ERROR") ? "err" : "", line);
+      pane.appendChild(row);
+    }
+    // Keep it short: this is a progress strip, not a log viewer.
+    while (pane.childElementCount > 200) pane.removeChild(pane.firstChild);
+    if (d.lines && d.lines.length) pane.scrollTop = pane.scrollHeight;
+  } catch { /* a dropped poll is not worth a message; the next one retries */ }
+}
+
 function thinking(on) {
   busy = on;
   document.body.classList.toggle("busy", on);
   $("send").disabled = on;
   $("hint").innerHTML = on ? '<span class="spin"></span> working…'
     : "Enter sends · Shift+Enter for a new line";
+  if (on) {
+    $("live").textContent = "";
+    // Start from the end of what has already happened, so the strip shows
+    // this turn rather than replaying the session.
+    void fetch("/events?since=0")
+      .then(r => r.json())
+      .then(d => { tailAt = d.n; })
+      .catch(() => {});
+    clearInterval(tailTimer);
+    tailTimer = setInterval(tail, 700);
+  } else {
+    clearInterval(tailTimer);
+    tailTimer = null;
+    void tail();   // one last poll, so the final receipts are not lost
+  }
 }
 
 async function send() {

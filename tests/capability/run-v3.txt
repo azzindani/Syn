@@ -1,0 +1,11 @@
+task deep
+hand synhand-excel excel
+hand synhand-word word
+hand synhand-ppt ppt
+attach excel solar.xlsx data
+attach word solar-memo.docx
+attach ppt solar-deck.pptx
+live excel:solar.xlsx:data
+live word:solar-memo.docx:body
+live ppt:solar-deck.pptx:deck
+say You have solar.xlsx open with 258,423 hourly kWh readings from 11 City of Calgary solar sites on sheet 'data' (columns A-H: name, id, address, date, kWh, public_url, installationDate, uid), a Word document open beside it, and an empty PowerPoint deck. Build the quarterly performance review the energy team takes to the city's infrastructure committee.  In the workbook I want a model I can interrogate, not a screenshot: the raw data as a proper Excel table with derived year, month, hour and season columns; a per-site scorecard carrying total, mean, median, 95th percentile, peak, reading count and share of estate output, every one of them a live formula; monthly and seasonal breakdowns; an hour-of-day generation profile; and a ranking that shades good and bad performance so it reads at a glance. Give me a dashboard sheet a committee member can actually use - several charts laid out deliberately, titled, with a slicer so they can filter by site themselves.  Then write the report in Word. Twenty pages, structured: title page, contents, an executive summary that leads with the finding rather than the method, then sections covering estate performance, site-by-site results, seasonal and daily patterns, data quality, and recommendations. Use proper headings, tables, and the charts from the workbook.  Then build the deck I present from. It is fifteen minutes in front of a committee, not a document on a screen: a title slide, section dividers, a handful of slides that each make one point, the charts rather than tables of numbers wherever a chart will do, and speaker notes telling me what to say on each one. Lead with the finding.  Every number in the prose and on the slides must match the workbook. Tell me what the data means and what you would do about it, not what you did.

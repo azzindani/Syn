@@ -28,8 +28,44 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 const PAGE: &str = include_str!("../../../widget/index.html");
+
+/// Every line the CLI has printed this session, and whether it is still
+/// printing. A long `say` can run for many minutes; without this the page
+/// has a spinner and nothing else until the whole turn lands, which is no
+/// way to watch a run that is driving three applications.
+#[derive(Default)]
+struct Live {
+    lines: Mutex<Vec<String>>,
+    busy: AtomicBool,
+}
+
+impl Live {
+    fn push(&self, line: &str) {
+        let line = line.trim_end();
+        if line.is_empty() {
+            return;
+        }
+        if let Ok(mut v) = self.lines.lock() {
+            v.push(line.to_string());
+        }
+    }
+
+    /// The lines after `since`, and the new high-water mark. The page holds
+    /// the mark and asks again, so a slow poll never loses a line and a
+    /// reload never replays one twice.
+    fn since(&self, since: usize) -> (usize, Vec<String>) {
+        let Ok(v) = self.lines.lock() else { return (since, Vec::new()) };
+        let n = v.len();
+        if since >= n {
+            return (n, Vec::new());
+        }
+        (n, v[since..].to_vec())
+    }
+}
 
 /// The CLI, running, with a pipe to its mouth and one to its ear.
 struct Cli {
@@ -51,7 +87,7 @@ impl Cli {
         let out = BufReader::new(child.stdout.take().expect("piped"));
         let mut cli = Self { child, stdin, out, seq: 0 };
         // Drain the banner so the first command's reply is not prefixed by it.
-        let _ = cli.exec("");
+        let _ = cli.exec("", &Live::default());
         Ok(cli)
     }
 
@@ -60,7 +96,10 @@ impl Cli {
     /// Framed by a `mark` sentinel: commands print a variable number of
     /// lines, so a reader without one either guesses a count or blocks
     /// forever on a command that printed nothing.
-    fn exec(&mut self, line: &str) -> std::io::Result<String> {
+    /// Each line also goes to `live` the moment it is read, which is what
+    /// the page polls. The returned string is still the whole reply, so the
+    /// existing request/response path is unchanged.
+    fn exec(&mut self, line: &str, live: &Live) -> std::io::Result<String> {
         self.seq += 1;
         let tag = format!("m{}", self.seq);
         writeln!(self.stdin, "{line}")?;
@@ -79,6 +118,7 @@ impl Cli {
             if got.trim_end() == want {
                 return Ok(acc);
             }
+            live.push(&got);
             acc.push_str(&got);
         }
     }
@@ -180,13 +220,14 @@ fn main() {
             .unwrap_or_else(|| std::path::PathBuf::from("cli")),
     };
 
-    let mut cli = match Cli::start(&exe) {
-        Ok(c) => c,
+    let cli = match Cli::start(&exe) {
+        Ok(c) => Arc::new(Mutex::new(c)),
         Err(e) => {
             eprintln!("ERROR {e}");
             std::process::exit(2);
         }
     };
+    let live = Arc::new(Live::default());
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -210,9 +251,18 @@ fn main() {
     println!("Syn console: {url}");
     println!("(loopback only; ctrl-c to stop)");
 
+    // One thread per connection. The child still has one stdin, so /cmd
+    // serialises on the mutex exactly as before -- but a turn that takes
+    // twenty minutes no longer blocks the accept loop, which is what made
+    // polling for progress impossible.
     for conn in listener.incoming() {
-        let Ok(mut s) = conn else { continue };
-        let Ok(req) = read_request(&s) else { continue };
+        let Ok(s) = conn else { continue };
+        let cli = Arc::clone(&cli);
+        let live = Arc::clone(&live);
+        let allowed_origins = allowed_origins.clone();
+        std::thread::spawn(move || {
+            let mut s = s;
+            let Ok(req) = read_request(&s) else { return };
 
         // Reject an Origin that is not ours. Note it must be a MATCH, not
         // an absence: browsers send Origin on same-origin POSTs as well, so
@@ -221,13 +271,13 @@ fn main() {
             && !allowed_origins.iter().any(|a| a == o)
         {
             let _ = respond(&mut s, "403 Forbidden", "text/plain", "cross-origin requests are refused");
-            continue;
+            return;
         }
         if req.method == "OPTIONS" {
             // Refuse the preflight, which is what stops a foreign page from
             // ever being allowed to send the token header.
             let _ = respond(&mut s, "403 Forbidden", "text/plain", "no");
-            continue;
+            return;
         }
 
         let path = req.path.split('?').next().unwrap_or("/");
@@ -247,26 +297,55 @@ fn main() {
                         "text/plain",
                         "POST /cmd needs an Origin header of http://127.0.0.1:<port>",
                     );
-                    continue;
+                    return;
                 }
                 let line = req.body.replace(['\r', '\n'], " ");
                 // `quit` would kill the child and leave the console talking
                 // to a corpse; stopping the server is ctrl-c's job.
                 if line.trim() == "quit" || line.trim() == "exit" {
                     let _ = respond(&mut s, "200 OK", "application/json", "{\"out\":\"(use ctrl-c in the console window to stop)\"}");
-                    continue;
+                    return;
                 }
-                let out = match cli.exec(&line) {
-                    Ok(o) => o,
-                    Err(e) => format!("ERROR {e}"),
+                live.busy.store(true, Ordering::SeqCst);
+                let out = match cli.lock() {
+                    Ok(mut c) => match c.exec(&line, &live) {
+                        Ok(o) => o,
+                        Err(e) => format!("ERROR {e}"),
+                    },
+                    Err(_) => "ERROR the console lock is poisoned; restart the server".to_string(),
                 };
+                live.busy.store(false, Ordering::SeqCst);
                 let body = format!("{{\"out\":\"{}\"}}", json_escape(&out));
+                let _ = respond(&mut s, "200 OK", "application/json", &body);
+            }
+            // What the page polls while a turn is running. Deliberately
+            // not behind the Origin-required guard that /cmd has: it changes
+            // nothing, and a reader that cannot see progress is the bug.
+            ("GET", "/events") => {
+                let since = req
+                    .path
+                    .split_once("since=")
+                    .and_then(|(_, v)| v.split('&').next())
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let (n, lines) = live.since(since);
+                let body = format!(
+                    "{{\"n\":{},\"busy\":{},\"lines\":[{}]}}",
+                    n,
+                    live.busy.load(Ordering::SeqCst),
+                    lines
+                        .iter()
+                        .map(|l| format!("\"{}\"", json_escape(l)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
                 let _ = respond(&mut s, "200 OK", "application/json", &body);
             }
             _ => {
                 let _ = respond(&mut s, "404 Not Found", "text/plain", "no such path");
             }
         }
+        });
     }
 }
 

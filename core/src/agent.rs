@@ -255,22 +255,23 @@ impl Agent {
         };
 
         let calls = tools::parse_tool_calls(&reply);
-        let Some(first) = calls.first().cloned() else {
+        if calls.is_empty() {
             let text = provider::parse_chat_text(&reply).unwrap_or_default();
+            // No tool calls and nothing to say is a dead turn, not an answer.
+            // Reported as one it reached the human as a blank reply, which
+            // looks like the console broke rather than the model giving up.
+            if text.trim().is_empty() {
+                return Step::Stopped("the model ended the turn with no answer and no tool call".into());
+            }
             self.msgs.push(Msg::Assistant(text.clone()));
             return Step::Answered(text);
-        };
-        // A batched turn used to have its extra calls dropped with a note in
-        // the event feed and nothing said to the model. It then believed five
-        // writes had landed when one had, and reported them to the human as
-        // done. Every id gets an answer now, even if the answer is "not run".
-        let skipped: Vec<String> = calls.iter().skip(1).map(|c| c.id.clone()).collect();
-        if !skipped.is_empty() {
+        }
+        if calls.len() > 1 {
             let _ = relay.emit(
                 &self.session,
                 "step.note",
                 "",
-                format!("model asked for {} tools at once; running the first", calls.len()),
+                format!("model asked for {} tools at once; running them in order", calls.len()),
             );
         }
 
@@ -281,24 +282,42 @@ impl Agent {
             None => return Step::Stopped("reply announced tool calls but none could be read".into()),
         }
 
-        let step = self.dispatch(first, relay, runner, shell_policy);
-        // A held approval answers its own call later, so the declines wait
-        // with it and stay behind the result they follow.
-        if matches!(step, Step::NeedsApproval(_)) {
-            self.skipped = skipped;
-        } else {
-            self.decline_skipped(&skipped);
+        // Run the whole batch, in order, each one through the Runner and its
+        // gates. Taking only the first and declining the rest looked safe and
+        // was not: a model sampling a large sheet asks for eight reads a turn,
+        // so seven in eight were thrown away, it re-sent them, and the step
+        // budget went on the churn rather than the work. One run spent 24
+        // steps on 101 calls and wrote nothing.
+        let mut last = Step::Stopped("the turn announced tool calls but ran none".into());
+        for (i, tc) in calls.iter().enumerate() {
+            let step = self.dispatch(tc.clone(), relay, runner, shell_policy);
+            let rest = || calls[i + 1..].iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+            match step {
+                // The held call answers itself on approve or deny, so the
+                // rest of the batch waits with it.
+                Step::NeedsApproval(_) => {
+                    self.skipped = rest();
+                    return step;
+                }
+                // A latched kill or a dead pipe ends the run: what is left of
+                // the batch is owed an answer, not silence.
+                Step::Stopped(_) => {
+                    let ids = rest();
+                    self.decline_skipped(&ids, "an earlier call in this turn stopped the run");
+                    return step;
+                }
+                other => last = other,
+            }
         }
-        step
+        last
     }
 
-    /// Tell the model, per call id, that a batched call was not run.
-    fn decline_skipped(&mut self, ids: &[String]) {
+    /// Answer a call id that this loop did not run. An assistant turn is
+    /// echoed back whole, so an id with no `tool` message leaves the
+    /// transcript malformed and the model believing the call succeeded.
+    fn decline_skipped(&mut self, ids: &[String], why: &str) {
         for id in ids {
-            self.observe(
-                id,
-                "not run: this turn asked for several tools at once and only the first was taken.                  Send this one again on its own, after reading the first result.",
-            );
+            self.observe(id, &format!("not run: {why}. Send it again if you still need it."));
         }
     }
 
@@ -381,13 +400,13 @@ impl Agent {
                 );
                 let _ = relay.emit(&self.session, "step.done", "shell", detail.clone());
                 self.observe(&p.call_id, &shell::observation(&out));
-                self.decline_skipped(&held);
+                self.decline_skipped(&held, "the run stopped at the approval before reaching it");
                 Step::Ran { tool: "shell".into(), detail }
             }
             Err(e) => {
                 let _ = relay.emit(&self.session, "step.error", "shell", e.clone());
                 self.observe(&p.call_id, &format!("refused: {e}"));
-                self.decline_skipped(&held);
+                self.decline_skipped(&held, "the run stopped at the approval before reaching it");
                 Step::Refused(e)
             }
         }
@@ -403,7 +422,7 @@ impl Agent {
         let why = if reason.trim().is_empty() { "the human declined".to_string() } else { reason.to_string() };
         self.observe(&p.call_id, &format!("denied by the human: {why}. Do not ask again for the same command."));
         let held = std::mem::take(&mut self.skipped);
-        self.decline_skipped(&held);
+        self.decline_skipped(&held, "the run stopped at the approval before reaching it");
         Step::Refused(why)
     }
 }
@@ -490,14 +509,25 @@ mod tests {
     }
 
     #[test]
-    fn a_batched_turn_answers_every_call_id() {
+    fn an_empty_answer_is_a_dead_turn_not_an_answer() {
+        let (mut relay, mut runner, _s, _h) = world();
+        let mut brain = FakeBrain::new(&[prose_reply("")]);
+        let mut a = agent("do something hard");
+        match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
+            Step::Stopped(why) => assert!(why.contains("no answer"), "{why}"),
+            other => panic!("a blank reply reached the human as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_batched_turn_runs_every_call_and_answers_every_id() {
         let (mut relay, mut runner, _s, h) = world();
         let mut brain = FakeBrain::new(&[batched_reply(&h)]);
         let mut a = agent("read it twice at once");
         assert!(matches!(a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()), Step::Ran { .. }));
 
-        // Both ids come back, or the assistant turn this echoed is malformed
-        // and the model never learns the second call did not run.
+        // Every id is answered, or the assistant turn this echoed is
+        // malformed and the model never learns what happened.
         let answered: Vec<&str> = a
             .msgs
             .iter()
@@ -507,11 +537,20 @@ mod tests {
             })
             .collect();
         assert_eq!(answered, vec!["c1", "c2"]);
-        let second = a.msgs.iter().find_map(|m| match m {
-            Msg::Tool { id, content } if id == "c2" => Some(content.clone()),
-            _ => None,
-        });
-        assert!(second.unwrap().contains("not run"), "the model must be told, not just the event feed");
+        // And both actually ran. Declining the rest of a batch cost more
+        // than it saved: the model just re-sent them next turn.
+        for id in ["c1", "c2"] {
+            let body = a
+                .msgs
+                .iter()
+                .find_map(|m| match m {
+                    Msg::Tool { id: i, content } if i == id => Some(content.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(body.contains("2x2"), "{id} did not run: {body}");
+            assert!(!body.contains("not run"), "{id} was declined: {body}");
+        }
     }
 
     #[test]

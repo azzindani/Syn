@@ -63,7 +63,9 @@ try {
 
   // Settled means the send button came back, which is how the page itself
   // decides a turn is over.
-  await page.locator("#send:not([disabled])").waitFor({ timeout: 180_000 });
+  // A real analyst task runs for minutes, not seconds.
+  const waitMs = Number(flag("--wait") ?? 900_000);
+  await page.locator("#send:not([disabled])").waitFor({ timeout: waitMs });
 
   const turn = await page.evaluate(() => ({
     acts: [...document.querySelectorAll("#tl .act")].map((a) => ({

@@ -19,6 +19,7 @@
 // NOT yet exercised live -- see docs/runbook-windows.md.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.IO.Pipes;
@@ -316,13 +317,56 @@ namespace Syn.Sidecar
             }
         }
 
+        // A read used to answer with a shape and nothing else, so a caller
+        // asking for one cell was told "1x1" and never the value in it. No
+        // analysis is possible through that. A small range now comes back as
+        // values in the same encoding a write takes, so what is read can be
+        // written straight back; anything larger still answers with a shape,
+        // because the point of the cap is to not pour a quarter of a million
+        // rows into a prompt.
+        private const int ReadCellCap = 200;
+
         private static string ReadRange(dynamic wb, string selector)
         {
             var (sheet, addr) = SplitRange(selector);
             dynamic ws = Sheet(wb, sheet);
             dynamic rng = string.IsNullOrEmpty(addr) ? ws.UsedRange : ws.Range[addr];
-            return $"grid {sheet}: {rng.Rows.Count}x{rng.Columns.Count}";
+            int rows = rng.Rows.Count, cols = rng.Columns.Count;
+            if ((long)rows * cols > ReadCellCap)
+                return $"grid {sheet}: {rows}x{cols} (over the {ReadCellCap}-cell read cap: narrow the selector to see values)";
+
+            var sb = new StringBuilder();
+            for (var i = 1; i <= rows; i++)
+            {
+                if (i > 1) sb.Append(';');
+                for (var j = 1; j <= cols; j++)
+                {
+                    if (j > 1) sb.Append(',');
+                    sb.Append(EscapeCell(CellText(rng.Cells[i, j])));
+                }
+            }
+            return $"grid {sheet}: {rows}x{cols} = {sb}";
         }
+
+        // Value2 hands back a date as an OLE serial, and "42989.33" is not a
+        // date to anyone reading it. The number format says which doubles are
+        // really dates.
+        private static string CellText(dynamic cell)
+        {
+            object v = cell.Value2;
+            if (v == null) return "";
+            if (v is double d)
+            {
+                string fmt = (string)cell.NumberFormat ?? "";
+                var looksLikeDate = fmt.IndexOf('y') >= 0 || fmt.IndexOf('d') >= 0;
+                if (looksLikeDate && d > 0) return DateTime.FromOADate(d).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                return d.ToString(CultureInfo.InvariantCulture);
+            }
+            return Convert.ToString(v, CultureInfo.InvariantCulture) ?? "";
+        }
+
+        private static string EscapeCell(string s) =>
+            s.Replace("\\", "\\\\").Replace(",", "\\,").Replace(";", "\\;");
 
         private static string WriteRange(dynamic wb, string handle, string selector, string payload)
         {

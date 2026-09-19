@@ -166,6 +166,10 @@ fn files<'a>(relay: &'a mut Relay, session: &str) -> Result<&'a mut std::collect
     relay.files_mut(session)
 }
 
+/// How many cells a read may return as values before it answers with a shape
+/// instead. Mirrored by ReadCellCap in the Office sidecar.
+pub const READ_CELL_CAP: usize = 200;
+
 fn do_read(relay: &mut Relay, session: &str, handle: &str, args: &ReadArgs) -> Result<OpOut> {
     let files = files(relay, session)?;
     let f = files.get(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
@@ -175,7 +179,25 @@ fn do_read(relay: &mut Relay, session: &str, handle: &str, args: &ReadArgs) -> R
             let grid = sheets.get(&sheet).ok_or_else(|| Error::BadSelector(args.selector.clone()))?;
             match rng {
                 None => Ok(OpOut::Grid { sheet, rows: grid.len(), cols: grid.first().map(|r| r.len()).unwrap_or(0) }),
-                Some((r0, c0, r1, c1)) => Ok(OpOut::Grid { sheet, rows: r1 - r0 + 1, cols: c1 - c0 + 1 }),
+                Some((r0, c0, r1, c1)) => {
+                    let (rows, cols) = (r1 - r0 + 1, c1 - c0 + 1);
+                    // Matches the live hand: a small range answers with its
+                    // values, a large one with its shape. A read that only
+                    // ever returns a shape cannot support any analysis.
+                    if rows * cols > READ_CELL_CAP {
+                        return Ok(OpOut::Grid { sheet, rows, cols });
+                    }
+                    let cells: Vec<Vec<String>> = (r0..=r1)
+                        .map(|r| {
+                            (c0..=c1)
+                                .map(|c| grid.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default())
+                                .collect()
+                        })
+                        .collect();
+                    Ok(OpOut::Text {
+                        detail: format!("grid {sheet}: {rows}x{cols} = {}", crate::hand::grid_payload(&cells)),
+                    })
+                }
             }
         }
         (FileKind::Word, FileContent::Word { paras, .. }) => {
@@ -453,11 +475,34 @@ mod tests {
     #[test]
     fn read_write_roundtrip() {
         let (mut r, s, xh, _, _) = relay3();
+        // A small range answers with what is in it. The old version of this
+        // test asserted a bare shape both times, which meant it never once
+        // checked that the write in the middle had landed.
         let out = execute(&mut r, &s, &xh, Call::Read(ReadArgs { selector: "Sheet1!A1:B2".into() })).unwrap();
-        assert_eq!(out, OpOut::Grid { sheet: "Sheet1".into(), rows: 2, cols: 2 });
+        let before = format!("{out:?}");
+        assert!(before.contains("2x2"), "{before}");
         execute(&mut r, &s, &xh, Call::Write(WriteArgs { selector: "Sheet1!A1:A1".into(), values: vec![vec!["9".into()]] })).unwrap();
         let out = execute(&mut r, &s, &xh, Call::Read(ReadArgs { selector: "Sheet1!A1:A1".into() })).unwrap();
-        assert_eq!(out, OpOut::Grid { sheet: "Sheet1".into(), rows: 1, cols: 1 });
+        assert_eq!(out, OpOut::Text { detail: "grid Sheet1: 1x1 = 9".into() });
+    }
+
+    #[test]
+    fn a_read_over_the_cell_cap_answers_with_a_shape() {
+        let (mut r, s, _, _, _) = relay3();
+        let wide: Vec<Vec<String>> = (0..30).map(|row| (0..30).map(|c| format!("{row}-{c}")).collect()).collect();
+        let h = crate::protocol::new_handle("excel", "big.xlsx", "S");
+        r.attach(&s, h.clone(), OpenFile {
+            kind: FileKind::Excel,
+            content: FileContent::Excel { sheets: HashMap::from([("S".into(), wide)]) },
+            styles: HashMap::new(),
+        });
+        // 900 cells is past the cap, so the caller is told the shape and how
+        // to get at the values rather than being handed all of them.
+        let out = execute(&mut r, &s, &h, Call::Read(ReadArgs { selector: "S!A1:AD30".into() })).unwrap();
+        assert_eq!(out, OpOut::Grid { sheet: "S".into(), rows: 30, cols: 30 });
+        // Just inside it, the values come back.
+        let out = execute(&mut r, &s, &h, Call::Read(ReadArgs { selector: "S!A1:B2".into() })).unwrap();
+        assert_eq!(out, OpOut::Text { detail: "grid S: 2x2 = 0-0,0-1;1-0,1-1".into() });
     }
 
     #[test]

@@ -151,6 +151,25 @@ pub fn base_url() -> String {
     base_url_with(|k| std::env::var(k).ok())
 }
 
+/// Env key for an app's sidecar pipe, e.g. `excel` -> `SYN_PIPE_EXCEL`.
+pub fn pipe_env_key(app: &str) -> String {
+    format!("SYN_PIPE_{}", app.to_ascii_uppercase())
+}
+
+/// The pipe a sidecar listens on, or None when the deployment has not named
+/// one. No compiled-in default: a wrong pipe name fails by connecting to
+/// something else, so it is better to have nothing to click.
+pub fn pipe_for(app: &str) -> Option<String> {
+    std::env::var(pipe_env_key(app)).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// Where a Chromium is listening with --remote-debugging-port.
+pub const CDP_ENV: &str = "SYN_CDP";
+
+pub fn cdp_addr() -> Option<String> {
+    std::env::var(CDP_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
 /// True when a provider key is present. Never returns the key itself.
 pub fn has_api_key() -> bool {
     std::env::var(API_KEY_ENV).is_ok_and(|k| !k.trim().is_empty())
@@ -158,7 +177,7 @@ pub fn has_api_key() -> bool {
 
 /// One-line startup banner: what resolved where, with no secret material.
 pub fn describe() -> String {
-    let models: Vec<String> = [Model::Luna, Model::Terra, Model::Sol, Model::Astra]
+    let models: Vec<String> = Model::ALL
         .into_iter()
         .map(|m| format!("{m:?}={}", model_id(m)))
         .collect();

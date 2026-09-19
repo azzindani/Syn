@@ -248,6 +248,54 @@ impl Picker {
 
 /// Real send via the `curl` binary (core stays TLS-free).
 /// Key is read from `api_key_env` at send time and never logged.
+/// Turn a provider error body into one line a human can act on.
+///
+/// Providers answer failures with a nested JSON envelope; pasting that into a
+/// chat window tells the reader nothing and buries the one sentence that
+/// matters. The upstream `raw` note is preferred over the generic `message`
+/// ("Provider returned error") because it is the one that names the model and
+/// says what to do.
+pub fn explain_error(status: u16, body: &str) -> String {
+    let pick = |key: &str| -> Option<String> {
+        let at = body.find(&format!("\"{key}\""))?;
+        let rest = body[at..].split_once(':')?.1.trim_start();
+        let rest = rest.strip_prefix('"')?;
+        let mut out = String::new();
+        let mut it = rest.chars();
+        while let Some(c) = it.next() {
+            match c {
+                '\\' => match it.next() {
+                    Some('n') => out.push(' '),
+                    Some(o) => out.push(o),
+                    None => break,
+                },
+                '"' => return Some(out),
+                c => out.push(c),
+            }
+        }
+        None
+    };
+    let note = pick("raw")
+        .or_else(|| pick("message"))
+        .unwrap_or_else(|| crate::security::truncate_output(body));
+    let note = note.trim();
+    match status {
+        429 => format!("rate limited (429): {note}"),
+        401 | 403 => format!("rejected ({status}): {note}. Check SYN_API_KEY."),
+        _ => format!("provider error ({status}): {note}"),
+    }
+}
+
+/// Whether a failure is worth retrying on a different model.
+///
+/// Free-tier slots rate-limit independently, so a 429 on one says nothing
+/// about the next. A bad key or a malformed request would fail identically
+/// everywhere, and retrying those just burns the other slots.
+pub fn worth_another_model(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("429") || e.contains("rate limit") || e.contains("rate-limit") || e.contains("(502)") || e.contains("(503)")
+}
+
 /// Returns (http_status, response_body).
 pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u16, String), String> {
     let key = std::env::var(api_key_env).map_err(|_| format!("env {api_key_env} not set"))?;
@@ -367,6 +415,46 @@ mod tests {
         p.note_spend(r);
         assert!(!p.over_budget(10));
         assert!(p.over_budget(1));
+    }
+
+    /// The exact body OpenRouter returned when the free Terra slot was
+    /// exhausted. Pasting this into a chat window is what the fix is for.
+    const RATE_LIMIT_BODY: &str = r#"{"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"qwen/qwen3.8-27b:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations","provider_name":"ModelRun","is_byok":false}},"user_id":"user_3ByZ"}"#;
+
+    #[test]
+    fn a_rate_limit_body_becomes_one_readable_line() {
+        let m = explain_error(429, RATE_LIMIT_BODY);
+        assert!(m.starts_with("rate limited (429):"), "{m}");
+        // The upstream note names the model; the generic wrapper does not.
+        assert!(m.contains("qwen/qwen3.8-27b:free"), "{m}");
+        assert!(!m.contains("Provider returned error"), "the generic message is not the useful one: {m}");
+        assert!(!m.contains("user_id"), "no envelope noise: {m}");
+        assert!(m.lines().count() == 1, "must stay one line: {m}");
+    }
+
+    #[test]
+    fn a_bad_key_says_which_setting_to_check() {
+        let m = explain_error(401, r#"{"error":{"message":"No auth credentials found"}}"#);
+        assert!(m.contains("No auth credentials found"), "{m}");
+        assert!(m.contains("SYN_API_KEY"), "{m}");
+    }
+
+    #[test]
+    fn an_unparseable_body_still_produces_something() {
+        let m = explain_error(500, "<html>gateway error</html>");
+        assert!(m.contains("500"));
+        assert!(m.contains("gateway"), "{m}");
+    }
+
+    #[test]
+    fn only_transient_failures_are_worth_another_model() {
+        assert!(worth_another_model(&explain_error(429, RATE_LIMIT_BODY)));
+        assert!(worth_another_model("provider error (503): upstream unavailable"));
+        // A bad key or a malformed request fails the same way on every slot,
+        // so retrying would burn the others and report four identical errors.
+        assert!(!worth_another_model(&explain_error(401, "{}")));
+        assert!(!worth_another_model("provider error (400): bad request"));
+        assert!(!worth_another_model("curl transport failed: could not resolve host"));
     }
 }
 

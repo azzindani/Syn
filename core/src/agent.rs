@@ -44,7 +44,7 @@ impl Brain for CurlBrain {
     fn respond(&mut self, body: &str) -> Result<String, String> {
         let (status, text) = provider::send_via_curl(&self.base_url, &self.api_key_env, body)?;
         if status != 200 {
-            return Err(format!("provider http {status}: {}", security::truncate_output(&text)));
+            return Err(provider::explain_error(status, &text));
         }
         Ok(text)
     }

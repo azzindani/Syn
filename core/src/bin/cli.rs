@@ -83,6 +83,26 @@ fn blank_ppt() -> OpenFile {
 }
 
 /// Drive the loop until it finishes, stops, or stops for a human.
+/// The other model slots to try, in cost order, skipping the one that just
+/// failed and any slot configured to the same model id (duplicates would
+/// retry the rate-limited model and report a second identical failure).
+fn fallbacks(failed: &str) -> Vec<(core::router::Model, String)> {
+    use core::router::Model;
+    let mut seen = vec![failed.to_string()];
+    let mut out = Vec::new();
+    for m in Model::ALL {
+        let id = config::model_id(m);
+        // Two slots may resolve to the same id; retrying it would report the
+        // same failure twice and burn a second request saying nothing new.
+        if id.is_empty() || seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        out.push((m, id));
+    }
+    out
+}
+
 /// Persist the conversation after every turn.
 ///
 /// A chat that is only written on a clean exit loses the run that crashed,
@@ -103,30 +123,32 @@ fn save_chat(id: &str, a: &Agent) {
     }
 }
 
+/// Run the loop to its next stopping point and report why it stopped, so a
+/// caller can decide whether the failure is worth another model.
 fn drive(
     a: &mut Agent,
     brain: &mut dyn Brain,
     relay: &mut core::Relay,
     runner: &mut Runner,
     sp: &ShellPolicy,
-) {
+) -> Option<String> {
     loop {
         match a.step(brain, relay, runner, sp) {
             Step::Ran { tool, detail } => println!("STEP {tool}: {detail}"),
             Step::Refused(why) => println!("REFUSED {why}"),
             Step::Answered(text) => {
                 println!("ANSWER {}", text.replace('\n', " "));
-                break;
+                return None;
             }
             Step::Stopped(why) => {
                 println!("STOPPED {why}");
-                break;
+                return Some(why);
             }
             Step::NeedsApproval(p) => {
                 println!("CONFIRM {}", p.preview);
                 println!("        reason given: {}", p.why);
                 println!("        respond with `approve` or `deny <reason>`");
-                break;
+                return None;
             }
         }
     }
@@ -222,6 +244,31 @@ fn main() {
             // command's output ends. Commands print a variable number of
             // lines, so a reader with no marker either guesses or blocks.
             "mark" => println!("RECEIPT mark={}", rest.trim()),
+            // What this deployment actually has, so nothing downstream has
+            // to hardcode a model name, a pipe or a port.
+            "slots" => {
+                for m in core::router::Model::ALL {
+                    let r = core::router::route_of(m);
+                    println!(
+                        "SLOT {{\"slot\":\"{m:?}\",\"task\":\"{}\",\"model\":\"{}\",\"rank\":{}}}",
+                        core::router::task_name(core::router::task_of(m)),
+                        config::model_id(m),
+                        r.cost_rank
+                    );
+                }
+                println!("RECEIPT slots current={}", core::router::task_name(task));
+            }
+            "wiring" => {
+                for app in ["excel", "word", "ppt", "uia"] {
+                    if let Some(p) = config::pipe_for(app) {
+                        println!("WIRE {{\"kind\":\"pipe\",\"app\":\"{app}\",\"at\":\"{p}\"}}");
+                    }
+                }
+                if let Some(a) = config::cdp_addr() {
+                    println!("WIRE {{\"kind\":\"cdp\",\"app\":\"web\",\"at\":\"{a}\"}}");
+                }
+                println!("RECEIPT wiring");
+            }
             "registry" => println!("RECEIPT registry={:?}", relay.registry(&session).unwrap_or_default()),
             "read" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
@@ -320,14 +367,13 @@ fn main() {
             }
             "config" => println!("RECEIPT config {}", config::describe()),
             "task" => {
-                task = match rest.trim() {
-                    "skim" => TaskKind::Skim,
-                    "routine" => TaskKind::Routine,
-                    "code" => TaskKind::Code,
-                    "deep" => TaskKind::DeepReasoning,
-                    "vision" => TaskKind::VisionFallback,
-                    other => {
-                        println!("ERROR task: unknown class {other:?} (skim|routine|code|deep|vision)");
+                // One naming table, in the router. A second copy here is
+                // how a command and a picker end up disagreeing about what
+                // "code" means.
+                task = match core::router::task_named(rest.trim()) {
+                    Some(t) => t,
+                    None => {
+                        println!("ERROR task: unknown class {:?} (skim|routine|code|deep|vision)", rest.trim());
                         continue;
                     }
                 };
@@ -386,7 +432,25 @@ fn main() {
                 let a = agent.as_mut().expect("just set");
                 println!("RECEIPT say model={model}");
                 let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
-                drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                // Free-tier slots rate-limit independently, so a 429 on one
+                // says nothing about the next. Walk the rest rather than
+                // handing the human a provider's JSON and asking them to
+                // know which slot to pick.
+                for (m, id) in fallbacks(&model) {
+                    let Some(why) = stopped.as_deref() else { break };
+                    if !provider::worth_another_model(why) {
+                        break;
+                    }
+                    println!("RECEIPT retry model={id}");
+                    a.retarget(&id, core::router::route_of(m));
+                    stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                }
+                if let Some(why) = &stopped
+                    && provider::worth_another_model(why)
+                {
+                    println!("STOPPED every model slot is rate limited right now: wait a moment and send again");
+                }
                 save_chat(&chat_id, a);
             }
             "chat" => {
@@ -471,7 +535,7 @@ fn main() {
                 }
                 if !matches!(outcome, Step::Stopped(_)) {
                     let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
-                    drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                    let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 save_chat(&chat_id, a);
             }

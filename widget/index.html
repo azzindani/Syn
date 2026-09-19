@@ -51,6 +51,13 @@ button{background:none;border:0;cursor:pointer}
 #side footer{border-top:1px solid var(--line-soft);padding:9px 12px;display:flex;gap:8px;align-items:center}
 #side footer button{font-size:12px;color:var(--fg-muted);padding:4px 8px;border-radius:7px}
 #side footer button:hover{background:var(--raised);color:var(--fg)}
+#wirebox{border-top:1px solid var(--line-soft);padding:10px 12px}
+#wirebox h3{margin:0 0 7px;font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+  color:var(--fg-faint);font-weight:600}
+#wire button{display:block;width:100%;text-align:left;margin-bottom:5px;padding:5px 8px;
+  border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--fg-muted)}
+#wire button:hover{border-color:var(--accent);color:var(--fg)}
+.hint{font-size:11px;color:var(--fg-faint);display:block;line-height:1.4}
 #killbtn:hover{color:var(--danger)}
 
 /* ---------- main ---------- */
@@ -87,6 +94,10 @@ main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
   font:11.5px/1.55 ui-monospace,Consolas,monospace;color:var(--fg-muted);
   white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
 
+.note{align-self:center;font-size:11.5px;color:var(--fg-faint);text-align:center;padding:2px 10px;
+  border:1px solid var(--line-soft);border-radius:99px}
+.fail{align-self:center;font-size:12px;color:var(--danger);background:var(--warn-soft);
+  border:1px solid var(--line);border-radius:10px;padding:8px 12px;max-width:34rem;text-align:center}
 .empty{margin:18vh auto 0;text-align:center;color:var(--fg-faint);max-width:30rem}
 .empty h2{font-size:19px;color:var(--fg);font-weight:600;margin:0 0 6px}
 .empty p{margin:0;font-size:13px}
@@ -129,6 +140,11 @@ main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
   <header><b>Syn</b><span>one brain, many hands</span></header>
   <button id="new">＋&nbsp; New chat</button>
   <div id="chats"></div>
+  <div id="wirebox">
+    <h3>Connect a hand</h3>
+    <div id="wire"></div>
+    <span class="hint" id="wirehint">Reading your .env…</span>
+  </div>
   <footer>
     <button id="handsbtn" title="Show attached hands">Hands</button>
     <button id="evbtn" title="Recent orchestration events">Events</button>
@@ -156,12 +172,7 @@ main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
       </div>
       <textarea id="box" rows="1" placeholder="Ask Syn to do something with your open apps…"></textarea>
       <div id="bar">
-        <select id="task" title="Which model slot to think with">
-          <option value="routine">Terra · routine</option>
-          <option value="skim">Luna · skim</option>
-          <option value="code">Sol · code</option>
-          <option value="deep">Astra · deep</option>
-        </select>
+        <select id="task" title="Which model slot to think with"></select>
         <button id="send" title="Send">↑</button>
       </div>
     </div>
@@ -196,8 +207,17 @@ function tagged(out, tag) {
     .map(l => { try { return JSON.parse(l.slice(tag.length + 1)); } catch { return null; } })
     .filter(Boolean);
 }
-function errorsIn(out) {
-  return out.split("\n").filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"));
+// A turn that recovered on another slot is a success, not an error: showing
+// the 429 it walked past would teach the reader to distrust a working answer.
+function verdict(out) {
+  const lines = out.split("\n");
+  const answered = lines.some(l => l.startsWith("ANSWER") || l.startsWith("CONFIRM"));
+  const retried = (out.match(/^RECEIPT retry model=(\S+)/m) || [])[1];
+  const failure = lines
+    .filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"))
+    .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, ""))
+    .pop();
+  return { answered, retried, failure };
 }
 
 const ago = s => {
@@ -214,6 +234,52 @@ const el = (t, cls, txt) => {
   if (txt != null) e.textContent = txt;
   return e;
 };
+
+/* ---------------- what this deployment has ----------------
+   The picker and the hand buttons are built from what the CLI reports, not
+   from names written into this page. A model swapped in .env appears here
+   without touching the UI, and a hand this deployment has not wired is not
+   offered as a button that cannot work. */
+async function loadSlots() {
+  const sel = $("task");
+  const out = await cli("slots");
+  const cur = (out.match(/current=(\S+)/) || [])[1];
+  sel.textContent = "";
+  for (const s of tagged(out, "SLOT")) {
+    const o = document.createElement("option");
+    o.value = s.task;
+    o.textContent = s.slot + " · " + (s.model || "unset");
+    o.title = s.model || "";
+    if (s.task === cur) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+async function loadWiring() {
+  const out = await cli("wiring");
+  const wires = tagged(out, "WIRE");
+  const box = $("wire");
+  box.textContent = "";
+  for (const w of wires) {
+    const cmd = w.kind === "cdp" ? "cdp " + w.at + " " + w.app : "hand " + w.at + " " + w.app;
+    const b = document.createElement("button");
+    b.textContent = (w.kind === "cdp" ? "Browser" : w.app) + " · " + w.at;
+    b.title = cmd;
+    b.onclick = () => run(cmd);
+    box.appendChild(b);
+  }
+  $("wirehint").textContent = wires.length
+    ? "From your .env — the sidecar or browser must already be running."
+    : "Nothing wired yet: set SYN_PIPE_* or SYN_CDP in .env.";
+}
+
+// Run one command and show what it said, for the buttons above.
+async function run(cmd) {
+  const out = await cli(cmd);
+  tl.appendChild(el("div", "bot", out.trim() || "(no output)"));
+  scroll.scrollTop = scroll.scrollHeight;
+  await hands();
+}
 
 /* ---------------- sidebar ---------------- */
 async function loadChats() {
@@ -350,9 +416,13 @@ async function send() {
   thinking(true);
   try {
     const out = await cli("say " + v.replace(/\n/g, " "));
-    const bad = errorsIn(out);
+    const r = verdict(out);
     await refresh();
-    for (const b of bad) tl.appendChild(el("div", "bot", b));
+    if (r.answered && r.retried) {
+      tl.appendChild(el("div", "note", "that slot was busy — answered with " + r.retried));
+    } else if (!r.answered && r.failure) {
+      tl.appendChild(el("div", "fail", r.failure));
+    }
     await loadChats();
   } catch (e) {
     tl.appendChild(el("div", "bot", "Console unreachable: " + e.message));
@@ -390,16 +460,8 @@ $("killbtn").onclick = async () => {
   await cli("kill");
   $("hands").textContent = "killed";
 };
-$("handsbtn").onclick = async () => {
-  const out = await cli("hands");
-  tl.appendChild(el("div", "bot", out.trim() || "no hands attached"));
-  scroll.scrollTop = scroll.scrollHeight;
-};
-$("evbtn").onclick = async () => {
-  const out = await cli("events");
-  tl.appendChild(el("div", "bot", out.trim() || "no events yet"));
-  scroll.scrollTop = scroll.scrollHeight;
-};
+$("handsbtn").onclick = () => run("hands");
+$("evbtn").onclick = () => run("events");
 $("menu").onclick = () => $("side").classList.toggle("show");
 if (window.innerWidth <= 760) $("menu").style.display = "block";
 
@@ -412,7 +474,7 @@ async function hands() {
 }
 
 (async () => {
-  try { await loadChats(); await refresh(); await hands(); }
+  try { await loadSlots(); await loadWiring(); await loadChats(); await refresh(); await hands(); }
   catch (e) { tl.appendChild(el("div", "bot", "Cannot reach the console: " + e.message)); }
   box.focus();
 })();

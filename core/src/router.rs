@@ -22,6 +22,54 @@ pub enum Model {
     Astra,
 }
 
+impl Model {
+    /// Every routable slot, cheapest first.
+    ///
+    /// The one list. Anything that needs to walk the slots -- the config
+    /// banner, the failover chain, the model picker -- reads it from here,
+    /// so adding a slot is one edit in the module that owns the type rather
+    /// than a literal array copied into three files that drift apart.
+    pub const ALL: [Model; 4] = [Model::Luna, Model::Terra, Model::Sol, Model::Astra];
+}
+
+/// The job class a slot is the default for: the inverse of `route`.
+pub fn task_of(model: Model) -> TaskKind {
+    match model {
+        Model::Luna => TaskKind::Skim,
+        Model::Terra => TaskKind::Routine,
+        Model::Sol => TaskKind::Code,
+        Model::Astra => TaskKind::DeepReasoning,
+    }
+}
+
+/// The route a slot runs under when picked directly.
+pub fn route_of(model: Model) -> Route {
+    route(task_of(model))
+}
+
+/// The CLI/UI name for a job class, and back again. One table, so the
+/// command surface and the picker cannot disagree about what `code` means.
+pub fn task_name(task: TaskKind) -> &'static str {
+    match task {
+        TaskKind::Skim => "skim",
+        TaskKind::Routine => "routine",
+        TaskKind::Code => "code",
+        TaskKind::DeepReasoning => "deep",
+        TaskKind::VisionFallback => "vision",
+    }
+}
+
+pub fn task_named(name: &str) -> Option<TaskKind> {
+    Some(match name {
+        "skim" => TaskKind::Skim,
+        "routine" => TaskKind::Routine,
+        "code" => TaskKind::Code,
+        "deep" => TaskKind::DeepReasoning,
+        "vision" => TaskKind::VisionFallback,
+        _ => return None,
+    })
+}
+
 /// Reasoning effort ladder. Astra never routes below Low or above High
 /// without explicit user override (widget enforces).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,5 +115,32 @@ mod tests {
     fn cost_ranks_order() {
         assert!(route(TaskKind::Skim).cost_rank < route(TaskKind::Routine).cost_rank);
         assert!(route(TaskKind::Routine).cost_rank < route(TaskKind::Code).cost_rank);
+    }
+
+    #[test]
+    fn every_slot_is_listed_once_and_cheapest_first() {
+        let ranks: Vec<u8> = Model::ALL.iter().map(|m| route_of(*m).cost_rank).collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "ALL must be cheapest first: {ranks:?}");
+        let mut seen = Model::ALL.to_vec();
+        seen.dedup();
+        assert_eq!(seen.len(), Model::ALL.len(), "no slot may appear twice");
+    }
+
+    #[test]
+    fn task_of_is_the_inverse_of_route() {
+        // If these drift, `task code` and the picker's "code" stop meaning
+        // the same model and nobody finds out until a run goes to the wrong
+        // slot.
+        for m in Model::ALL {
+            assert_eq!(route(task_of(m)).model, m, "task_of({m:?}) does not route back");
+        }
+    }
+
+    #[test]
+    fn task_names_round_trip() {
+        for t in [TaskKind::Skim, TaskKind::Routine, TaskKind::Code, TaskKind::DeepReasoning, TaskKind::VisionFallback] {
+            assert_eq!(task_named(task_name(t)), Some(t));
+        }
+        assert_eq!(task_named("nonsense"), None);
     }
 }

@@ -12,6 +12,7 @@
   --radius:0.625rem;              /* 10px, the app-wide corner */
   --control-radius:0.5rem;        /* 8px, buttons and inputs */
   --topbar:52px;
+  --sidebar-w:16rem;          /* their default; min 13rem, main content min 40rem */
 
   --background:oklch(99.2% 0 0);          /* zinc-25 */
   --foreground:#27272a;                   /* zinc-800 */
@@ -63,7 +64,7 @@ button{background:none;border:0;cursor:pointer}
 @media (prefers-color-scheme:dark){::-webkit-scrollbar-thumb{background:rgb(255 255 255/8%)}}
 
 /* ---------------- sidebar ---------------- */
-#side{width:256px;flex:none;height:100vh;display:flex;flex-direction:column;
+#side{width:var(--sidebar-w);flex:none;height:100dvh;display:flex;flex-direction:column;
   background:var(--sidebar);border-right:1px solid var(--border)}
 #brand{height:var(--topbar);flex:none;display:flex;align-items:center;gap:8px;padding:0 15px;
   font-weight:600}
@@ -79,9 +80,15 @@ button{background:none;border:0;cursor:pointer}
 .chat{position:relative;display:flex;align-items:center;height:32px;padding:0 10px;
   border-radius:var(--control-radius);cursor:pointer;white-space:nowrap;overflow:hidden;
   transition:background .1s}
-.chat span{overflow:hidden;text-overflow:ellipsis}
+/* Inactive rows recede to secondary-label/70 and brighten on hover; only the
+   active thread is full-strength. Rendering every row at --foreground is what
+   makes a thread list read as a flat wall of equally loud text. */
+.chat span{overflow:hidden;text-overflow:ellipsis;
+  color:color-mix(in srgb, var(--muted-foreground) 70%, transparent);transition:color .1s}
 .chat:hover{background:var(--sidebar-row-hover)}
-.chat.on{background:var(--sidebar-row-selected);font-weight:500;box-shadow:0 0 0 1px var(--border)}
+.chat:hover span{color:var(--foreground)}
+.chat.on{background:var(--sidebar-row-selected);box-shadow:0 0 0 1px var(--border)}
+.chat.on span{color:var(--foreground);font-weight:500}
 .chat .del{position:absolute;right:4px;top:4px;width:24px;height:24px;border-radius:6px;
   display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
 .chat:hover .del{display:grid}
@@ -101,7 +108,7 @@ button{background:none;border:0;cursor:pointer}
 #killbtn:hover{color:var(--error-foreground)}
 
 /* ---------------- main ---------------- */
-main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
+main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
 #top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;
   border-bottom:1px solid var(--border)}
 #title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -192,8 +199,16 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
 .spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
   border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
-@media(max-width:780px){#side{position:fixed;left:-256px;z-index:9;transition:left .16s}
-  #side.show{left:0}#tl,#comp,#hint{max-width:none}#dock{padding:0 14px 14px}}
+/* Offcanvas, not display:none, so it slides rather than blinking out. */
+#side{transition:margin-left .16s ease}
+body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
+#toggle{flex:none;display:grid;place-items:center;width:28px;height:28px;margin-left:-6px;
+  border-radius:var(--control-radius);color:var(--muted-foreground)}
+#toggle:hover{background:var(--accent);color:var(--foreground)}
+@media(max-width:780px){:root{--sidebar-w:15rem}
+  #side{position:fixed;z-index:9;margin-left:calc(var(--sidebar-w) * -1)}
+  body:not(.hidden-side) #side{margin-left:0}
+  #tl,#comp,#hint{max-width:none}#dock{padding:0 14px 14px}}
 </style></head>
 
 <body>
@@ -215,7 +230,11 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
 
 <main>
   <div id="top">
-    <button id="menu" class="btn" style="display:none;height:28px;padding:0 9px">☰</button>
+    <button id="toggle" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+    </button>
     <div id="title">New chat</div>
     <span style="flex:1"></span>
     <span id="hands"><i></i><span>no hands</span></span>
@@ -568,8 +587,23 @@ $("new").onclick = async () => { await cli("chat new"); await loadChats(); await
 $("killbtn").onclick = () => run("kill");
 $("handsbtn").onclick = () => run("hands");
 $("evbtn").onclick = () => run("events");
-$("menu").onclick = () => $("side").classList.toggle("show");
-if (window.innerWidth <= 780) $("menu").style.display = "grid";
+// Collapsed state is a per-viewer convenience, so localStorage is the right
+// home for it — and it must survive the accessor throwing in a private window.
+function setSide(hidden) {
+  document.body.classList.toggle("hidden-side", hidden);
+  try { localStorage.setItem("syn.side", hidden ? "0" : "1"); } catch {}
+}
+$("toggle").onclick = () => setSide(!document.body.classList.contains("hidden-side"));
+try {
+  if (localStorage.getItem("syn.side") === "0") document.body.classList.add("hidden-side");
+} catch {}
+if (window.innerWidth <= 780) document.body.classList.add("hidden-side");
+window.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    setSide(!document.body.classList.contains("hidden-side"));
+  }
+});
 
 (async () => {
   try { await loadSlots(); await loadWiring(); await loadChats(); await refresh(); await hands(); }

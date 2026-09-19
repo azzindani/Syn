@@ -67,6 +67,39 @@ Metrics that matter more than they look:
 - `--workspace-topbar-height: 52px`.
 - Font: `-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`.
 
+## From the full clone (668MB, 23,041 files)
+
+Reading the tree rather than files picked by hand turned up the logic modules
+that sit beside the components, which is where several answers actually live.
+
+**`components/Sidebar.tsx` — thread rows have a hierarchy.** Inactive titles
+render at `text-secondary-label/70` and brighten to `text-foreground` only on
+hover or focus; the active row gets `bg-sidebar-row-active` and full strength.
+Rendering every row at `--foreground`, as we did, is precisely what makes a
+thread list read as a flat wall of equally loud text.
+
+**`components/AppSidebarLayout.tsx` — the sidebar is furniture, not a fixture.**
+`collapsible="offcanvas"`, resizable with the width persisted to localStorage,
+and the toggle is a *fixed* control in the titlebar strip
+(`left: var(--workspace-controls-left)`, `height: var(--workspace-topbar-height)`,
+`z-50`) so it survives the panel sliding away. The shell is `h-dvh`, not
+`100vh`: `vh` is wrong wherever browser chrome moves.
+
+**`components/threadSidebarWidth.ts`** — default 16rem, minimum 13rem, and the
+main content keeps a 40rem floor, so the maximum is `viewport - 40rem`.
+
+**`timestampFormat.ts`** — terse relative labels (`just now`, `5m ago`), and day
+boundaries are whole *local calendar days*, rounded so 23- and 25-hour DST days
+still count as one. A 24-hour window files last night's 11pm message under
+"Today" until 11pm tonight.
+
+**`ui/empty.tsx`** — `flex-1` + `justify-center`, `text-balance`, and a 36px
+bordered icon badge. An empty screen without one reads as a failed load.
+
+**`apps/desktop`** — Electron wrapping the same `apps/web` build. There is no
+separate desktop UI; the app is a native window around the same page. That is
+the shape our Tauri shell should take too.
+
 ## What we take, given no React and no bundler
 Layout, information architecture, the collapsed-tool-row idea, the composer-
 attached approval, and the token vocabulary. All of it is plain CSS and a few

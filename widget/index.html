@@ -86,13 +86,13 @@ button{background:none;border:0;cursor:pointer}
   display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
 .chat:hover .del{display:grid}
 .chat .del:hover{background:var(--accent);color:var(--error-foreground)}
-#wirebox{flex:none;padding:10px 8px 8px;border-top:1px solid var(--border)}
-#wirebox h3{margin:0 0 6px;padding:0 10px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
-#wire button{display:flex;align-items:center;width:100%;height:30px;padding:0 10px;
-  border-radius:var(--control-radius);font-size:13px;color:var(--muted-foreground);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#wire button:hover{background:var(--sidebar-row-hover);color:var(--foreground)}
-.hint{display:block;padding:3px 10px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
+#wirebox{flex:none;padding:9px 8px 9px;border-top:1px solid var(--border)}
+#wirebox h3{margin:0 0 7px;padding:0 10px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+#wire{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px}
+#wire button{height:24px;padding:0 9px;border:1px solid var(--border);border-radius:99px;
+  font-size:12px;color:var(--muted-foreground);white-space:nowrap}
+#wire button:hover{border-color:var(--input);color:var(--foreground)}
+.hint{display:block;padding:7px 10px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
 #side footer{flex:none;display:flex;gap:2px;align-items:center;padding:8px;
   border-top:1px solid var(--border)}
 #side footer button{height:28px;padding:0 9px;border-radius:var(--control-radius);
@@ -109,8 +109,10 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
   color:var(--muted-foreground)}
 #hands i{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}
 #hands.live i{background:var(--ok)}
-#scroll{flex:1;overflow-y:auto}
-#tl{max-width:48rem;margin:0 auto;padding:28px 24px 12px;display:flex;flex-direction:column;gap:20px}
+#scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+#tl{width:100%;max-width:48rem;margin:0 auto;padding:28px 24px 12px;flex:1;
+  display:flex;flex-direction:column;gap:20px}
+#tl.blank{justify-content:center;padding-bottom:12vh}
 
 .you{align-self:flex-end;max-width:80%;background:var(--message-surface);
   border-radius:var(--radius);padding:9px 13px;white-space:pre-wrap;word-break:break-word}
@@ -135,20 +137,20 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
 .note{align-self:center;font-size:12px;color:var(--muted-foreground)}
 .fail{font-size:13px;color:var(--error-foreground);background:var(--error-surface);
   border-radius:var(--radius);padding:10px 13px}
-.empty{margin:16vh auto 0;text-align:center;max-width:30rem}
+.empty{margin:0 auto;text-align:center;max-width:30rem}
 .empty h2{margin:0 0 7px;font-size:20px;font-weight:600}
 .empty p{margin:0;color:var(--muted-foreground)}
 
 /* ---------------- composer ---------------- */
-#dock{flex:none;padding:0 24px 20px}
+#dock{flex:none;padding:0 24px 16px}
 #comp{max-width:48rem;margin:0 auto;background:var(--card);border:1px solid var(--border);
-  border-radius:22px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
+  border-radius:18px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
   transition:border-color .12s}
 #comp:focus-within{border-color:var(--input)}
 /* The approval attaches to the composer, where attention already is, and so
    cannot scroll away the way a message can. */
 #ask{display:none;padding:11px 16px 12px;border-bottom:1px solid var(--border);
-  background:var(--warning-surface);border-radius:21px 21px 0 0}
+  background:var(--warning-surface);border-radius:17px 17px 0 0}
 #ask.on{display:block}
 #ask .hd{margin-bottom:6px;font-size:11px;font-weight:600;color:var(--warning-foreground)}
 #ask .cmd{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;
@@ -162,10 +164,10 @@ main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
   box-shadow:inset 0 1px rgb(255 255 255/16%)}
 .btn.primary:hover{filter:brightness(1.08)}
 #no:hover{color:var(--error-foreground);border-color:var(--error-foreground)}
-#box{width:100%;padding:14px 16px 6px;border:0;outline:0;resize:none;background:none;
-  min-height:48px;max-height:40vh;line-height:1.6}
+#box{width:100%;padding:12px 16px 2px;border:0;outline:0;resize:none;background:none;
+  min-height:42px;max-height:40vh;line-height:1.55}
 #box::placeholder{color:var(--muted-foreground)}
-#bar{display:flex;align-items:center;gap:8px;padding:4px 12px 12px 16px}
+#bar{display:flex;align-items:center;gap:8px;padding:0 10px 10px 14px}
 #task{height:28px;max-width:16rem;padding:0 6px;border:1px solid transparent;
   border-radius:var(--control-radius);background:none;font-size:12px;color:var(--muted-foreground)}
 #task:hover{border-color:var(--border)}
@@ -300,8 +302,9 @@ async function loadSlots() {
   for (const s of tagged(out, "SLOT")) {
     const o = document.createElement("option");
     o.value = s.task;
-    o.textContent = s.model || s.slot;
-    o.title = s.slot + " · " + s.task;
+    // The slot name is what a human picks by; the full id is the tooltip.
+    o.textContent = s.slot + " · " + s.task;
+    o.title = s.model || "";
     if (s.task === cur) o.selected = true;
     sel.appendChild(o);
   }
@@ -318,7 +321,7 @@ async function loadWiring() {
     host.appendChild(b);
   }
   $("wirehint").textContent = wires.length
-    ? "Its sidecar or browser must already be running."
+    ? "Each needs its sidecar running."
     : "Nothing wired: set SYN_PIPE_* or SYN_CDP in .env.";
 }
 
@@ -385,6 +388,7 @@ function activity(name, detail, body, failed) {
 
 function render(msgs) {
   tl.textContent = "";
+  tl.classList.toggle("blank", !msgs.length);
   if (!msgs.length) {
     const e = el("div", "empty");
     e.appendChild(el("h2", null, "What should Syn do?"));

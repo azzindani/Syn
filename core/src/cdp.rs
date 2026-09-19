@@ -362,6 +362,8 @@ pub fn script_for(call: &Call, unit: &str) -> Option<String> {
                     format!("return (e.innerText||e.textContent||'').slice(0,{MAX_TEXT});")
                 }
                 "title" => "return document.title+' | '+location.href;".to_string(),
+                // png is handled before any script is built; see dispatch.
+                "png" => return None,
                 _ => return None,
             };
             wrap(unit, "", &body)
@@ -450,6 +452,23 @@ impl<S: Read + Write> Cdp<S> {
         Ok(sid)
     }
 
+    /// Capture the page as a PNG.
+    ///
+    /// Not a script, so it cannot go through `script_for`: CDP returns the
+    /// image as base64 inside the reply. Exposed as `export png`, because
+    /// writing a handle out to a file is exactly what `export` means.
+    pub fn screenshot(&mut self, session: &str) -> std::io::Result<Vec<u8>> {
+        let reply = self.call(
+            "Page.captureScreenshot",
+            "{\"format\":\"png\",\"captureBeyondViewport\":false}",
+            Some(session),
+        )?;
+        let result = top_value(&reply, "result").unwrap_or("{}");
+        let data = top_string(result, "data")
+            .ok_or_else(|| other("no image data in the capture reply".into()))?;
+        crate::ws::un_b64(&data).ok_or_else(|| other("capture reply was not valid base64".into()))
+    }
+
     /// Evaluate one script in a page and decode the string it returned.
     pub fn eval(&mut self, session: &str, script: &str) -> std::io::Result<Reply> {
         let params = format!(
@@ -481,6 +500,27 @@ pub fn split_handle(handle: &str) -> (&str, &str, &str) {
 impl<S: Read + Write + std::fmt::Debug> LiveHand for Cdp<S> {
     fn dispatch_call(&mut self, call: &Call, handle: &str) -> std::io::Result<Reply> {
         let (_, file, unit) = split_handle(handle);
+        // `export png <path>` is the one op that is not a script.
+        if let Call::Export(ExportArgs { format, path: Some(path), .. }) = call
+            && format == "png"
+        {
+            let Some(target) = pick(&self.targets, file).cloned() else {
+                return Ok(Reply { ok: false, preview: String::new(), error: format!("no target matches {file:?}") });
+            };
+            let session = self.attach(&target.id)?;
+            let png = self.screenshot(&session)?;
+            if let Some(dir) = std::path::Path::new(path).parent()
+                && !dir.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(path, &png)?;
+            return Ok(Reply {
+                ok: true,
+                preview: format!("captured {path} ({} bytes)", png.len()),
+                error: String::new(),
+            });
+        }
         let Some(script) = script_for(call, unit) else {
             return Ok(Reply {
                 ok: false,

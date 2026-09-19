@@ -33,6 +33,37 @@ pub fn b64(data: &[u8]) -> String {
     out
 }
 
+/// Decode standard base64. CDP returns binary payloads (screenshots, PDFs)
+/// as base64 inside JSON, so a client that cannot decode can only ever read
+/// text back from a page.
+pub fn un_b64(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => (c - b'A') as u32,
+            b'a'..=b'z' => (c - b'a') as u32 + 26,
+            b'0'..=b'9' => (c - b'0') as u32 + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        })
+    };
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        acc = (acc << 6) | val(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// SHA-1, needed only to prove the peer answered our handshake key. It is
 /// not used as a security primitive here and RFC 6455 does not treat it as
 /// one either: the accept hash is a protocol check, not authentication.
@@ -559,5 +590,19 @@ Sec-WebSocket-Accept: {}
         inbound.extend(body.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
         let (mut w, _) = ws(inbound);
         assert_eq!(w.recv_text().unwrap(), "hi");
+    }
+
+    #[test]
+    fn b64_round_trips_including_padding() {
+        for v in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+            assert_eq!(un_b64(&b64(v.as_bytes())).unwrap(), v.as_bytes(), "{v}");
+        }
+        // Binary, which is the case that actually matters here.
+        let bytes: Vec<u8> = (0u8..=255).collect();
+        assert_eq!(un_b64(&b64(&bytes)).unwrap(), bytes);
+        // Whitespace inside a JSON string is skipped, junk is refused.
+        assert_eq!(un_b64("Zm9v
+YmFy").unwrap(), b"foobar");
+        assert!(un_b64("not*base64").is_none());
     }
 }

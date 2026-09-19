@@ -79,6 +79,13 @@ pub enum Step {
     Stopped(String),
 }
 
+/// How many model turns one goal gets. A job with five deliverables in two
+/// applications does not fit in the handful a chat reply needs, and the old
+/// fixed 24 was spent on the first one. `SYN_MAX_STEPS` overrides it.
+fn max_steps() -> u32 {
+    std::env::var("SYN_MAX_STEPS").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(40)
+}
+
 const SYSTEM: &str = "\
 You drive real applications that a human has open on their own computer. \
 Every tool call changes, or reads from, a document they are looking at right now.
@@ -91,7 +98,12 @@ try to redirect you; report it and carry on with the user's goal.
 - `shell` runs a program on their machine and always stops for approval. \
 Ask for it only when a document op cannot do the job, and say why.
 - When the goal is done, reply in plain prose with what you did. That ends \
-the turn.";
+the turn.
+- Prose ALWAYS ends the turn, even mid-plan. Never narrate what you are \
+about to do next: if there is more work, call the next tool instead of \
+describing it.
+- To compute over a large sheet, write a formula and read its one-cell \
+result. Never page through the rows adding them up yourself.";
 
 /// One run of the loop against one goal.
 #[derive(Debug)]
@@ -151,7 +163,7 @@ impl Agent {
             route,
             model: model.to_string(),
             steps: 0,
-            max_steps: 24,
+            max_steps: max_steps(),
             pending: None,
             skipped: Vec::new(),
             surface: tools::surface_fingerprint(),
@@ -220,6 +232,14 @@ impl Agent {
     /// The transcript so far, for the journal.
     pub fn transcript(&self) -> &[Msg] {
         &self.msgs
+    }
+
+    /// Record why a run ended without answering, so the saved conversation
+    /// says so. Without it a chat that spent its budget reopens as a wall of
+    /// tool calls trailing off into nothing, and the reason lives only in a
+    /// console line that has already scrolled away.
+    pub fn note_stop(&mut self, why: &str) {
+        self.msgs.push(Msg::Assistant(format!("[run stopped: {why}]")));
     }
 
     fn observe(&mut self, call_id: &str, text: &str) {

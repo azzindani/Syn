@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(out, OpOut::Grid { sheet: "S".into(), rows: 30, cols: 30 });
         // Just inside it, the values come back.
         let out = execute(&mut r, &s, &h, Call::Read(ReadArgs { selector: "S!A1:B2".into() })).unwrap();
-        assert_eq!(out, OpOut::Text { detail: "grid S: 2x2 = 0-0,0-1;1-0,1-1".into() });
+        assert_eq!(out, OpOut::Text { detail: "grid S: 2x2 = 0-0|0-1;1-0|1-1".into() });
     }
 
     #[test]

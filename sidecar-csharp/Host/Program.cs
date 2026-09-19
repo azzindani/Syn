@@ -371,7 +371,7 @@ namespace Syn.Sidecar
                 if (i > 1) sb.Append(';');
                 for (var j = 1; j <= cols; j++)
                 {
-                    if (j > 1) sb.Append(',');
+                    if (j > 1) sb.Append('|');
                     sb.Append(EscapeCell(CellText(rng.Cells[i, j])));
                 }
             }
@@ -396,7 +396,7 @@ namespace Syn.Sidecar
         }
 
         private static string EscapeCell(string s) =>
-            s.Replace("\\", "\\\\").Replace(",", "\\,").Replace(";", "\\;");
+            s.Replace("\\", "\\\\").Replace("|", "\\|").Replace(";", "\\;");
 
         private static string WriteRange(dynamic wb, string handle, string selector, string payload)
         {
@@ -421,9 +421,11 @@ namespace Syn.Sidecar
             return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}");
         }
 
-        // Mirrors grid() in core/src/tools.rs: a backslash escapes the next
-        // character, so a cell can hold a comma. Splitting naively meant a
-        // line of prose with a comma in it landed in two cells.
+        // Mirrors grid() in core/src/tools.rs: cells by '|', rows by ';', a
+        // backslash escaping the next character. The separator was a comma
+        // until that proved unable to carry an Excel formula, which is the
+        // one thing a spreadsheet most needs written into it: =COUNTIF(A:A,x)
+        // arrived as the fragment "=COUNTIF(A:A" and Excel rejected it.
         private static string[][] ParseGrid(string payload)
         {
             var rows = new List<List<string>> { new() { "" } };
@@ -434,7 +436,7 @@ namespace Syn.Sidecar
                 if (escaped) { row[^1] += ch; escaped = false; }
                 else if (ch == '\\') { escaped = true; }
                 else if (ch == ';') rows.Add(new List<string> { "" });
-                else if (ch == ',') row.Add("");
+                else if (ch == '|') row.Add("");
                 else row[^1] += ch;
             }
             return rows.Select(r => r.ToArray()).ToArray();

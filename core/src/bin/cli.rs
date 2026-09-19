@@ -520,6 +520,11 @@ fn main() {
                 {
                     println!("STOPPED every model slot is rate limited right now: wait a moment and send again");
                 }
+                // Into the transcript before saving, or the conversation
+                // records the attempt and not why it ended.
+                if let Some(why) = &stopped {
+                    a.note_stop(why);
+                }
                 save_chat(&chat_id, a);
             }
             "chat" => {

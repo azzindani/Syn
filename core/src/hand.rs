@@ -105,17 +105,17 @@ pub fn envelope(method: &str, handle: &str, args_json: &str, payload: Option<&st
 }
 
 /// Serialise a grid the way the sidecar's write path parses it: cells joined
-/// by `,` and rows by `;`, with a separator inside a value escaped so it
+/// by `|` and rows by `;`, with a separator inside a value escaped so it
 /// arrives as part of the value rather than splitting it.
 pub fn grid_payload(values: &[Vec<String>]) -> String {
     fn cell(c: &str) -> String {
         // Backslash first, or escaping the separators would escape the
         // escapes this adds.
-        c.replace('\\', "\\\\").replace(',', "\\,").replace(';', "\\;")
+        c.replace('\\', "\\\\").replace('|', "\\|").replace(';', "\\;")
     }
     values
         .iter()
-        .map(|r| r.iter().map(|c| cell(c)).collect::<Vec<_>>().join(","))
+        .map(|r| r.iter().map(|c| cell(c)).collect::<Vec<_>>().join("|"))
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -358,7 +358,7 @@ mod tests {
             values: vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]],
         });
         assert!(h.dispatch(&call, "excel:p.xlsx:Sheet1").unwrap().ok);
-        assert!(sent(&w).contains("\"payload\":\"a,b;c,d\""));
+        assert!(sent(&w).contains("\"payload\":\"a|b;c|d\""));
     }
 
     #[test]

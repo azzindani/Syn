@@ -105,6 +105,11 @@ describing it.
 - To compute over a large sheet, write a formula and read its one-cell \
 result. Never page through the rows adding them up yourself.";
 
+/// How many times a run may be asked to carry on after an empty turn.
+/// One: enough to survive a single dropped completion, few enough that
+/// a model which has genuinely finished is not walked round the loop.
+const EMPTY_TURN_NUDGES: u32 = 1;
+
 /// One run of the loop against one goal.
 #[derive(Debug)]
 pub struct Agent {
@@ -122,6 +127,10 @@ pub struct Agent {
     /// Pinned at construction; a surface that changes underneath a run is a
     /// rug-pull, so the fingerprint is recorded with the transcript.
     pub surface: u64,
+    /// How many times this run has been asked to carry on after returning
+    /// nothing at all. Bounded, because a model that has genuinely stopped
+    /// must not be prodded round the loop until the budget is gone.
+    empty_turns: u32,
 }
 
 impl Agent {
@@ -167,6 +176,7 @@ impl Agent {
             pending: None,
             skipped: Vec::new(),
             surface: tools::surface_fingerprint(),
+            empty_turns: 0,
         }
     }
 
@@ -281,6 +291,22 @@ impl Agent {
             // Reported as one it reached the human as a blank reply, which
             // looks like the console broke rather than the model giving up.
             if text.trim().is_empty() {
+                // An empty completion is not the same as being finished. A
+                // run ended this way forty-five calls in and well inside its
+                // budget, with two of its three documents untouched, and the
+                // loop took it at its word. Ask once, then believe it.
+                //
+                // This nudges; it does not plan. The message says nothing
+                // about what is left to do, because working that out is the
+                // job being measured.
+                if self.empty_turns < EMPTY_TURN_NUDGES {
+                    self.empty_turns += 1;
+                    self.msgs.push(Msg::User(
+                        "That turn was empty. If the work is done, say so and summarise it. If it is not, carry on with the next step."
+                            .into(),
+                    ));
+                    return Step::Refused("the model returned an empty turn: asked it to continue".into());
+                }
                 return Step::Stopped("the model ended the turn with no answer and no tool call".into());
             }
             self.msgs.push(Msg::Assistant(text.clone()));
@@ -529,13 +555,37 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_answer_is_a_dead_turn_not_an_answer() {
+    fn an_empty_turn_is_nudged_once_and_then_believed() {
         let (mut relay, mut runner, _s, _h) = world();
-        let mut brain = FakeBrain::new(&[prose_reply("")]);
+        // A capability run ended exactly this way, forty-five calls in and
+        // well inside its budget, with two of its three documents still
+        // untouched. One empty completion is not the same as being finished.
+        let mut brain = FakeBrain::new(&[prose_reply(""), prose_reply("")]);
         let mut a = agent("do something hard");
         match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
+            Step::Refused(why) => assert!(why.contains("empty turn"), "{why}"),
+            other => panic!("the first empty turn should ask it to continue, got {other:?}"),
+        }
+        // Asked once, then believed: a model that has genuinely stopped must
+        // not be walked round the loop until the budget is gone.
+        match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
             Step::Stopped(why) => assert!(why.contains("no answer"), "{why}"),
-            other => panic!("a blank reply reached the human as {other:?}"),
+            other => panic!("a second blank reply reached the human as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_nudge_never_speaks_for_the_model() {
+        let (mut relay, mut runner, _s, _h) = world();
+        let mut brain = FakeBrain::new(&[prose_reply("")]);
+        let mut a = agent("build the review");
+        let _ = a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default());
+        let added = a.transcript().last().expect("the nudge was recorded");
+        let Msg::User(text) = added else { panic!("the nudge must be a user turn, got {added:?}") };
+        // It prods; it does not plan. Naming the goal, the documents or the
+        // next step would be the harness doing the work being measured.
+        for leak in ["review", "Excel", "Word", "slide", "chart", "sheet"] {
+            assert!(!text.contains(leak), "the nudge leaked {leak:?} into the run: {text}");
         }
     }
 

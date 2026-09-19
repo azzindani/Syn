@@ -179,6 +179,23 @@ git order is the evidence:
   in the data. It is a ratio. Both checks are for kWh figures, which is
   what J5 always said and what K9 now says too.
 
+Two more surfaced in the first model run, and this is where the rule above
+bites hardest, because the party who would benefit from bending it is the
+one who wrote both the engine and the scorer:
+
+- The scorecard was found by taking the first sheet with site names down a
+  column. The run abandoned one attempt on `Scorecard` and built the real
+  thing on `Scorecard2`, so X4, X5 and X6 were graded against the
+  wreckage. It now takes the candidate carrying the most numbers.
+- X8 looked for the literal season names in `ground-truth.json`. Excel's
+  own grouping says "Fall" where the fixture says "Autumn", so four
+  correct totals scored zero.
+
+**The 19/100 above stands.** It was not re-scored under the repaired
+scorer, and it must not be: re-grading a recorded run after changing the
+grader is the thing the honesty conditions exist to prevent. The fixes
+apply to the next run, which starts from a clean fixture.
+
 ## What the engine cannot do yet
 
 The gap between v1 and this, and therefore the build order. Struck rows are
@@ -238,6 +255,7 @@ the boolean form fails the cast rather than the call.
 | Run | Score | What it says |
 |---|---|---|
 | 2026-09-19, control (`load.txt`, scripted) | **90/90** artifacts and judgement | Every part of the job is expressible and lands correctly across all three applications. 217 operations, 37s. |
+| 2026-09-19, model-driven, `nemotron-3-ultra-550b:free` | **19/100** | Real Excel Table, four derived columns, a scorecard naming all 11 sites, four pivots, three named ranges. Then it ended the turn with no answer and no tool call, 45 calls in and well inside the budget. Word: 5 words. Deck: 0 slides. |
 | provider run | not yet run | |
 
 The control is run with `score-v3.ps1 -Control` and is deliberately scored

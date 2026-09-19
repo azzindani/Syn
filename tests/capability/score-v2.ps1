@@ -98,6 +98,7 @@ Check 'X2' 'derived year, month, hour and season columns, as formulas' 3 ($deriv
 # $script:Card, the rubric itself.
 $board = $null
 $boardCol = 1
+$bestScore = -1
 foreach ($nm in $sheets) {
     $ws = $wb.Worksheets.Item($nm)
     if ($ws.UsedRange.Rows.Count -gt 5000) { continue }
@@ -109,9 +110,21 @@ foreach ($nm in $sheets) {
             $t = ([string]$ws.Cells.Item($r, $c).Text).Trim()
             if ($t -and $gt.per_site.PSObject.Properties.Name -contains $t) { $hits++ }
         }
-        if ($hits -ge 8) { $board = $ws; $boardCol = $c; break }
+        # The best candidate, not the first. A run that abandons one attempt
+        # and builds the real scorecard on the next sheet used to be graded
+        # on the wreckage: "Scorecard" held eleven site names and one stray
+        # column, "Scorecard2" held the seven live formulas, and the first
+        # match won.
+        if ($hits -ge 8) {
+            $numeric = 0
+            for ($rr2 = 1; $rr2 -le $rr; $rr2++) {
+                for ($cc2 = $c + 1; $cc2 -le $cc; $cc2++) {
+                    if ($ws.Cells.Item($rr2, $cc2).Value2 -is [double]) { $numeric++ }
+                }
+            }
+            if ($numeric -gt $bestScore) { $bestScore = $numeric; $board = $ws; $boardCol = $c }
+        }
     }
-    if ($board) { break }
 }
 
 $metrics = @{}   # site -> array of the numeric cells to the right
@@ -194,8 +207,13 @@ Check 'X7' 'a monthly breakdown of >= 91 year-months, or a pivot' 2 ($monthRows 
 
 # X8: four seasons, each within 1%.
 $seasonHit = 0
+# Excel's own date grouping says "Fall" where the fixture says "Autumn".
+# The check is whether the four seasonal totals are right, not whether the
+# run picked the same dialect as the ground truth file.
+$seasonAlias = @{ 'Autumn' = @('Autumn', 'Fall'); 'Winter' = @('Winter'); 'Spring' = @('Spring'); 'Summer' = @('Summer') }
 foreach ($s in $gt.by_season.PSObject.Properties.Name) {
     $want = $gt.by_season.$s
+    $names = if ($seasonAlias.ContainsKey($s)) { $seasonAlias[$s] } else { @($s) }
     $found = $false
     foreach ($nm in $sheets) {
         $ws = $wb.Worksheets.Item($nm)
@@ -204,7 +222,7 @@ foreach ($s in $gt.by_season.PSObject.Properties.Name) {
         $cc = [Math]::Min($ws.UsedRange.Columns.Count, 12)
         for ($r = 1; $r -le $rr -and -not $found; $r++) {
             for ($c = 1; $c -le $cc; $c++) {
-                if (([string]$ws.Cells.Item($r, $c).Text).Trim() -eq $s) {
+                if ($names -contains ([string]$ws.Cells.Item($r, $c).Text).Trim()) {
                     for ($k = $c + 1; $k -le $cc; $k++) {
                         if (Near $ws.Cells.Item($r, $k).Value2 $want) { $found = $true; break }
                     }

@@ -1,0 +1,78 @@
+{
+  "sites": 11,
+  "grand_total_kwh": 9835517.9,
+  "top_site": "Bearspaw Water Treatment Plant",
+  "top_site_kwh": 3082637.6,
+  "distinct_year_months": 91,
+  "per_site": {
+    "Bearspaw Water Treatment Plant": {
+      "total": 3082637.6,
+      "rows": 24869,
+      "peak": 514.462
+    },
+    "Whitehorn Multi-Service Centre": {
+      "total": 2558802.5,
+      "rows": 27716,
+      "peak": 369.056
+    },
+    "Glenmore Water Treatment Plant": {
+      "total": 1551177.7,
+      "rows": 25920,
+      "peak": 239.967
+    },
+    "Southland Leisure Centre": {
+      "total": 1147493.6,
+      "rows": 31590,
+      "peak": 123.616
+    },
+    "City of Calgary North Corporate Warehouse": {
+      "total": 768964.6,
+      "rows": 27092,
+      "peak": 102.863
+    },
+    "Hillhurst Sunnyside Community Association": {
+      "total": 186441.3,
+      "rows": 23467,
+      "peak": 28.999
+    },
+    "Manchester Building M": {
+      "total": 183243.2,
+      "rows": 22533,
+      "peak": 34.12
+    },
+    "CFD Firehall #7": {
+      "total": 170080.9,
+      "rows": 22659,
+      "peak": 29.21
+    },
+    "Calgary Fire Hall Headquarters": {
+      "total": 110211.6,
+      "rows": 25637,
+      "peak": 16.597
+    },
+    "Richmond - Knob Hill Community Hall": {
+      "total": 75130.3,
+      "rows": 26623,
+      "peak": 9.276
+    },
+    "Telus Spark": {
+      "total": 1334.6,
+      "rows": 317,
+      "peak": 23.875
+    }
+  },
+  "by_calendar_month": {
+    "01": 198083.8,
+    "02": 315856.1,
+    "03": 891937.1,
+    "04": 1140004.6,
+    "05": 1299302.4,
+    "06": 1335220.6,
+    "07": 1444872.0,
+    "08": 1259929.5,
+    "09": 921700.1,
+    "10": 693316.8,
+    "11": 241754.1,
+    "12": 93540.7
+  }
+}

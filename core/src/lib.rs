@@ -3,6 +3,7 @@
 //! schemas enforced by the type system instead of runtime checks.
 
 pub mod acp;
+pub mod agent;
 pub mod bus;
 pub mod config;
 pub mod guard;
@@ -19,8 +20,10 @@ pub mod router;
 pub mod runner;
 pub mod security;
 pub mod sessions;
+pub mod shell;
 pub mod snapshots;
 pub mod stream;
+pub mod tools;
 pub mod vfs;
 
 pub use bus::Relay;

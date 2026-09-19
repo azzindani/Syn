@@ -75,6 +75,58 @@ pub fn stream_body(route: Route, system: &str, user: &str) -> String {
     stream_body_with(model_id(route.model), route, system, user)
 }
 
+/// One turn in the conversation the agent loop replays each step.
+///
+/// `AssistantCalls` carries the provider's own `tool_calls` array verbatim:
+/// the chat protocol rejects a tool result unless the assistant turn that
+/// requested it is echoed back exactly, so re-serialising a parsed form
+/// would risk a mismatch the server refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Msg {
+    System(String),
+    User(String),
+    Assistant(String),
+    AssistantCalls(String),
+    Tool { id: String, content: String },
+}
+
+impl Msg {
+    fn render(&self) -> String {
+        match self {
+            Msg::System(c) => format!(r#"{{"role":"system","content":"{}"}}"#, escape_json(c)),
+            Msg::User(c) => format!(r#"{{"role":"user","content":"{}"}}"#, escape_json(c)),
+            Msg::Assistant(c) => format!(r#"{{"role":"assistant","content":"{}"}}"#, escape_json(c)),
+            Msg::AssistantCalls(raw) => {
+                format!(r#"{{"role":"assistant","content":null,"tool_calls":{raw}}}"#)
+            }
+            Msg::Tool { id, content } => format!(
+                r#"{{"role":"tool","tool_call_id":"{}","content":"{}"}}"#,
+                escape_json(id),
+                escape_json(content)
+            ),
+        }
+    }
+}
+
+/// Full chat-completions body for the agent loop: whole message history plus
+/// the tool surface. `tools` is the array text from `tools::tools_json`.
+pub fn chat_body(model: &str, route: Route, msgs: &[Msg], tools: Option<&str>) -> String {
+    let rendered: Vec<String> = msgs.iter().map(Msg::render).collect();
+    let mut b = format!(
+        r#"{{"model":"{}","reasoning":{{"effort":"{}"}},"messages":[{}]"#,
+        escape_json(model),
+        effort_str(route.effort),
+        rendered.join(",")
+    );
+    if let Some(t) = tools {
+        // "auto": the model may answer in prose instead of calling a tool,
+        // which is how a turn ends.
+        b.push_str(&format!(r#","tools":{t},"tool_choice":"auto""#));
+    }
+    b.push('}');
+    b
+}
+
 /// Unescape the JSON string subset the API emits in deltas.
 fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

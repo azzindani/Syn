@@ -13,8 +13,13 @@
 //!   live <handle>           route that handle's ops to the open document
 //!   lread <h> <sel>         queued read of a live handle
 //!                           (once `live`, plain `write` also hits the document)
+//!   shellallow <p...>       programs the shell hand may run (empty = none)
+//!   task <class>            router slot `do` uses (skim|routine|code|deep|vision)
+//!   do <goal>               run the agent loop until it answers or stops
+//!   approve | deny [why]    answer a held shell confirmation
 //!   quit
 
+use core::agent::{Agent, Brain, CurlBrain, Step};
 use core::bus::{FileContent, FileKind, OpenFile};
 use core::config;
 use core::hand::Hand;
@@ -23,6 +28,7 @@ use core::protocol::new_handle;
 use core::provider;
 use core::router::{TaskKind, route};
 use core::runner::{Job, Runner};
+use core::shell::ShellPolicy;
 use core::Relay;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -51,6 +57,36 @@ fn blank_ppt() -> OpenFile {
     }
 }
 
+/// Drive the loop until it finishes, stops, or stops for a human.
+fn drive(
+    a: &mut Agent,
+    brain: &mut dyn Brain,
+    relay: &mut core::Relay,
+    runner: &mut Runner,
+    sp: &ShellPolicy,
+) {
+    loop {
+        match a.step(brain, relay, runner, sp) {
+            Step::Ran { tool, detail } => println!("STEP {tool}: {detail}"),
+            Step::Refused(why) => println!("REFUSED {why}"),
+            Step::Answered(text) => {
+                println!("ANSWER {}", text.replace('\n', " "));
+                break;
+            }
+            Step::Stopped(why) => {
+                println!("STOPPED {why}");
+                break;
+            }
+            Step::NeedsApproval(p) => {
+                println!("CONFIRM {}", p.preview);
+                println!("        reason given: {}", p.why);
+                println!("        respond with `approve` or `deny <reason>`");
+                break;
+            }
+        }
+    }
+}
+
 fn parse_grid(s: &str) -> Vec<Vec<String>> {
     s.split(';').map(|r| r.split(',').map(str::to_string).collect()).collect()
 }
@@ -69,6 +105,13 @@ fn main() {
     let stdin = std::io::stdin();
     let mut buf: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let mut journal_path: Option<String> = None;
+    // The agent loop and the one hand that leaves the documents behind.
+    // The allowlist starts empty: nothing may run until it is named.
+    let mut agent: Option<Agent> = None;
+    let mut shell_policy = ShellPolicy::default();
+    // Which router slot `do` runs on. Switchable because free-tier models
+    // rate-limit independently: a 429 on one slot is not a reason to stop.
+    let mut task = TaskKind::Routine;
     // Every live line since process start: enabling the journal backfills
     // this so a replay is always self-contained (replay/session lines kept,
     // nested replay lines skipped).
@@ -243,6 +286,63 @@ fn main() {
                 );
             }
             "config" => println!("RECEIPT config {}", config::describe()),
+            "task" => {
+                task = match rest.trim() {
+                    "skim" => TaskKind::Skim,
+                    "routine" => TaskKind::Routine,
+                    "code" => TaskKind::Code,
+                    "deep" => TaskKind::DeepReasoning,
+                    "vision" => TaskKind::VisionFallback,
+                    other => {
+                        println!("ERROR task: unknown class {other:?} (skim|routine|code|deep|vision)");
+                        continue;
+                    }
+                };
+                let r = route(task);
+                println!("RECEIPT task={:?} model={}", task, config::model_id(r.model));
+            }
+            "shellallow" => {
+                let progs: Vec<&str> = rest.split_whitespace().collect();
+                shell_policy = ShellPolicy::new(&progs);
+                println!("RECEIPT shell-allowlist={:?}", shell_policy.allowed());
+            }
+            "do" => {
+                if rest.trim().is_empty() {
+                    println!("ERROR usage: do <goal>");
+                    continue;
+                }
+                if !config::has_api_key() {
+                    println!("ERROR do: env {} not set (see .env.example)", config::API_KEY_ENV);
+                    continue;
+                }
+                let r = route(task);
+                let model = config::model_id(r.model);
+                let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                let mut a = Agent::new(&session, rest.trim(), &model, r);
+                println!("RECEIPT do model={model} max_steps={}", a.max_steps);
+                drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                agent = Some(a);
+            }
+            "approve" | "deny" => {
+                let Some(a) = agent.as_mut() else {
+                    println!("ERROR {cmd}: no run in progress");
+                    continue;
+                };
+                let outcome = if cmd == "approve" {
+                    a.approve(&mut relay, &shell_policy)
+                } else {
+                    a.deny(&mut relay, rest.trim())
+                };
+                match &outcome {
+                    Step::Ran { tool, detail } => println!("STEP {tool}: {detail}"),
+                    Step::Refused(why) => println!("REFUSED {why}"),
+                    other => println!("RECEIPT {other:?}"),
+                }
+                if !matches!(outcome, Step::Stopped(_)) {
+                    let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                    drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                }
+            }
             "hand" => {
                 let pipe = rest.trim();
                 match Hand::connect(pipe) {

@@ -14,9 +14,17 @@ software hands (Office first) in one live session, any model via OpenRouter.
   - `provider` — OpenRouter bodies, SSE streaming parse, Picker + budget.
   - `mcpgate` — MCP gateway: 6 ops as MCP tools over stdio.
   - `router/queue/runner/paths/stream/snapshots/acp/vfs/ooxml` — as before.
+  - `agent` — the loop: a goal becomes tool calls, one per step, each
+    dispatched through `Runner` so it meets every gate. `Brain` is a seam,
+    so the whole loop is tested offline.
+  - `tools` — the 7 tools the model may call (the 6 ops + `shell`), closed
+    schemas, tool-call parsing, and a fingerprint of the surface.
+  - `shell` — run ONE program: allowlisted, no shell metacharacters, no
+    paths, deadline, capped output returned fenced as untrusted.
   - `hand` — `office-rpc/1` transport to a live sidecar (the brain's
     connection to the hands; generic over the stream, so testable anywhere).
-  - bins: `cli` (REPL, incl. `hand`/`lread`/`lwrite`), `mcpgate` (stdio bridge).
+  - bins: `cli` (REPL: `do`/`approve`/`deny`, `hand`/`live`, `shellallow`),
+    `mcpgate` (stdio bridge).
 - `widget/index.html` — chat + live feed + model picker + budget + kill
   (Tauri shell in `widget/src-tauri`; UI runs standalone in demo mode).
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
@@ -44,7 +52,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
 ## Run here (Linux POC)
 ```
 python3 -m unittest discover -s tests   # 23 green
-cd core && cargo test                      # 123 green
+cd core && cargo test                      # 178 green
 cargo run --example demo && ./target/release/cli < ../tests/e2e_script.txt
 ./target/release/cli < ../tests/e2e_safety.txt   # allow/kill/journal/replay/sessions
 printf '{"tool":"list"}\n' | cargo run -q --bin mcpgate
@@ -63,4 +71,29 @@ smoke test and by `cli.exe` itself over the pipe (`hand` / `lread` / `lwrite`). 
 the Tauri bundle and a Rust-side pipe client are still unproven — status and
 the COM lessons behind the fixes are in `docs/runbook-windows.md`.
 
-Copy `.env.example` to `.env` and add a key to enable `send`.
+Copy `.env.example` to `.env` and add a key to enable `send` and `do`.
+
+## Drive it from a terminal
+
+```
+cli.exe
+  attach excel plan.xlsx Sheet1
+  shellallow hostname            # empty by default: nothing may run
+  task code                      # which router slot to think with
+  do Read the sheet and write its shape into the report.
+```
+
+The loop takes one tool call per step, dispatches it through the same
+`Runner` as a hand-typed op — kill switch, app allowlist, doom-loop gate,
+registry check, event feed — and hands the result back fenced as untrusted
+data. A `shell` call stops for a human:
+
+```
+CONFIRM hostname
+        reason given: To get the machine name
+        respond with `approve` or `deny <reason>`
+```
+
+A program that is not on the allowlist is refused *before* the prompt, so a
+human is never asked to approve something that could not run. Denials are
+reported to the model so it stops asking rather than looping.

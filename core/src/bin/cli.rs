@@ -42,6 +42,19 @@ use core::Relay;
 use std::collections::HashMap;
 use std::io::BufRead;
 
+/// Print, and mirror to this run's live log so a console in another
+/// process can show the run happening. Every line the CLI emits goes
+/// through here: a progress view that shows some of the output is worse
+/// than one that shows none, because it looks complete.
+macro_rules! pr {
+    () => {{ println!(); core::live::append(""); }};
+    ($($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        println!("{line}");
+        core::live::append(&line);
+    }};
+}
+
 fn blank_excel() -> OpenFile {
     OpenFile {
         kind: FileKind::Excel,
@@ -62,9 +75,9 @@ fn blank_excel() -> OpenFile {
 fn run_op(runner: &mut Runner, relay: &mut Relay, handle: &str, what: &str, call: Call) {
     let id = runner.submit(Job { handle: handle.into(), summary: format!("cli-{what}"), call });
     match runner.pump(relay) {
-        Ok(Some(o)) => println!("RECEIPT {id} {what} {o:?}"),
-        Ok(None) => println!("ERROR {id} queue not running"),
-        Err(e) => println!("ERROR {id} {e}"),
+        Ok(Some(o)) => pr!("RECEIPT {id} {what} {o:?}"),
+        Ok(None) => pr!("ERROR {id} queue not running"),
+        Err(e) => pr!("ERROR {id} {e}"),
     }
 }
 
@@ -119,7 +132,7 @@ fn save_chat(id: &str, a: &Agent) {
         msgs,
     };
     if let Err(e) = chats::save(&chat) {
-        println!("ERROR chat save {e}");
+        pr!("ERROR chat save {e}");
     }
 }
 
@@ -134,20 +147,20 @@ fn drive(
 ) -> Option<String> {
     loop {
         match a.step(brain, relay, runner, sp) {
-            Step::Ran { tool, detail } => println!("STEP {tool}: {detail}"),
-            Step::Refused(why) => println!("REFUSED {why}"),
+            Step::Ran { tool, detail } => pr!("STEP {tool}: {detail}"),
+            Step::Refused(why) => pr!("REFUSED {why}"),
             Step::Answered(text) => {
-                println!("ANSWER {}", text.replace('\n', " "));
+                pr!("ANSWER {}", text.replace('\n', " "));
                 return None;
             }
             Step::Stopped(why) => {
-                println!("STOPPED {why}");
+                pr!("STOPPED {why}");
                 return Some(why);
             }
             Step::NeedsApproval(p) => {
-                println!("CONFIRM {}", p.preview);
-                println!("        reason given: {}", p.why);
-                println!("        respond with `approve` or `deny <reason>`");
+                pr!("CONFIRM {}", p.preview);
+                pr!("        reason given: {}", p.why);
+                pr!("        respond with `approve` or `deny <reason>`");
                 return None;
             }
         }
@@ -162,10 +175,11 @@ fn word_style(tok: &str) -> String {
 }
 
 fn main() {
+    core::live::begin();
     // Deployment config before anything else: .env seeds the process env,
     // a real shell export always wins. Key names only are printed.
     if let Some(l) = config::load_env(&std::env::current_dir().unwrap_or_default()) {
-        println!("RECEIPT env file={} applied={} kept={}", l.path.display(), l.applied.join(","), l.skipped.join(","));
+        pr!("RECEIPT env file={} applied={} kept={}", l.path.display(), l.applied.join(","), l.skipped.join(","));
     }
     let mut relay = Relay::new();
     let mut session = "cli".to_string();
@@ -226,12 +240,12 @@ fn main() {
             // Not a no-op: the console frames one run of CLI output by
             // sending `mark <nonce>` and reading until the echo comes back.
             // Marking a handle live is `live`.
-            "mark" => println!("RECEIPT mark={}", rest.trim()),
+            "mark" => pr!("RECEIPT mark={}", rest.trim()),
             "session" => {
                 session = rest.to_string();
                 relay.handshake(&session, "cli");
                 runner = Runner::new(&session);
-                println!("RECEIPT session={session}");
+                pr!("RECEIPT session={session}");
             }
             "attach" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
@@ -241,7 +255,7 @@ fn main() {
                 // The file component is a name here, not a path: the hand
                 // finds the open document by it.
                 if let Some(bad) = a.iter().skip(1).find(|p| p.contains(':')) {
-                    println!(
+                    pr!(
                         "ERROR attach {bad:?} contains ':', which is what separates a handle: name the open document, not its path"
                     );
                     continue;
@@ -251,12 +265,12 @@ fn main() {
                     ["word", f] => (blank_word(), new_handle("word", f, "body")),
                     ["ppt", f] => (blank_ppt(), new_handle("ppt", f, "deck")),
                     _ => {
-                        println!("ERROR usage: attach excel <file> <sheet> | attach word <file> | attach ppt <file>");
+                        pr!("ERROR usage: attach excel <file> <sheet> | attach word <file> | attach ppt <file>");
                         continue;
                     }
                 };
                 relay.attach(&session, kind.clone(), file);
-                println!("RECEIPT attached={kind}");
+                pr!("RECEIPT attached={kind}");
             }
             // A sentinel so a non-interactive driver knows where one
             // command's output ends. Commands print a variable number of
@@ -266,31 +280,31 @@ fn main() {
             "slots" => {
                 for m in core::router::Model::ALL {
                     let r = core::router::route_of(m);
-                    println!(
+                    pr!(
                         "SLOT {{\"slot\":\"{m:?}\",\"task\":\"{}\",\"model\":\"{}\",\"rank\":{}}}",
                         core::router::task_name(core::router::task_of(m)),
                         config::model_id(m),
                         r.cost_rank
                     );
                 }
-                println!("RECEIPT slots current={}", core::router::task_name(task));
+                pr!("RECEIPT slots current={}", core::router::task_name(task));
             }
             "wiring" => {
                 for app in ["excel", "word", "ppt", "uia"] {
                     if let Some(p) = config::pipe_for(app) {
-                        println!("WIRE {{\"kind\":\"pipe\",\"app\":\"{app}\",\"at\":\"{p}\"}}");
+                        pr!("WIRE {{\"kind\":\"pipe\",\"app\":\"{app}\",\"at\":\"{p}\"}}");
                     }
                 }
                 if let Some(a) = config::cdp_addr() {
-                    println!("WIRE {{\"kind\":\"cdp\",\"app\":\"web\",\"at\":\"{a}\"}}");
+                    pr!("WIRE {{\"kind\":\"cdp\",\"app\":\"web\",\"at\":\"{a}\"}}");
                 }
-                println!("RECEIPT wiring");
+                pr!("RECEIPT wiring");
             }
-            "registry" => println!("RECEIPT registry={:?}", relay.registry(&session).unwrap_or_default()),
+            "registry" => pr!("RECEIPT registry={:?}", relay.registry(&session).unwrap_or_default()),
             "read" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: read <handle> <selector>");
+                    pr!("ERROR usage: read <handle> <selector>");
                     continue;
                 }
                 run_op(&mut runner, &mut relay, a[0], "read", Call::Read(ReadArgs { selector: a[1].into() }));
@@ -298,7 +312,7 @@ fn main() {
             "write" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: write <handle> <selector> <v11,v12;r21>");
+                    pr!("ERROR usage: write <handle> <selector> <v11,v12;r21>");
                     continue;
                 }
                 let call = Call::Write(WriteArgs { selector: a[1].into(), values: core::tools::grid(a[2]) });
@@ -309,7 +323,7 @@ fn main() {
             "para" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: para <handle> <style|.> <text>   (style: Heading_1, Title, Quote)");
+                    pr!("ERROR usage: para <handle> <style|.> <text>   (style: Heading_1, Title, Quote)");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::InsertParagraph {
@@ -321,7 +335,7 @@ fn main() {
             "wtable" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: wtable <handle> <style|.> <cells by | rows by ;>");
+                    pr!("ERROR usage: wtable <handle> <style|.> <cells by | rows by ;>");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::InsertTable {
@@ -334,7 +348,7 @@ fn main() {
             "pagebreak" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.is_empty() || a[0].is_empty() {
-                    println!("ERROR usage: pagebreak <handle> [page|section]");
+                    pr!("ERROR usage: pagebreak <handle> [page|section]");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::PageBreak {
@@ -345,7 +359,7 @@ fn main() {
             "contents" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.is_empty() || a[0].is_empty() {
-                    println!("ERROR usage: contents <handle> [heading]");
+                    pr!("ERROR usage: contents <handle> [heading]");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::Contents {
@@ -356,7 +370,7 @@ fn main() {
             "pagenumbers" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.is_empty() || a[0].is_empty() {
-                    println!("ERROR usage: pagenumbers <handle> [footer text]");
+                    pr!("ERROR usage: pagenumbers <handle> [footer text]");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::PageNumbers {
@@ -367,7 +381,7 @@ fn main() {
             "picture" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: picture <handle> <path> [width in points]");
+                    pr!("ERROR usage: picture <handle> <path> [width in points]");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::Picture {
@@ -385,7 +399,7 @@ fn main() {
             "slide" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!(
+                    pr!(
                         "ERROR usage: slide <handle> <layout|.> <title>[|b1|b2]   \
                          (layout: title, titleContent, sectionHeader, twoContent, titleOnly, blank)"
                     );
@@ -407,7 +421,7 @@ fn main() {
             "sfigure" => {
                 let a: Vec<&str> = rest.splitn(4, ' ').collect();
                 if a.len() < 4 {
-                    println!("ERROR usage: sfigure <handle> <s3> <left,top,width,height|.> <path>");
+                    pr!("ERROR usage: sfigure <handle> <s3> <left,top,width,height|.> <path>");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::Picture {
@@ -420,7 +434,7 @@ fn main() {
             "stable" => {
                 let a: Vec<&str> = rest.splitn(4, ' ').collect();
                 if a.len() < 4 {
-                    println!("ERROR usage: stable <handle> <s3> <left,top,width,height|.> <cells by | rows by ;>");
+                    pr!("ERROR usage: stable <handle> <s3> <left,top,width,height|.> <cells by | rows by ;>");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::InsertTable {
@@ -433,7 +447,7 @@ fn main() {
             "xfer" => {
                 let a: Vec<&str> = rest.splitn(4, ' ').collect();
                 if a.len() < 4 {
-                    println!("ERROR usage: xfer <src> <selector> <dst> <title>");
+                    pr!("ERROR usage: xfer <src> <selector> <dst> <title>");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::Transfer { from: a[0].into(), selector: a[1].into(), title: a[3].into() });
@@ -442,7 +456,7 @@ fn main() {
             "sheet" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: sheet <handle> <name>");
+                    pr!("ERROR usage: sheet <handle> <name>");
                     continue;
                 }
                 let call = Call::Struct(StructArgs::AddSheet { name: a[1].trim().into() });
@@ -455,7 +469,7 @@ fn main() {
                     [h, src, rows, values, at] => (*h, *src, *rows, *values, *at, ""),
                     [h, src, rows, values, at, cols] => (*h, *src, *rows, *values, *at, *cols),
                     _ => {
-                        println!("ERROR usage: pivot <handle> <source> <rowField> <valueField> <at> [colField]");
+                        pr!("ERROR usage: pivot <handle> <source> <rowField> <valueField> <at> [colField]");
                         continue;
                     }
                 };
@@ -471,7 +485,7 @@ fn main() {
             "table" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
                 let [h, src, name] = a.as_slice() else {
-                    println!("ERROR usage: table <handle> <source> <name>");
+                    pr!("ERROR usage: table <handle> <source> <name>");
                     continue;
                 };
                 let call = Call::Struct(StructArgs::Table { source: (*src).into(), name: (*name).into() });
@@ -480,7 +494,7 @@ fn main() {
             "name" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
                 let [h, name, at] = a.as_slice() else {
-                    println!("ERROR usage: name <handle> <name> <target>");
+                    pr!("ERROR usage: name <handle> <name> <target>");
                     continue;
                 };
                 let call = Call::Struct(StructArgs::Name { name: (*name).into(), at: (*at).into() });
@@ -489,7 +503,7 @@ fn main() {
             "conditional" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
                 let [h, sel, rule] = a.as_slice() else {
-                    println!("ERROR usage: conditional <handle> <selector> <dataBar|colorScale|iconSet|top10|greaterThan=N>");
+                    pr!("ERROR usage: conditional <handle> <selector> <dataBar|colorScale|iconSet|top10|greaterThan=N>");
                     continue;
                 };
                 let call = Call::Struct(StructArgs::Conditional { selector: (*sel).into(), rule: (*rule).into() });
@@ -501,7 +515,7 @@ fn main() {
                     [h, field, at] => (*h, *field, *at, ""),
                     [h, field, at, pivot] => (*h, *field, *at, *pivot),
                     _ => {
-                        println!("ERROR usage: slicer <handle> <field> <at> [pivotName]");
+                        pr!("ERROR usage: slicer <handle> <field> <at> [pivotName]");
                         continue;
                     }
                 };
@@ -517,7 +531,7 @@ fn main() {
             "chart" => {
                 let a: Vec<&str> = rest.splitn(6, ' ').collect();
                 if a.len() < 4 {
-                    println!(
+                    pr!(
                         "ERROR usage: chart <handle> <line|bar|column|pie> <source> <at> [style|.] [title]"
                     );
                     continue;
@@ -543,7 +557,7 @@ fn main() {
             "format" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: format <handle> <selector> <k=v;k=v>  e.g. bold=1;numberFormat=#,##0");
+                    pr!("ERROR usage: format <handle> <selector> <k=v;k=v>  e.g. bold=1;numberFormat=#,##0");
                     continue;
                 }
                 // Semicolon, not comma: a number format is "#,##0" and
@@ -553,7 +567,7 @@ fn main() {
                     match kv.split_once('=') {
                         Some((k, v)) => style.push((k.to_string(), v.to_string())),
                         None => {
-                            println!("ERROR bad style pair {kv:?}, want k=v");
+                            pr!("ERROR bad style pair {kv:?}, want k=v");
                             continue;
                         }
                     }
@@ -563,9 +577,9 @@ fn main() {
             }
             "events" => {
                 for e in relay.events(&session).unwrap_or_default() {
-                    println!("EVENT {} {} {}", e.t, e.handle, e.detail);
+                    pr!("EVENT {} {} {}", e.t, e.handle, e.detail);
                 }
-                println!("RECEIPT events-end");
+                pr!("RECEIPT events-end");
             }
             "route" => {
                 let task = match *rest {
@@ -576,7 +590,7 @@ fn main() {
                     _ => TaskKind::VisionFallback,
                 };
                 let r = route(task);
-                println!(
+                pr!(
                     "RECEIPT route model={:?} id={} effort={:?} rank={}",
                     r.model,
                     config::model_id(r.model),
@@ -584,7 +598,7 @@ fn main() {
                     r.cost_rank
                 );
             }
-            "config" => println!("RECEIPT config {}", config::describe()),
+            "config" => pr!("RECEIPT config {}", config::describe()),
             "task" => {
                 // One naming table, in the router. A second copy here is
                 // how a command and a picker end up disagreeing about what
@@ -592,32 +606,32 @@ fn main() {
                 task = match core::router::task_named(rest.trim()) {
                     Some(t) => t,
                     None => {
-                        println!("ERROR task: unknown class {:?} (skim|routine|code|deep|vision)", rest.trim());
+                        pr!("ERROR task: unknown class {:?} (skim|routine|code|deep|vision)", rest.trim());
                         continue;
                     }
                 };
                 let r = route(task);
-                println!("RECEIPT task={:?} model={}", task, config::model_id(r.model));
+                pr!("RECEIPT task={:?} model={}", task, config::model_id(r.model));
             }
             "shellallow" => {
                 let progs: Vec<&str> = rest.split_whitespace().collect();
                 shell_policy = ShellPolicy::new(&progs);
-                println!("RECEIPT shell-allowlist={:?}", shell_policy.allowed());
+                pr!("RECEIPT shell-allowlist={:?}", shell_policy.allowed());
             }
             "do" => {
                 if rest.trim().is_empty() {
-                    println!("ERROR usage: do <goal>");
+                    pr!("ERROR usage: do <goal>");
                     continue;
                 }
                 if !config::has_api_key() {
-                    println!("ERROR do: env {} not set (see .env.example)", config::API_KEY_ENV);
+                    pr!("ERROR do: env {} not set (see .env.example)", config::API_KEY_ENV);
                     continue;
                 }
                 let r = route(task);
                 let model = config::model_id(r.model);
                 let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
-                println!("RECEIPT do model={model} max_steps={}", a.max_steps);
+                pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 agent = Some(a);
             }
@@ -627,11 +641,11 @@ fn main() {
                 // is not a chat, it is a series of strangers.
                 let text = rest.trim();
                 if text.is_empty() {
-                    println!("ERROR usage: say <text>");
+                    pr!("ERROR usage: say <text>");
                     continue;
                 }
                 if !config::has_api_key() {
-                    println!("ERROR say: env {} not set (see .env.example)", config::API_KEY_ENV);
+                    pr!("ERROR say: env {} not set (see .env.example)", config::API_KEY_ENV);
                     continue;
                 }
                 let r = route(task);
@@ -639,7 +653,7 @@ fn main() {
                 match agent.as_mut() {
                     Some(a) => {
                         if let Err(e) = a.follow_up(text) {
-                            println!("ERROR say {e}");
+                            pr!("ERROR say {e}");
                             continue;
                         }
                         // Apply the current slot every turn, so switching
@@ -662,7 +676,7 @@ fn main() {
                     })
                     .collect();
                 a.show_registry(&open);
-                println!("RECEIPT say model={model} open={}", open.len());
+                pr!("RECEIPT say model={model} open={}", open.len());
                 let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 // Free-tier slots rate-limit independently, so a 429 on one
@@ -674,14 +688,14 @@ fn main() {
                     if !provider::worth_another_model(why) {
                         break;
                     }
-                    println!("RECEIPT retry model={id}");
+                    pr!("RECEIPT retry model={id}");
                     a.retarget(&id, core::router::route_of(m));
                     stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 if let Some(why) = &stopped
                     && provider::worth_another_model(why)
                 {
-                    println!("STOPPED every model slot is rate limited right now: wait a moment and send again");
+                    pr!("STOPPED every model slot is rate limited right now: wait a moment and send again");
                 }
                 // Into the transcript before saving, or the conversation
                 // records the attempt and not why it ended.
@@ -696,17 +710,17 @@ fn main() {
                     "new" => {
                         chat_id = chats::new_id();
                         agent = None;
-                        println!("RECEIPT chat={chat_id}");
+                        pr!("RECEIPT chat={chat_id}");
                     }
                     "list" => {
                         for m in chats::list() {
-                            println!("CHAT {}", chats::meta_json(&m));
+                            pr!("CHAT {}", chats::meta_json(&m));
                         }
-                        println!("RECEIPT chat current={chat_id}");
+                        pr!("RECEIPT chat current={chat_id}");
                     }
                     "open" => {
                         let Some(id) = a.next() else {
-                            println!("ERROR usage: chat open <id>");
+                            pr!("ERROR usage: chat open <id>");
                             continue;
                         };
                         match chats::load(id) {
@@ -714,14 +728,14 @@ fn main() {
                                 let r = route(task);
                                 agent = Some(Agent::resume(&session, c.msgs, &config::model_id(r.model), r));
                                 chat_id = c.meta.id;
-                                println!("RECEIPT chat={chat_id} title={:?}", c.meta.title);
+                                pr!("RECEIPT chat={chat_id} title={:?}", c.meta.title);
                             }
-                            Err(e) => println!("ERROR chat open {e}"),
+                            Err(e) => pr!("ERROR chat open {e}"),
                         }
                     }
                     "del" => {
                         let Some(id) = a.next() else {
-                            println!("ERROR usage: chat del <id>");
+                            pr!("ERROR usage: chat del <id>");
                             continue;
                         };
                         match chats::delete(id) {
@@ -730,9 +744,9 @@ fn main() {
                                     chat_id = chats::new_id();
                                     agent = None;
                                 }
-                                println!("RECEIPT deleted={id}");
+                                pr!("RECEIPT deleted={id}");
                             }
-                            Err(e) => println!("ERROR chat del {e}"),
+                            Err(e) => pr!("ERROR chat del {e}"),
                         }
                     }
                     "msgs" => {
@@ -741,23 +755,23 @@ fn main() {
                         // has to infer state from receipt text.
                         if let Some(ag) = agent.as_ref() {
                             for m in ag.transcript() {
-                                println!("MSG {}", chats::msg_json(m));
+                                pr!("MSG {}", chats::msg_json(m));
                             }
                             if let Some(p) = ag.pending() {
-                                println!(
+                                pr!(
                                     "PENDING {{\"program\":{:?},\"preview\":{:?},\"why\":{:?}}}",
                                     p.program, p.preview, p.why
                                 );
                             }
                         }
-                        println!("RECEIPT chat={chat_id}");
+                        pr!("RECEIPT chat={chat_id}");
                     }
-                    other => println!("ERROR chat: unknown {other:?}, want new|list|open|del|msgs"),
+                    other => pr!("ERROR chat: unknown {other:?}, want new|list|open|del|msgs"),
                 }
             }
             "approve" | "deny" => {
                 let Some(a) = agent.as_mut() else {
-                    println!("ERROR {cmd}: no run in progress");
+                    pr!("ERROR {cmd}: no run in progress");
                     continue;
                 };
                 let outcome = if cmd == "approve" {
@@ -766,9 +780,9 @@ fn main() {
                     a.deny(&mut relay, rest.trim())
                 };
                 match &outcome {
-                    Step::Ran { tool, detail } => println!("STEP {tool}: {detail}"),
-                    Step::Refused(why) => println!("REFUSED {why}"),
-                    other => println!("RECEIPT {other:?}"),
+                    Step::Ran { tool, detail } => pr!("STEP {tool}: {detail}"),
+                    Step::Refused(why) => pr!("REFUSED {why}"),
+                    other => pr!("RECEIPT {other:?}"),
                 }
                 if !matches!(outcome, Step::Stopped(_)) {
                     let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
@@ -782,7 +796,7 @@ fn main() {
                 // claims. Several hands can be attached at once.
                 let mut parts = rest.split_whitespace();
                 let Some(pipe) = parts.next() else {
-                    println!("ERROR usage: hand <pipe> [app...]");
+                    pr!("ERROR usage: hand <pipe> [app...]");
                     continue;
                 };
                 let apps: Vec<String> = parts.map(str::to_string).collect();
@@ -790,9 +804,9 @@ fn main() {
                     Ok(h) => {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         runner.attach_hand_as(pipe, apps, Box::new(h));
-                        println!("RECEIPT hand={pipe} claims={claims}");
+                        pr!("RECEIPT hand={pipe} claims={claims}");
                     }
-                    Err(e) => println!("ERROR hand {e}"),
+                    Err(e) => pr!("ERROR hand {e}"),
                 }
             }
             "cdp" => {
@@ -800,7 +814,7 @@ fn main() {
                 // Electron app started with --remote-debugging-port.
                 let mut parts = rest.split_whitespace();
                 let Some(addr) = parts.next() else {
-                    println!("ERROR usage: cdp <host:port> [app...]");
+                    pr!("ERROR usage: cdp <host:port> [app...]");
                     continue;
                 };
                 let apps: Vec<String> = parts.map(str::to_string).collect();
@@ -815,15 +829,15 @@ fn main() {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         let name = format!("cdp-{addr}");
                         runner.attach_hand_as(&name, apps, Box::new(c));
-                        println!("RECEIPT hand={name} claims={claims} pages={open:?}");
+                        pr!("RECEIPT hand={name} claims={claims} pages={open:?}");
                     }
-                    Err(e) => println!("ERROR cdp {e}"),
+                    Err(e) => pr!("ERROR cdp {e}"),
                 }
             }
             "invoke" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: invoke <handle> <selector> [invoke|toggle|expand|collapse|select|focus]");
+                    pr!("ERROR usage: invoke <handle> <selector> [invoke|toggle|expand|collapse|select|focus]");
                     continue;
                 }
                 let action = a.get(2).unwrap_or(&"invoke").to_string();
@@ -841,36 +855,36 @@ fn main() {
                     [app, m] => (*app, *m, ":doc"),
                     [app, m, u] => (*app, *m, *u),
                     _ => {
-                        println!("ERROR usage: page|win <app> <title-or-url-match> [unit]");
+                        pr!("ERROR usage: page|win <app> <title-or-url-match> [unit]");
                         continue;
                     }
                 };
                 let h = new_handle(app, m, unit);
                 relay.attach(&session, h.clone(), blank_word());
-                println!("RECEIPT attached={h}");
+                pr!("RECEIPT attached={h}");
             }
             "hands" => {
                 if !runner.has_hand() {
-                    println!("RECEIPT hands none");
+                    pr!("RECEIPT hands none");
                 }
                 for (name, apps) in runner.hands() {
                     let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
-                    println!("HAND {name} claims={claims}");
+                    pr!("HAND {name} claims={claims}");
                 }
             }
             "live" => {
                 let h = rest.trim();
                 if !relay.registry(&session).unwrap_or_default().contains(&h.to_string()) {
-                    println!("ERROR live {h} is not in the registry: attach it first");
+                    pr!("ERROR live {h} is not in the registry: attach it first");
                     continue;
                 }
                 if !runner.has_hand() {
-                    println!("ERROR live no hand: run `hand <pipe>` first");
+                    pr!("ERROR live no hand: run `hand <pipe>` first");
                     continue;
                 }
                 match runner.mark_live(h) {
-                    Ok(name) => println!("RECEIPT live={h} hand={name} (ops on this handle now reach the open document)"),
-                    Err(e) => println!("ERROR live {e}"),
+                    Ok(name) => pr!("RECEIPT live={h} hand={name} (ops on this handle now reach the open document)"),
+                    Err(e) => pr!("ERROR live {e}"),
                 }
             }
             "lread" => {
@@ -879,7 +893,7 @@ fn main() {
                 // shows up in the event feed.
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: lread <handle> <selector>");
+                    pr!("ERROR usage: lread <handle> <selector>");
                     continue;
                 }
                 let call = Call::Read(ReadArgs { selector: a[1].into() });
@@ -888,7 +902,7 @@ fn main() {
             "send" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();
                 if a.len() < 2 {
-                    println!("ERROR usage: send <skim|routine|code|deep|vision> <prompt>");
+                    pr!("ERROR usage: send <skim|routine|code|deep|vision> <prompt>");
                     continue;
                 }
                 let task = match a[0] {
@@ -902,64 +916,64 @@ fn main() {
                 let base = config::base_url();
                 let model = config::model_id(r.model);
                 if !config::has_api_key() {
-                    println!("ERROR send env {} not set: add it to .env (see .env.example)", config::API_KEY_ENV);
+                    pr!("ERROR send env {} not set: add it to .env (see .env.example)", config::API_KEY_ENV);
                     continue;
                 }
                 let body = provider::request_body_with(&model, r, "You are the Syn desk worker. Answer briefly.", a[1]);
                 match provider::send_via_curl(&base, config::API_KEY_ENV, &body) {
                     Ok((status, resp)) => {
-                        println!("RECEIPT send status={status} bytes={} model={model}", resp.len());
+                        pr!("RECEIPT send status={status} bytes={} model={model}", resp.len());
                         match provider::parse_chat_text(&resp) {
-                            Some(t) => println!("REPLY {}", t.replace('\n', " ")),
-                            None if status != 200 => println!("ERROR send body {}", resp.replace('\n', " ")),
-                            None => println!("REPLY (no content in response)"),
+                            Some(t) => pr!("REPLY {}", t.replace('\n', " ")),
+                            None if status != 200 => pr!("ERROR send body {}", resp.replace('\n', " ")),
+                            None => pr!("REPLY (no content in response)"),
                         }
                     }
-                    Err(e) => println!("ERROR send {e}"),
+                    Err(e) => pr!("ERROR send {e}"),
                 }
             }
             "pause" => {
                 runner.pause();
-                println!("RECEIPT paused");
+                pr!("RECEIPT paused");
             }
             "resume" => match runner.resume(&relay) {
-                Ok(missing) => println!("RECEIPT resumed missing={missing:?}"),
-                Err(e) => println!("ERROR {e}"),
+                Ok(missing) => pr!("RECEIPT resumed missing={missing:?}"),
+                Err(e) => pr!("ERROR {e}"),
             },
             "pump" => match runner.pump(&mut relay) {
-                Ok(o) => println!("RECEIPT pump {o:?}"),
-                Err(e) => println!("ERROR pump {e}"),
+                Ok(o) => pr!("RECEIPT pump {o:?}"),
+                Err(e) => pr!("ERROR pump {e}"),
             },
             "kill" => {
                 runner.kill();
-                println!("RECEIPT killed");
+                pr!("RECEIPT killed");
             }
             "allow" => {
                 let apps: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
                 if apps.is_empty() {
-                    println!("ERROR usage: allow <app...>");
+                    pr!("ERROR usage: allow <app...>");
                 } else {
                     runner.lock_allowlist(apps.clone());
-                    println!("RECEIPT allowlist={apps:?}");
+                    pr!("RECEIPT allowlist={apps:?}");
                 }
             }
             "journal" => {
                 if rest.is_empty() {
-                    println!("ERROR usage: journal <path> | journal off");
+                    pr!("ERROR usage: journal <path> | journal off");
                 } else if *rest == "off" {
                     journal_path = None;
-                    println!("RECEIPT journal=off");
+                    pr!("RECEIPT journal=off");
                 } else {
                     journal_path = Some(rest.to_string());
                     // Backfill everything since process start: the replay below
                     // re-attaches and re-runs without any prior manual setup.
                     let _ = std::fs::write(rest, history.join("\n") + "\n");
-                    println!("RECEIPT journal={rest}");
+                    pr!("RECEIPT journal={rest}");
                 }
             }
             "replay" => {
                 if rest.is_empty() {
-                    println!("ERROR usage: replay <path>");
+                    pr!("ERROR usage: replay <path>");
                     continue;
                 }
                 match std::fs::read_to_string(rest) {
@@ -971,18 +985,18 @@ fn main() {
                             .map(str::to_string)
                             .collect();
                         if lines.iter().any(|l| l.starts_with("replay ")) {
-                            println!("ERROR nested replay rejected");
+                            pr!("ERROR nested replay rejected");
                         } else {
                             for l in lines.into_iter().rev() {
                                 buf.push_front(l);
                             }
-                            println!("RECEIPT replay={rest}");
+                            pr!("RECEIPT replay={rest}");
                         }
                     }
-                    Err(e) => println!("ERROR replay {e}"),
+                    Err(e) => pr!("ERROR replay {e}"),
                 }
             }
-            _ => println!("ERROR unknown command {cmd:?}"),
+            _ => pr!("ERROR unknown command {cmd:?}"),
         }
     }
 }

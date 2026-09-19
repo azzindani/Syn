@@ -213,7 +213,7 @@ body.blank-chat #hint,body.busy #hint{display:block}
 #live{display:none;margin:0 16px 8px;padding:8px 10px;max-height:168px;overflow-y:auto;
   border:1px solid var(--border);border-radius:8px;background:var(--accent);
   font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted-foreground)}
-body.busy #live{display:block}
+body.busy #live,body.watching #live{display:block}
 #live div{white-space:pre-wrap;word-break:break-word}
 #live div.err{color:var(--error-foreground)}
 #live div:last-child{color:var(--foreground)}
@@ -535,6 +535,11 @@ function showAsk(p) {
   $("askwhy").textContent = p.why ? "reason given: " + p.why : "";
 }
 
+// Watch from the moment the page opens. Whatever run is printing right
+// now is the one worth showing, whoever started it.
+tailTimer = setInterval(tail, 2000);
+void tail();
+
 async function refresh() {
   const out = await cli("chat msgs");
   const cur = (out.match(/chat=(\S+)/) || [])[1];
@@ -552,20 +557,33 @@ async function refresh() {
 // happening instead of a spinner and a guess.
 let tailAt = 0, tailTimer = null;
 
+let tailSrc = null;
+
 async function tail() {
   try {
     const r = await fetch("/events?since=" + tailAt);
     if (!r.ok) return;
     const d = await r.json();
-    tailAt = d.n;
     const pane = $("live");
+    // A different run took over. Start its output from the top rather than
+    // splicing it onto the tail of the last one.
+    if (d.source !== tailSrc) {
+      tailSrc = d.source;
+      tailAt = 0;
+      pane.textContent = "";
+      return void tail();
+    }
+    tailAt = d.n;
     for (const line of d.lines || []) {
-      const row = el("div", line.startsWith("ERROR") ? "err" : "", line);
-      pane.appendChild(row);
+      pane.appendChild(el("div", line.startsWith("ERROR") ? "err" : "", line));
     }
     // Keep it short: this is a progress strip, not a log viewer.
     while (pane.childElementCount > 200) pane.removeChild(pane.firstChild);
     if (d.lines && d.lines.length) pane.scrollTop = pane.scrollHeight;
+    // Show it for any run that is still printing, not only for a turn this
+    // page started. A run in another window is the case that sent me
+    // looking for this in the first place.
+    document.body.classList.toggle("watching", !!d.running && pane.childElementCount > 0);
   } catch { /* a dropped poll is not worth a message; the next one retries */ }
 }
 
@@ -575,21 +593,11 @@ function thinking(on) {
   $("send").disabled = on;
   $("hint").innerHTML = on ? '<span class="spin"></span> working…'
     : "Enter sends · Shift+Enter for a new line";
-  if (on) {
-    $("live").textContent = "";
-    // Start from the end of what has already happened, so the strip shows
-    // this turn rather than replaying the session.
-    void fetch("/events?since=0")
-      .then(r => r.json())
-      .then(d => { tailAt = d.n; })
-      .catch(() => {});
-    clearInterval(tailTimer);
-    tailTimer = setInterval(tail, 700);
-  } else {
-    clearInterval(tailTimer);
-    tailTimer = null;
-    void tail();   // one last poll, so the final receipts are not lost
-  }
+  // The poll never stops, it only changes pace: a run in another process
+  // has to be visible without this page being asked to do anything first.
+  clearInterval(tailTimer);
+  tailTimer = setInterval(tail, on ? 700 : 2000);
+  void tail();
 }
 
 async function send() {

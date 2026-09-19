@@ -33,38 +33,14 @@ use std::sync::{Arc, Mutex};
 
 const PAGE: &str = include_str!("../../../widget/index.html");
 
-/// Every line the CLI has printed this session, and whether it is still
-/// printing. A long `say` can run for many minutes; without this the page
-/// has a spinner and nothing else until the whole turn lands, which is no
-/// way to watch a run that is driving three applications.
+/// Whether this console's own child is mid-turn. Progress itself comes
+/// from `core::live`, which every CLI writes to disk: a run started from a
+/// terminal, a pipe or a second window used to be invisible here, because
+/// the only thing this server could see was the child it had spawned
+/// itself.
 #[derive(Default)]
 struct Live {
-    lines: Mutex<Vec<String>>,
     busy: AtomicBool,
-}
-
-impl Live {
-    fn push(&self, line: &str) {
-        let line = line.trim_end();
-        if line.is_empty() {
-            return;
-        }
-        if let Ok(mut v) = self.lines.lock() {
-            v.push(line.to_string());
-        }
-    }
-
-    /// The lines after `since`, and the new high-water mark. The page holds
-    /// the mark and asks again, so a slow poll never loses a line and a
-    /// reload never replays one twice.
-    fn since(&self, since: usize) -> (usize, Vec<String>) {
-        let Ok(v) = self.lines.lock() else { return (since, Vec::new()) };
-        let n = v.len();
-        if since >= n {
-            return (n, Vec::new());
-        }
-        (n, v[since..].to_vec())
-    }
 }
 
 /// The CLI, running, with a pipe to its mouth and one to its ear.
@@ -87,7 +63,7 @@ impl Cli {
         let out = BufReader::new(child.stdout.take().expect("piped"));
         let mut cli = Self { child, stdin, out, seq: 0 };
         // Drain the banner so the first command's reply is not prefixed by it.
-        let _ = cli.exec("", &Live::default());
+        let _ = cli.exec("");
         Ok(cli)
     }
 
@@ -96,10 +72,7 @@ impl Cli {
     /// Framed by a `mark` sentinel: commands print a variable number of
     /// lines, so a reader without one either guesses a count or blocks
     /// forever on a command that printed nothing.
-    /// Each line also goes to `live` the moment it is read, which is what
-    /// the page polls. The returned string is still the whole reply, so the
-    /// existing request/response path is unchanged.
-    fn exec(&mut self, line: &str, live: &Live) -> std::io::Result<String> {
+    fn exec(&mut self, line: &str) -> std::io::Result<String> {
         self.seq += 1;
         let tag = format!("m{}", self.seq);
         writeln!(self.stdin, "{line}")?;
@@ -118,7 +91,6 @@ impl Cli {
             if got.trim_end() == want {
                 return Ok(acc);
             }
-            live.push(&got);
             acc.push_str(&got);
         }
     }
@@ -228,6 +200,16 @@ fn main() {
         }
     };
     let live = Arc::new(Live::default());
+    // A run in another process writes its own log; `--tail` pins the
+    // console to one file rather than following whichever is newest.
+    let pinned: Option<std::path::PathBuf> = args
+        .iter()
+        .position(|a| a == "--tail")
+        .and_then(|i| args.get(i + 1))
+        .map(std::path::PathBuf::from);
+    if let Some(p) = &pinned {
+        println!("watching: {}", p.display());
+    }
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -259,6 +241,7 @@ fn main() {
         let Ok(s) = conn else { continue };
         let cli = Arc::clone(&cli);
         let live = Arc::clone(&live);
+        let pinned = pinned.clone();
         let allowed_origins = allowed_origins.clone();
         std::thread::spawn(move || {
             let mut s = s;
@@ -308,7 +291,7 @@ fn main() {
                 }
                 live.busy.store(true, Ordering::SeqCst);
                 let out = match cli.lock() {
-                    Ok(mut c) => match c.exec(&line, &live) {
+                    Ok(mut c) => match c.exec(&line) {
                         Ok(o) => o,
                         Err(e) => format!("ERROR {e}"),
                     },
@@ -328,11 +311,25 @@ fn main() {
                     .and_then(|(_, v)| v.split('&').next())
                     .and_then(|v| v.parse::<usize>().ok())
                     .unwrap_or(0);
-                let (n, lines) = live.since(since);
+                // Whichever run is currently saying something, which is
+                // the one worth watching. A finished run stops touching its
+                // file, so an active one wins on mtime without this having
+                // to know which processes are alive.
+                let src = pinned.clone().or_else(core::live::newest);
+                let (n, lines, running, name) = match &src {
+                    Some(p) => {
+                        let (n, lines) = core::live::read_from(p, since);
+                        let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                        (n, lines, core::live::active(p), name)
+                    }
+                    None => (0, Vec::new(), false, String::new()),
+                };
                 let body = format!(
-                    "{{\"n\":{},\"busy\":{},\"lines\":[{}]}}",
+                    "{{\"n\":{},\"busy\":{},\"running\":{},\"source\":\"{}\",\"lines\":[{}]}}",
                     n,
                     live.busy.load(Ordering::SeqCst),
+                    running,
+                    json_escape(&name),
                     lines
                         .iter()
                         .map(|l| format!("\"{}\"", json_escape(l)))

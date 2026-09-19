@@ -10,6 +10,7 @@ pub mod chats;
 pub mod config;
 pub mod guard;
 pub mod hand;
+pub mod live;
 pub mod mcpgate;
 pub mod memory;
 pub mod ooxml;

@@ -89,8 +89,12 @@ namespace Syn.Sidecar
                 // unhandled exception here took the whole sidecar down at
                 // startup, before it had served a single call. A hand that
                 // cannot dismiss alerts still drives the application.
-                Settle(() => app.Visible = true, "Visible");
-                Settle(() => app.DisplayAlerts = false, "DisplayAlerts");
+                // PowerPoint takes enums where the other two take booleans:
+                // Visible is an MsoTriState and DisplayAlerts is ppAlertsNone,
+                // so the boolean form fails the cast rather than the call.
+                var ppt = _app == "powerpoint";
+                Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
+                Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
                 // Byte mode, not Message: the client is an ordinary
                 // StreamReader/StreamWriter pair, and a message-mode server
                 // framed against a byte-mode client never completes a read.
@@ -255,7 +259,7 @@ namespace Syn.Sidecar
                 {
                     "word" => WordDispatch(app, method, handle, line, selector),
                     "excel" => ExcelDispatch(app, method, handle, line, selector),
-                    "powerpoint" => PptDispatch(app, method, handle, selector),
+                    "powerpoint" => PptDispatch(app, method, handle, line, selector),
                     _ => Fail("unknown app"),
                 };
             }
@@ -322,6 +326,7 @@ namespace Syn.Sidecar
         // which is how a document actually gets written.
 
         private const char TabChar = (char)9;
+        private const char CrChar = (char)13;
         private const int WdCollapseEnd = 0;
         private const int WdHeaderFooterPrimary = 1;
         private const int WdFieldPage = 33;
@@ -1142,30 +1147,318 @@ namespace Syn.Sidecar
         }
 
         // ---- PowerPoint ----
-        private static string PptDispatch(dynamic app, string method, string handle, string selector) =>
+        private static string PptDispatch(dynamic app, string method, string handle, string line, string selector) =>
             Guarded(() =>
             {
-                dynamic pres = app.ActivePresentation
-                    ?? throw new InvalidOperationException($"no active presentation for {handle}");
+                dynamic pres = FindPresentation(app, handle)
+                    ?? throw new InvalidOperationException($"presentation not open for {handle}");
+                var args = JsonField(line, "args");
                 return method switch
                 {
-                    "read" when selector is "deck" or "" => Ok($"slides={pres.Slides.Count}"),
-                    "struct" when selector.StartsWith("addSlide") =>
-                        AddSlide(pres, handle, selector),
-                    "export" => ExportPres(pres, handle, JsonField(selector, "format"), JsonField(selector, "path")),
-                    _ => throw new InvalidOperationException($"unsupported ppt.{method}"),
+                    "read" when selector is "deck" or "" => Ok(ReadDeck(pres)),
+                    "read" => Ok(ReadSlide(pres, selector)),
+                    "write" => WriteSlide(pres, handle, selector, JsonField(line, "payload")),
+                    "createSlide" => CreateSlide(pres, handle, JsonField(args, "title"),
+                                                 JsonField(line, "payload"), JsonField(args, "name")),
+                    "insertTable" => SlideTable(pres, handle, selector, JsonField(line, "payload"),
+                                                JsonField(args, "name")),
+                    "picture" => SlidePicture(pres, handle, selector, JsonField(args, "text"),
+                                              JsonField(args, "name")),
+                    "pageNumbers" => SlideNumbers(pres, handle, JsonField(args, "text")),
+                    "format" => FormatSlide(pres, handle, selector, JsonField(line, "payload")),
+                    "export" => ExportPres(pres, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
                 };
             });
 
-        private static string AddSlide(dynamic pres, string handle, string selector)
+        // By name, like the workbook and the document. ActivePresentation is
+        // whatever the human last clicked on, which is not the same thing as
+        // the handle the caller asked for.
+        private static dynamic? FindPresentation(dynamic app, string handle)
+        {
+            int n = app.Presentations.Count;
+            for (var i = 1; i <= n; i++)
+            {
+                dynamic pres = app.Presentations[i];
+                string name = pres.Name;
+                if (handle.Contains(name)) return pres;
+            }
+            return null;
+        }
+
+        // A slide selector is "s3": the third slide, one-based, as anyone
+        // counting slides would say it. "s3.notes" is its speaker notes.
+        private static (object slide, bool notes) SlideOf(object presObj, string selector)
+        {
+            dynamic pres = presObj;
+            var sel = selector.Trim();
+            var notes = false;
+            if (sel.EndsWith(".notes", StringComparison.OrdinalIgnoreCase))
+            {
+                notes = true;
+                sel = sel[..^6];
+            }
+            if (!sel.StartsWith("s", StringComparison.OrdinalIgnoreCase) || !int.TryParse(sel[1..], out var n))
+                throw new InvalidOperationException($"a slide selector looks like s3, not {selector}");
+            int count = pres.Slides.Count;
+            if (n < 1 || n > count)
+                throw new InvalidOperationException($"slide {n} does not exist: the deck has {count}");
+            return (pres.Slides[n], notes);
+        }
+
+        private static string ReadDeck(dynamic pres)
+        {
+            var sb = new StringBuilder();
+            int n = pres.Slides.Count;
+            sb.Append($"slides={n}");
+            for (var i = 1; i <= n && i <= 40; i++)
+            {
+                string title = "";
+                try { title = pres.Slides[i].Shapes.Title.TextFrame.TextRange.Text; } catch { }
+                sb.Append($" | s{i}: {Trunc(title)}");
+            }
+            return sb.ToString();
+        }
+
+        private static string ReadSlide(dynamic pres, string selector)
+        {
+            var found = SlideOf((object)pres, selector);
+            dynamic slide = found.slide;
+            var notes = found.notes;
+            if (notes)
+            {
+                try { return $"notes: {Trunc((string)slide.NotesPage.Shapes.Placeholders[2].TextFrame.TextRange.Text)}"; }
+                catch { return "notes: (none)"; }
+            }
+            var sb = new StringBuilder();
+            int n = slide.Shapes.Count;
+            sb.Append($"shapes={n}");
+            for (var i = 1; i <= n; i++)
+            {
+                dynamic sh = slide.Shapes[i];
+                string t = "";
+                // MsoTriState again: msoTrue is -1, and treating it as a bool
+                // threw into the catch below, so every slide read as empty.
+                try
+                {
+                    if ((int)sh.HasTextFrame != 0 && (int)sh.TextFrame.HasText != 0)
+                        t = sh.TextFrame.TextRange.Text;
+                }
+                catch { }
+                if (t != "") sb.Append($" | {Trunc(t)}");
+            }
+            return sb.ToString();
+        }
+
+        // ppLayout indices on the default master. Named, because "2" in a
+        // script tells the next reader nothing.
+        private static int LayoutIndex(string name) => (name ?? "").Trim().ToLowerInvariant() switch
+        {
+            "" or "titlecontent" or "content" => 2,
+            "title" or "titleslide" => 1,
+            "section" or "sectionheader" => 3,
+            "two" or "twocontent" => 4,
+            "comparison" => 5,
+            "titleonly" => 6,
+            "blank" => 7,
+            _ => throw new InvalidOperationException(
+                    $"createSlide does not know layout {name}: it knows title, titleContent, "
+                    + "sectionHeader, twoContent, comparison, titleOnly, blank"),
+        };
+
+        private static string CreateSlide(dynamic pres, string handle, string title, string bullets, string layout)
         {
             Snapshot(handle);
-            var layout = pres.SlideMaster.CustomLayouts[2]; // title + content
-            var slide = pres.Slides.AddSlide(pres.Slides.Count + 1, layout);
-            var title = JsonField(selector, "title");
-            if (title != "") slide.Shapes.Title.TextFrame.TextRange.Text = title;
-            return Ok($"slide {pres.Slides.Count} added");
+            int want = LayoutIndex(layout);
+            dynamic layouts = pres.SlideMaster.CustomLayouts;
+            if (want > layouts.Count) want = 2;
+            dynamic slide = pres.Slides.AddSlide(pres.Slides.Count + 1, layouts[want]);
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                try { slide.Shapes.Title.TextFrame.TextRange.Text = title; }
+                catch { /* a blank layout has no title placeholder */ }
+            }
+
+            var added = 0;
+            // Bullets ride as one row of the same escaped grid the sheet and
+            // the Word table use, so there is one splitting rule in the
+            // engine rather than three.
+            var rows = ParseGrid(bullets ?? "");
+            if (rows.Length > 0 && rows[0].Length > 0 && !(rows[0].Length == 1 && rows[0][0] == ""))
+            {
+                dynamic? body = null;
+                int np = slide.Shapes.Placeholders.Count;
+                for (var i = 1; i <= np; i++)
+                {
+                    dynamic ph = slide.Shapes.Placeholders[i];
+                    // ppPlaceholderTitle 1, ppPlaceholderCenterTitle 3 -- skip
+                    // those; the first other one that takes text is the body.
+                    int t = ph.PlaceholderFormat.Type;
+                    if (t == 1 || t == 3) continue;
+                    if ((int)ph.HasTextFrame == 0) continue;
+                    body = ph;
+                    break;
+                }
+                if (body == null)
+                {
+                    // ppLayoutBlank and titleOnly have nowhere to put text, so
+                    // make somewhere rather than dropping the content.
+                    body = slide.Shapes.AddTextbox(1, 60.0, 140.0, 600.0, 320.0);
+                }
+                // A leading ">" marks a sub-bullet, one per level. Leading
+                // spaces would be the obvious marker, but the grid splitter
+                // trims every cell -- correctly, for a spreadsheet -- so they
+                // never survive the trip.
+                var text = new StringBuilder();
+                var levels = new List<int>();
+                foreach (var b in rows[0])
+                {
+                    var depth = 0;
+                    var body2 = b;
+                    while (body2.StartsWith('>'))
+                    {
+                        depth++;
+                        body2 = body2[1..].TrimStart();
+                    }
+                    if (text.Length > 0) text.Append(CrChar);
+                    text.Append(body2);
+                    levels.Add(Math.Min(depth + 1, 5));
+                    added++;
+                }
+                body.TextFrame.TextRange.Text = text.ToString();
+                for (var i = 0; i < levels.Count; i++)
+                {
+                    if (levels[i] == 1) continue;
+                    // Paragraphs(start, length): without the length it runs to
+                    // the end of the range and indents everything after it too.
+                    try { body.TextFrame.TextRange.Paragraphs(i + 1, 1).IndentLevel = levels[i]; }
+                    catch { }
+                }
+            }
+            return Ok($"slide {pres.Slides.Count} added, layout {layout}, {added} bullet(s)");
         }
+
+        private static string WriteSlide(dynamic pres, string handle, string selector, string text)
+        {
+            Snapshot(handle);
+            var found = SlideOf((object)pres, selector);
+            dynamic slide = found.slide;
+            var notes = found.notes;
+            if (notes)
+            {
+                slide.NotesPage.Shapes.Placeholders[2].TextFrame.TextRange.Text = text ?? "";
+                return Ok($"notes on {selector} written ({(text ?? "").Length} chars)");
+            }
+            // Without ".notes" this is the title: the body is what createSlide
+            // fills, and overwriting it from here would silently drop bullets.
+            slide.Shapes.Title.TextFrame.TextRange.Text = text ?? "";
+            return Ok($"title on {selector} written ({(text ?? "").Length} chars)");
+        }
+
+        private static string SlideTable(dynamic pres, string handle, string selector, string grid, string at)
+        {
+            Snapshot(handle);
+            dynamic slide = SlideOf((object)pres, selector).slide;
+            var rows = ParseGrid(grid);
+            if (rows.Length == 0) throw new InvalidOperationException("insertTable needs rows: cells by |, rows by ;");
+            int nc = 0;
+            foreach (var r in rows) nc = Math.Max(nc, r.Length);
+            var (l, t, w, h) = Box(at, 50.0, 140.0, 620.0, Math.Min(340.0, 30.0 * rows.Length));
+            dynamic shape = slide.Shapes.AddTable(rows.Length, nc, l, t, w, h);
+            dynamic table = shape.Table;
+            for (var r = 0; r < rows.Length; r++)
+                for (var c = 0; c < nc; c++)
+                    table.Cell(r + 1, c + 1).Shape.TextFrame.TextRange.Text =
+                        c < rows[r].Length ? rows[r][c] : "";
+            return Ok($"table on {selector}, {rows.Length}x{nc}");
+        }
+
+        private static string SlidePicture(dynamic pres, string handle, string selector, string path, string at)
+        {
+            Snapshot(handle);
+            dynamic slide = SlideOf((object)pres, selector).slide;
+            var full = Path.GetFullPath(path);
+            if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
+            var (l, t, w, h) = Box(at, 60.0, 130.0, 600.0, 340.0);
+            // msoFalse 0, msoTrue -1: do not link, do save with the document.
+            dynamic pic = slide.Shapes.AddPicture(full, 0, -1, l, t, w, h);
+            try { pic.LockAspectRatio = -1; } catch { }
+            return Ok($"picture on {selector} from {Path.GetFileName(full)} at {l},{t} {w}x{h}");
+        }
+
+        // "left,top,width,height" in points, any of them omitted. A deck that
+        // cannot say where things go is a deck of overlapping shapes, which is
+        // the mistake the Excel dashboard already made once.
+        private static (double l, double t, double w, double h) Box(
+            string spec, double dl, double dt, double dw, double dh)
+        {
+            if (string.IsNullOrWhiteSpace(spec)) return (dl, dt, dw, dh);
+            var parts = spec.Split(',');
+            double Pick(int i, double fallback) =>
+                i < parts.Length && double.TryParse(parts[i].Trim(), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out var v) ? v : fallback;
+            return (Pick(0, dl), Pick(1, dt), Pick(2, dw), Pick(3, dh));
+        }
+
+        private static string SlideNumbers(dynamic pres, string handle, string text)
+        {
+            Snapshot(handle);
+            dynamic hf = pres.SlideMaster.HeadersFooters;
+            hf.SlideNumber.Visible = true;
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                hf.Footer.Visible = true;
+                hf.Footer.Text = text;
+            }
+            // The master governs new slides; the ones already placed each
+            // carry their own copy and do not inherit retroactively.
+            int n = pres.Slides.Count;
+            var done = 0;
+            for (var i = 1; i <= n; i++)
+            {
+                try
+                {
+                    dynamic sf = pres.Slides[i].HeadersFooters;
+                    sf.SlideNumber.Visible = true;
+                    if (!string.IsNullOrWhiteSpace(text)) { sf.Footer.Visible = true; sf.Footer.Text = text; }
+                    done++;
+                }
+                catch { }
+            }
+            return Ok($"slide numbers on, footer set on {done} of {n} slides");
+        }
+
+        private static string FormatSlide(dynamic pres, string handle, string selector, string styles)
+        {
+            Snapshot(handle);
+            dynamic slide = SlideOf((object)pres, selector).slide;
+            dynamic range = slide.Shapes.Title.TextFrame.TextRange;
+            var did = new List<string>();
+            foreach (var pair in (styles ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var i = pair.IndexOf('=');
+                if (i < 0) continue;
+                var key = pair[..i].Trim().ToLowerInvariant();
+                var val = pair[(i + 1)..].Trim();
+                var on = !(val == "0" || val.Equals("false", StringComparison.OrdinalIgnoreCase));
+                switch (key)
+                {
+                    case "bold": range.Font.Bold = on ? -1 : 0; break;
+                    case "italic": range.Font.Italic = on ? -1 : 0; break;
+                    case "size": range.Font.Size = double.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "font": range.Font.Name = val; break;
+                    case "color": range.Font.Color.RGB = OleColor(val); break;
+                    default:
+                        throw new InvalidOperationException(
+                            $"slide format does not know {key}: it knows bold, italic, size, font, color");
+                }
+                did.Add(key);
+            }
+            if (did.Count == 0) throw new InvalidOperationException("format was given no style: try size=32;bold=1");
+            return Ok($"formatted the title of {selector}: {string.Join(", ", did)}");
+        }
+
 
         private static string ExportPres(dynamic pres, string handle, string format, string path)
         {

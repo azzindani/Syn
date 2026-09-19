@@ -38,7 +38,9 @@ pub struct FormatArgs {
 #[derive(Debug, Clone)]
 pub enum StructArgs {
     InsertParagraph { text: String, style: String },
-    InsertTable { rows: Vec<Vec<String>>, style: String },
+    /// A table. `selector` is empty for Word, where it appends at the end
+    /// of the document, and names a slide for PowerPoint.
+    InsertTable { rows: Vec<Vec<String>>, style: String, selector: String },
     /// Start a new page, or a new section. Live-only: the in-memory model is
     /// a list of paragraphs and has no pagination to break.
     PageBreak { kind: String },
@@ -46,13 +48,15 @@ pub enum StructArgs {
     Contents { title: String },
     /// A footer carrying a live page-number field.
     PageNumbers { text: String },
-    /// Place an image file in the document, optionally at a given width.
-    Picture { path: String, width: String },
+    /// Place an image file. `width` is a single number of points in Word,
+    /// and up to four comma-separated numbers -- left, top, width, height --
+    /// on a slide, where something has to say where it goes.
+    Picture { path: String, width: String, selector: String },
     TrackChange { para: Option<String>, text: String },
     Comment { at: Option<String>, text: String },
     AddSheet { name: String },
     WriteRange { selector: String, values: Vec<Vec<String>> },
-    CreateSlide { title: String, bullets: Vec<String> },
+    CreateSlide { title: String, bullets: Vec<String>, layout: String },
     Transfer { from: String, selector: String, title: String },
     /// Act on a control: press a button, toggle a checkbox, expand a node.
     ///
@@ -415,7 +419,7 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             }
         }
         StructArgs::WriteRange { selector, values } => do_write(relay, session, handle, &WriteArgs { selector, values }),
-        StructArgs::CreateSlide { title, bullets } => {
+        StructArgs::CreateSlide { title, bullets, .. } => {
             let files = files(relay, session)?;
             let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Ppt { slides } = &mut f.content {
@@ -765,10 +769,10 @@ mod cover_tests {
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::Comment { at: Some("p0".into()), text: "c".into() })).unwrap(),
             OpOut::Count { what: "comments".into(), n: 1 });
         assert_eq!(
-            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]], style: String::new() })).unwrap(),
+            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]], style: String::new(), selector: String::new() })).unwrap(),
             OpOut::Count { what: "tables".into(), n: 1 });
         assert_eq!(
-            execute(&mut r, &s, &ph, Call::Struct(StructArgs::CreateSlide { title: "S2".into(), bullets: vec![] })).unwrap(),
+            execute(&mut r, &s, &ph, Call::Struct(StructArgs::CreateSlide { title: "S2".into(), bullets: vec![], layout: String::new() })).unwrap(),
             OpOut::Count { what: "slides".into(), n: 2 });
     }
 
@@ -782,7 +786,7 @@ mod cover_tests {
             execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into(), style: String::new() })),
             Err(Error::ClosedSchema(_))));
         assert!(matches!(
-            execute(&mut r, &s, &xh, Call::Struct(StructArgs::CreateSlide { title: "x".into(), bullets: vec![] })),
+            execute(&mut r, &s, &xh, Call::Struct(StructArgs::CreateSlide { title: "x".into(), bullets: vec![], layout: String::new() })),
             Err(Error::ClosedSchema(_))));
     }
 

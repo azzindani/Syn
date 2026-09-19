@@ -1,0 +1,15 @@
+hand synhand-ppt ppt
+attach ppt solar-deck.pptx
+live ppt:solar-deck.pptx:deck
+slide ppt:solar-deck.pptx:deck title Calgary Solar Estate: Quarterly Review|Prepared for the Infrastructure Committee|2015-2023, 258,423 hourly readings
+slide ppt:solar-deck.pptx:deck sectionHeader Where the output comes from
+slide ppt:solar-deck.pptx:deck titleContent Estate at a glance|9,835,518 kWh generated across 11 sites|Bearspaw alone carries 31.3% of the total|>more than the bottom eight sites combined|Summer outproduces winter by a factor of 6.7|Generation peaks at 13:00
+slide ppt:solar-deck.pptx:deck titleOnly Output by site
+sfigure ppt:solar-deck.pptx:deck s4 80,120,560,320 D:\Github\Syn\testbed\out\fig-Dashboard-1.png
+slide ppt:solar-deck.pptx:deck titleOnly The top three sites
+stable ppt:solar-deck.pptx:deck s5 60,130,600,180 Site|Total kWh|Share;Bearspaw Water Treatment Plant|3,082,638|31.3%;Whitehorn Multi-Service Centre|2,558,803|26.0%;Glenmore Water Treatment Plant|1,551,178|15.8%
+write ppt:solar-deck.pptx:deck s5.notes Lead with concentration: three sites carry 73% of output. That is a planning fact, not a performance one.
+pagenumbers ppt:solar-deck.pptx:deck Calgary Solar Estate
+read ppt:solar-deck.pptx:deck deck
+read ppt:solar-deck.pptx:deck s3
+read ppt:solar-deck.pptx:deck s5.notes

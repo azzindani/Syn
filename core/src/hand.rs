@@ -235,11 +235,19 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             &format!("{{\"name\":\"{}\"}}", esc(style)),
             Some(text),
         )),
-        Call::Struct(StructArgs::InsertTable { rows, style }) => Some(envelope(
+        Call::Struct(StructArgs::InsertTable { rows, style, selector }) => Some(envelope(
             "insertTable",
             handle,
-            &format!("{{\"name\":\"{}\"}}", esc(style)),
+            &format!("{{\"name\":\"{}\",\"selector\":\"{}\"}}", esc(style), esc(selector)),
             Some(&grid_payload(rows)),
+        )),
+        // The deck was the one app the hand never learned to drive: a slide
+        // could be added with a title on it and nothing else.
+        Call::Struct(StructArgs::CreateSlide { title, bullets, layout }) => Some(envelope(
+            "createSlide",
+            handle,
+            &format!("{{\"title\":\"{}\",\"name\":\"{}\"}}", esc(title), esc(layout)),
+            Some(&grid_payload(std::slice::from_ref(bullets))),
         )),
         Call::Struct(StructArgs::PageBreak { kind }) => Some(envelope(
             "pageBreak",
@@ -259,10 +267,15 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             &format!("{{\"text\":\"{}\"}}", esc(text)),
             None,
         )),
-        Call::Struct(StructArgs::Picture { path, width }) => Some(envelope(
+        Call::Struct(StructArgs::Picture { path, width, selector }) => Some(envelope(
             "picture",
             handle,
-            &format!("{{\"text\":\"{}\",\"name\":\"{}\"}}", esc(path), esc(width)),
+            &format!(
+                "{{\"text\":\"{}\",\"name\":\"{}\",\"selector\":\"{}\"}}",
+                esc(path),
+                esc(width),
+                esc(selector)
+            ),
             None,
         )),
         Call::Struct(_) => None,
@@ -454,8 +467,8 @@ mod tests {
         // What is still unmapped must refuse, and must put nothing on the
         // wire: a silent no-op would report a change that never happened.
         let (mut h, w) = hand("");
-        let s = Call::Struct(StructArgs::CreateSlide { title: "T".into(), bullets: vec![] });
-        assert!(!h.dispatch(&s, "ppt:d.pptx:deck").unwrap().ok);
+        let s = Call::Struct(StructArgs::Comment { at: None, text: "c".into() });
+        assert!(!h.dispatch(&s, "word:d.docx:body").unwrap().ok);
         assert!(sent(&w).is_empty(), "nothing may go on the wire for an unmapped op");
         let t = Call::Struct(StructArgs::TrackChange { para: None, text: "t".into() });
         assert!(!h.dispatch(&t, "word:d.docx:body").unwrap().ok);
@@ -477,11 +490,16 @@ mod tests {
             Call::Struct(StructArgs::InsertTable {
                 rows: vec![vec!["Site".into(), "kWh".into()], vec!["Bearspaw".into(), "3082638".into()]],
                 style: String::new(),
+                selector: String::new(),
             }),
             Call::Struct(StructArgs::PageBreak { kind: "page".into() }),
             Call::Struct(StructArgs::Contents { title: "Contents".into() }),
             Call::Struct(StructArgs::PageNumbers { text: "Quarterly review".into() }),
-            Call::Struct(StructArgs::Picture { path: "out\\by-site.png".into(), width: "420".into() }),
+            Call::Struct(StructArgs::Picture {
+                path: "out\\by-site.png".into(),
+                width: "420".into(),
+                selector: String::new(),
+            }),
         ];
         for c in &calls {
             assert!(h.dispatch(c, "word:r.docx:body").unwrap().ok, "{c:?} did not reach the hand");
@@ -495,6 +513,48 @@ mod tests {
         assert!(out.contains("\"name\":\"Heading 1\""), "{out}");
         // A table crosses as the same pipe/semicolon grid the sheet uses.
         assert!(out.contains("Site|kWh;Bearspaw|3082638"), "{out}");
+    }
+
+    #[test]
+    fn a_deck_can_be_built_slide_by_slide() {
+        use crate::ops::StructArgs;
+        // PowerPoint was the one app the hand never learned to drive: a
+        // slide could be added with a title on it and nothing else.
+        let (mut h, w) = hand(&"{\"ok\":true,\"detail\":\"done\"}
+".repeat(4));
+        let calls = [
+            Call::Struct(StructArgs::CreateSlide {
+                title: "Estate performance".into(),
+                bullets: vec!["9.8 GWh across 11 sites".into(), ">Bearspaw carries 31%".into()],
+                layout: "titleContent".into(),
+            }),
+            Call::Struct(StructArgs::InsertTable {
+                rows: vec![vec!["Site".into(), "kWh".into()]],
+                style: String::new(),
+                selector: "s2".into(),
+            }),
+            Call::Struct(StructArgs::Picture {
+                path: "out\\by-site.png".into(),
+                width: "60,130,600,340".into(),
+                selector: "s3".into(),
+            }),
+            Call::Struct(StructArgs::PageNumbers { text: "Solar review".into() }),
+        ];
+        for c in &calls {
+            assert!(h.dispatch(c, "ppt:deck.pptx:deck").unwrap().ok, "{c:?} did not reach the hand");
+        }
+        let out = sent(&w);
+        for method in ["createSlide", "insertTable", "picture", "pageNumbers"] {
+            assert!(out.contains(&format!("\"method\":\"{method}\"")), "{method} never went on the wire: {out}");
+        }
+        // Bullets ride as one row of the same escaped grid the sheet uses.
+        // The marker for a sub-bullet is ">" and not leading spaces, because
+        // the grid splitter trims every cell.
+        assert!(out.contains("9.8 GWh across 11 sites|>Bearspaw carries 31%"), "{out}");
+        assert!(out.contains("\"name\":\"titleContent\""), "{out}");
+        // A slide has to say which slide; a Word document does not.
+        assert!(out.contains("\"selector\":\"s2\""), "{out}");
+        assert!(out.contains("\"selector\":\"s3\""), "{out}");
     }
 
     #[test]

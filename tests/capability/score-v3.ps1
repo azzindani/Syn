@@ -6,14 +6,15 @@
 # The four judgement checks do read the report's prose, because judging the
 # writing is the point of them -- they are the only ones that do.
 #
-#   powershell -File tests/capability/score-v2.ps1
-#   powershell -File tests/capability/score-v2.ps1 -Chat .syn\chats\cXXX.jsonl
-#   powershell -File tests/capability/score-v2.ps1 -Control
+#   powershell -File tests/capability/score-v3.ps1
+#   powershell -File tests/capability/score-v3.ps1 -Chat .syn\chats\cXXX.jsonl
+#   powershell -File tests/capability/score-v3.ps1 -Control
 
 [CmdletBinding()]
 param(
     [string]$Book = 'solar.xlsx',
     [string]$Report = 'solar-memo.docx',
+    [string]$Deck = 'solar-deck.pptx',
     [string]$Chat = '',
     # A control run is scripted, not driven by the model, so it has no
     # transcript. Scoring it against the last model run's process numbers
@@ -408,6 +409,82 @@ foreach ($m in [regex]::Matches($body, '\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b')) {
 }
 Check 'J5' 'every kWh figure in the prose matches the data to within 1%' 2 ($quoted -ge 5 -and $matched -eq $quoted) "$matched of $quoted thousands-separated figures matched$(if($firstBad){". first miss: $firstBad"})"
 
+# ---- the deck ------------------------------------------------------------
+# PowerPoint answers with tri-states where Word and Excel answer with
+# booleans, so every one of these is compared against 0 rather than $true.
+$pp = $null
+try { $pp = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') } catch {}
+$pres = $null
+if ($pp) { for ($i = 1; $i -le $pp.Presentations.Count; $i++) { if ($pp.Presentations.Item($i).Name -eq $Deck) { $pres = $pp.Presentations.Item($i) } } }
+
+$slides = 0; $layouts = @{}; $pics = 0; $decktables = 0; $noted = 0
+$titled = 0; $untitled = 0; $numbered = 0; $dividers = 0; $hasTitleSlide = $false
+$deckText = ''
+$bigDeckTable = 0
+if ($pres) {
+    $slides = [int]$pres.Slides.Count
+    $sb = New-Object System.Text.StringBuilder
+    for ($i = 1; $i -le $slides; $i++) {
+        $s = $pres.Slides.Item($i)
+        $lay = [string]$s.CustomLayout.Name
+        $layouts[$lay] = $true
+        if ($lay -match '(?i)title slide') { $hasTitleSlide = $true }
+        if ($lay -match '(?i)section') { $dividers++ }
+        try { if ([int]$s.HeadersFooters.SlideNumber.Visible -ne 0) { $numbered++ } } catch {}
+        $t = ''
+        try { $t = [string]$s.Shapes.Title.TextFrame.TextRange.Text } catch {}
+        if ($t.Trim()) { $titled++ } else { $untitled++ }
+        for ($k = 1; $k -le $s.Shapes.Count; $k++) {
+            $sh = $s.Shapes.Item($k)
+            if ([int]$sh.Type -eq 13) { $pics++ }
+            $isTable = 0
+            try { $isTable = [int]$sh.HasTable } catch {}
+            if ($isTable -ne 0) {
+                $decktables++
+                if ([int]$sh.Table.Rows.Count -ge 3) { $bigDeckTable++ }
+                for ($r = 1; $r -le $sh.Table.Rows.Count; $r++) {
+                    for ($c = 1; $c -le $sh.Table.Columns.Count; $c++) {
+                        [void]$sb.Append($sh.Table.Cell($r, $c).Shape.TextFrame.TextRange.Text).Append(' ')
+                    }
+                }
+            }
+            try {
+                if ([int]$sh.HasTextFrame -ne 0 -and [int]$sh.TextFrame.HasText -ne 0) {
+                    [void]$sb.Append($sh.TextFrame.TextRange.Text).Append(' ')
+                }
+            } catch {}
+        }
+        try {
+            $n = [string]$pres.Slides.Item($i).NotesPage.Shapes.Placeholders.Item(2).TextFrame.TextRange.Text
+            if ($n.Trim()) { $noted++; [void]$sb.Append($n).Append(' ') }
+        } catch {}
+    }
+    $deckText = $sb.ToString()
+}
+Check 'K1' 'a deck of >= 12 slides' 3 ($slides -ge 12) "slides: $slides"
+Check 'K2' 'a title slide and >= 2 section dividers' 2 ($hasTitleSlide -and $dividers -ge 2) "title slide: $hasTitleSlide, dividers: $dividers"
+Check 'K3' '>= 4 distinct slide layouts used' 2 ($layouts.Count -ge 4) "layouts: $(($layouts.Keys | Sort-Object) -join ', ')"
+Check 'K4' '>= 4 charts placed on slides as pictures' 3 ($pics -ge 4) "pictures: $pics"
+Check 'K5' '>= 1 table of >= 3 rows' 2 ($bigDeckTable -ge 1) "$bigDeckTable of $decktables tables have 3+ rows"
+Check 'K6' '>= 6 slides carry speaker notes' 3 ($noted -ge 6) "slides with notes: $noted"
+Check 'K7' 'slide numbers are on' 1 ($slides -gt 0 -and $numbered -eq $slides) "$numbered of $slides numbered"
+Check 'K8' 'every slide has a title' 2 ($slides -gt 0 -and $untitled -eq 0) "$titled titled, $untitled untitled"
+
+$dQuoted = 0; $dMatched = 0; $dBad = ''
+foreach ($m in [regex]::Matches($deckText, '\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b')) {
+    $v = [double]($m.Value -replace ',', '')
+    if ($v -lt 1000) { continue }
+    # "a factor of 2,310" is a ratio, not a kWh figure, and the check is for
+    # kWh figures. Without this a correct report that quotes a large
+    # multiple -- which the seasonal finding invites -- fails on it.
+    if ($deckText.Substring(0, $m.Index) -match $FactorOf) { continue }
+    $dQuoted++
+    $ok = $false
+    foreach ($t in $truths) { if (Near $v $t) { $ok = $true; break } }
+    if ($ok) { $dMatched++ } elseif (-not $dBad) { $dBad = $m.Value }
+}
+Check 'K9' 'every figure on the slides matches the data to within 1%' 2 ($dQuoted -ge 3 -and $dMatched -eq $dQuoted) "$dMatched of $dQuoted figures matched$(if($dBad){". first miss: $dBad"})"
+
 # ---- the process ---------------------------------------------------------
 if ($Control) {
     Write-Host ''
@@ -456,9 +533,9 @@ Check 'P6' 'finished inside the step budget' 2 $budget $(if ($budget) { 'within 
 
 # ---- verdict -------------------------------------------------------------
 $script:Card | Format-Table -AutoSize -Wrap
-$verdict = if ($script:Score -ge 68) { 'v0.1.0: a stakeholder could use this without knowing a model made it' }
-    elseif ($script:Score -ge 52) { 'the engine is sound, the output needs an editor' }
-    elseif ($script:Score -ge 30) { 'it builds parts of a review, not a review' }
+$verdict = if ($script:Score -ge 85) { 'v0.1.0: a stakeholder could use all three without knowing a model made them' }
+    elseif ($script:Score -ge 65) { 'the engine is sound, the output needs an editor' }
+    elseif ($script:Score -ge 38) { 'it builds parts of a review, not a review' }
     else { 'not yet an engine' }
 Write-Host ''
 Write-Host "SCORE $($script:Score)/$($script:Max)  --  $verdict"

@@ -1,9 +1,12 @@
 hand synhand-excel excel
 hand synhand-word word
+hand synhand-ppt ppt
 attach excel solar.xlsx data
 attach word solar-memo.docx
+attach ppt solar-deck.pptx
 live excel:solar.xlsx:data
 live word:solar-memo.docx:body
+live ppt:solar-deck.pptx:deck
 write excel:solar.xlsx:data data!I1 Year|Month|Hour|Season
 write excel:solar.xlsx:data data!I2:I258424 =YEAR(D2)
 write excel:solar.xlsx:data data!J2:J258424 =MONTH(D2)
@@ -178,3 +181,37 @@ para word:solar-memo.docx:body . Repeated here with the partial years marked, be
 wtable word:solar-memo.docx:body . Year|Total kWh|Coverage;2015|36,570|partial - do not compare;2016|166,262|complete;2017|1,143,066|complete;2018|1,714,572|complete;2019|1,725,009|complete;2020|1,765,072|complete;2021|1,603,815|complete;2022|1,584,848|complete;2023|96,304|partial - do not compare
 pagenumbers word:solar-memo.docx:body Calgary Solar Estate: Quarterly Performance Review
 contents word:solar-memo.docx:body
+slide ppt:solar-deck.pptx:deck title Calgary Solar Estate: Quarterly Review|Prepared for the Infrastructure Committee|2015 to 2023 | 258,423 hourly readings | 11 sites
+write ppt:solar-deck.pptx:deck s1.notes Fifteen minutes. Three findings and one ask. Do not walk the committee through the method.
+slide ppt:solar-deck.pptx:deck titleContent The three findings|Bearspaw Water Treatment Plant is 31 per cent of the estate|>a single point of failure, not just a big site|Summer beats winter by a factor of 6.7|>steeper than irradiance explains; snow is the likely cause|2015 and 2023 are partial years|>every year-on-year number in circulation is wrong
+write ppt:solar-deck.pptx:deck s2.notes Lead here. If they remember one slide it should be this one. The ask comes at the end.
+slide ppt:solar-deck.pptx:deck sectionHeader Where the output comes from
+write ppt:solar-deck.pptx:deck s3.notes Transition. Two minutes on concentration, then move on.
+slide ppt:solar-deck.pptx:deck titleOnly Output is concentrated in three sites
+write ppt:solar-deck.pptx:deck s4.notes Top three carry 73 per cent. That is capacity, not performance: they are the water plants with the roof area.
+sfigure ppt:solar-deck.pptx:deck s4 70,120,580,300 D:\Github\Syn\testbed\out\fig-Dashboard-1.png
+slide ppt:solar-deck.pptx:deck titleContent The estate in numbers|9,835,518 kWh generated in total|Bearspaw Water Treatment Plant: 3,082,638 kWh|Largest to smallest site: a factor of 2,310|Best complete year 2020: 1,765,072 kWh
+write ppt:solar-deck.pptx:deck s5.notes If asked about the smallest site: Telus Spark is a demonstration installation, not a generator.
+slide ppt:solar-deck.pptx:deck titleOnly The top three, side by side
+write ppt:solar-deck.pptx:deck s6.notes Hand out the scorecard here if they want the full eleven. Do not read the table aloud.
+stable ppt:solar-deck.pptx:deck s6 55,140,610,170 Site|Total kWh|Mean|Share;Bearspaw Water Treatment Plant|3,082,638|124.0|31.3%;Whitehorn Multi-Service Centre|2,558,802|92.3|26.0%;Glenmore Water Treatment Plant|1,551,178|59.8|15.8%
+slide ppt:solar-deck.pptx:deck sectionHeader When the output happens
+write ppt:solar-deck.pptx:deck s7.notes Transition. This is the section with the actionable finding in it.
+slide ppt:solar-deck.pptx:deck titleOnly Output swings hard with the season
+write ppt:solar-deck.pptx:deck s8.notes July 1,444,872 kWh against December 93,541 kWh. Pause on this slide; it sets up the snow argument.
+sfigure ppt:solar-deck.pptx:deck s8 150,110,420,300 D:\Github\Syn\testbed\out\fig-Dashboard-4.png
+slide ppt:solar-deck.pptx:deck titleContent Winter is worse than it should be|Winter 607,481 kWh against summer 4,040,022 kWh|July to December is a factor of 15|Calgary December irradiance is about a third of June|>a third of the light does not explain a fifteenth of the output|Snow cover on the arrays is the most plausible remainder
+write ppt:solar-deck.pptx:deck s9.notes This is the finding worth their time. Irradiance and output disagree, and the gap is operational.
+slide ppt:solar-deck.pptx:deck titleOnly The day is well behaved
+write ppt:solar-deck.pptx:deck s10.notes Peak at 13:00, 1,300,197 kWh. Symmetric curve means no shading and no thermal derating. A useful negative finding: nothing to fix here.
+sfigure ppt:solar-deck.pptx:deck s10 70,120,580,300 D:\Github\Syn\testbed\out\fig-Dashboard-3.png
+slide ppt:solar-deck.pptx:deck titleOnly Nine years of monthly output
+write ppt:solar-deck.pptx:deck s11.notes Point at the two ends, not the middle. The tails are the partial years.
+sfigure ppt:solar-deck.pptx:deck s11 70,120,580,300 D:\Github\Syn\testbed\out\fig-Dashboard-2.png
+slide ppt:solar-deck.pptx:deck sectionHeader What we are asking for
+write ppt:solar-deck.pptx:deck s12.notes Transition to the ask. Two minutes left at this point.
+slide ppt:solar-deck.pptx:deck titleContent Four recommendations|Clear snow from the arrays after heavy snowfall|>cheapest marginal kWh available to the estate|Rank sites on mean hourly output, not on totals|>reading counts differ by a third across the fleet|Review the four smallest sites on their own terms|Plan around 31 per cent of output sitting in one place
+write ppt:solar-deck.pptx:deck s13.notes The first one is the ask. The other three are housekeeping the committee should note, not decide.
+slide ppt:solar-deck.pptx:deck titleContent What we need from the committee|Agreement to trial snow clearing this winter|One complete year before the next year-on-year comparison|Re-baseline against 2020 until then
+write ppt:solar-deck.pptx:deck s14.notes Stop here. Do not re-summarise. Take questions.
+pagenumbers ppt:solar-deck.pptx:deck Calgary Solar Estate: Quarterly Review

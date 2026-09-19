@@ -327,6 +327,7 @@ fn main() {
                 let call = Call::Struct(StructArgs::InsertTable {
                     rows: core::tools::grid(a[2]),
                     style: word_style(a[1]),
+                    selector: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "wtable", call);
             }
@@ -372,18 +373,62 @@ fn main() {
                 let call = Call::Struct(StructArgs::Picture {
                     path: a[1].into(),
                     width: a.get(2).unwrap_or(&"").trim().to_string(),
+                    selector: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "picture", call);
             }
+            // Layout first, title last: the title has spaces in it, the
+            // same reason `para` and `chart` order their arguments that way.
+            // Title and bullets are both free text, so a space cannot
+            // separate them. The title runs to the first `|`, and the
+            // bullets are what follows -- the same `|` the tool uses.
             "slide" => {
                 let a: Vec<&str> = rest.splitn(3, ' ').collect();
                 if a.len() < 3 {
-                    println!("ERROR usage: slide <handle> <title> <b1|b2>");
+                    println!(
+                        "ERROR usage: slide <handle> <layout|.> <title>[|b1|b2]   \
+                         (layout: title, titleContent, sectionHeader, twoContent, titleOnly, blank)"
+                    );
                     continue;
                 }
-                let bullets = a[2].split('|').map(str::to_string).collect();
-                let call = Call::Struct(StructArgs::CreateSlide { title: a[1].into(), bullets });
+                let (title, bullets) = match a[2].split_once('|') {
+                    Some((t, b)) => (t.trim().to_string(), core::tools::grid(b).into_iter().next().unwrap_or_default()),
+                    None => (a[2].trim().to_string(), Vec::new()),
+                };
+                let call = Call::Struct(StructArgs::CreateSlide {
+                    title,
+                    bullets,
+                    layout: if a[1] == "." { String::new() } else { a[1].into() },
+                });
                 run_op(&mut runner, &mut relay, a[0], "slide", call);
+            }
+            // Geometry is one token and comes before the free text, the
+            // same order `para` and `chart` settled on.
+            "sfigure" => {
+                let a: Vec<&str> = rest.splitn(4, ' ').collect();
+                if a.len() < 4 {
+                    println!("ERROR usage: sfigure <handle> <s3> <left,top,width,height|.> <path>");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::Picture {
+                    path: a[3].trim().into(),
+                    width: if a[2] == "." { String::new() } else { a[2].into() },
+                    selector: a[1].into(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "sfigure", call);
+            }
+            "stable" => {
+                let a: Vec<&str> = rest.splitn(4, ' ').collect();
+                if a.len() < 4 {
+                    println!("ERROR usage: stable <handle> <s3> <left,top,width,height|.> <cells by | rows by ;>");
+                    continue;
+                }
+                let call = Call::Struct(StructArgs::InsertTable {
+                    rows: core::tools::grid(a[3].trim()),
+                    style: if a[2] == "." { String::new() } else { a[2].into() },
+                    selector: a[1].into(),
+                });
+                run_op(&mut runner, &mut relay, a[0], "stable", call);
             }
             "xfer" => {
                 let a: Vec<&str> = rest.splitn(4, ' ').collect();

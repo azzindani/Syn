@@ -13,6 +13,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $csv = Join-Path $repo 'samples\Solar_Energy_Production.csv'
 $book = Join-Path $repo 'testbed\docs\solar.xlsx'
 $memo = Join-Path $repo 'testbed\docs\solar-memo.docx'
+$deck = Join-Path $repo 'testbed\docs\solar-deck.pptx'
 $exe = Join-Path $repo 'sidecar-csharp\Host\bin\Release\net8.0-windows\office-host.exe'
 if (-not (Test-Path $csv)) { throw "fixture missing: $csv" }
 if (-not (Test-Path $exe)) { throw "sidecar not built: $exe" }
@@ -74,7 +75,25 @@ Copy-Item $tpl $memo -Force
 $doc = $wd.Documents.Open($memo)
 Write-Host "memo: $($doc.Name), paragraphs: $($doc.Paragraphs.Count)"
 
+# An empty 16:9 deck. Unlike the memo this needs no blank placeholders:
+# createSlide appends, so the deck starts with nothing in it and the run
+# has to build every slide itself.
+Write-Host 'powerpoint: opening the deck'
+$dtpl = Join-Path $PSScriptRoot 'deck-template.pptx'
+if (-not (Test-Path $dtpl)) { throw "deck template missing: $dtpl" }
+$pp = $null
+try { $pp = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') } catch {}
+if (-not $pp) { $pp = New-Object -ComObject PowerPoint.Application }
+$pp.Visible = -1        # MsoTriState, not a boolean
+for ($i = $pp.Presentations.Count; $i -ge 1; $i--) {
+    if ($pp.Presentations.Item($i).Name -eq 'solar-deck.pptx') { $pp.Presentations.Item($i).Close() }
+}
+Copy-Item $dtpl $deck -Force
+$pres = $pp.Presentations.Open($deck)
+Write-Host "deck: $($pres.Name), slides: $($pres.Slides.Count)"
+
 Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-excel', '--app', 'excel' -WindowStyle Hidden
 Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-word', '--app', 'word' -WindowStyle Hidden
-Start-Sleep -Seconds 4
+Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-ppt', '--app', 'powerpoint' -WindowStyle Hidden
+Start-Sleep -Seconds 5
 Write-Host "sidecars up. Ready for the brief."

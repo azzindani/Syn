@@ -11,10 +11,11 @@
 //! Security, because this is a local server that can run commands:
 //!   * It binds 127.0.0.1 only. Never 0.0.0.0 -- the CLI can attach to your
 //!     open documents and, once a program is allowlisted, run it.
-//!   * Every request needs an `X-Syn-Token` header carrying a per-run token.
-//!     A custom header forces a CORS preflight, which is refused, so a web
-//!     page you happen to visit cannot post commands to this port. That is
-//!     the real defence; the token covers the simple-request case.
+//!   * Every request needs an `X-Syn-Token` header carrying this install's
+//!     token. A custom header forces a CORS preflight, which is refused, so
+//!     a web page you happen to visit cannot post commands to this port.
+//!     That is the real defence; the token covers the simple-request case.
+//!     It is kept in `.syn/console-token` so the address survives a restart.
 //!   * One request at a time. The child has one stdin, and serialising here
 //!     means a command and a poll can never interleave mid-reply.
 
@@ -87,15 +88,55 @@ impl Drop for Cli {
     }
 }
 
-/// A per-run token. Not a secret worth protecting at rest: it lives for one
-/// process lifetime and exists to make a cross-origin simple request fail.
-fn token() -> String {
+/// Where the console keeps its token, beside the conversations: the private,
+/// gitignored corner of the install rather than anywhere the repo tracks.
+fn token_path() -> std::path::PathBuf {
+    core::chats::home().join("console-token")
+}
+
+fn mint_token() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(1);
     let seed = format!("{now}-{}-{:p}", std::process::id(), &now as *const u128);
     core::ws::sha1(seed.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A token that is the same every run.
+///
+/// It exists to make a cross-origin simple request fail, and it does that
+/// just as well when it is stable. Minting a new one per run only meant a
+/// new URL per run: the tab you left open stopped working and the address
+/// had to be hunted down again after every restart. `SYN_CONSOLE_TOKEN`
+/// overrides the stored one.
+fn token() -> String {
+    if let Ok(t) = std::env::var("SYN_CONSOLE_TOKEN")
+        && !t.trim().is_empty()
+    {
+        return t.trim().to_string();
+    }
+    let path = token_path();
+    if let Ok(found) = std::fs::read_to_string(&path)
+        && is_token(found.trim())
+    {
+        return found.trim().to_string();
+    }
+    let fresh = mint_token();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, &fresh) {
+        eprintln!("WARN cannot keep the console token in {}: {e}", path.display());
+        eprintln!("WARN the address will change on the next run");
+    }
+    fresh
+}
+
+/// A truncated or hand-edited file is not a token, and silently accepting a
+/// short one would weaken the check it exists to make.
+fn is_token(s: &str) -> bool {
+    s.len() >= 32 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 struct Req {
@@ -266,5 +307,29 @@ fn main() {
                 let _ = respond(&mut s, "404 Not Found", "text/plain", "no such path");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_damaged_token_file_is_not_accepted_as_a_token() {
+        assert!(is_token(&mint_token()));
+        assert!(is_token(&"a".repeat(32)));
+        // Too short, or not hex: a truncated write and a hand-edit both land
+        // here, and taking either would quietly weaken the check.
+        assert!(!is_token(&"a".repeat(31)));
+        assert!(!is_token(""));
+        assert!(!is_token("not-a-token-but-certainly-long-enough"));
+        assert!(!is_token(&format!("{} ", "a".repeat(32))), "trim before checking");
+    }
+
+    #[test]
+    fn the_token_is_minted_fresh_each_time_but_kept_beside_the_chats() {
+        assert_ne!(mint_token(), mint_token());
+        assert_eq!(mint_token().len(), 40, "sha1 hex");
+        assert!(token_path().ends_with("console-token"));
     }
 }

@@ -103,6 +103,10 @@ pub struct Agent {
     steps: u32,
     pub max_steps: u32,
     pending: Option<Pending>,
+    /// Call ids from a batched turn that this loop did not run. They still
+    /// owe the model a result: the assistant turn is echoed back whole, and
+    /// an id with no `tool` message leaves the transcript malformed.
+    skipped: Vec<String>,
     /// Pinned at construction; a surface that changes underneath a run is a
     /// rug-pull, so the fingerprint is recorded with the transcript.
     pub surface: u64,
@@ -149,6 +153,7 @@ impl Agent {
             steps: 0,
             max_steps: 24,
             pending: None,
+            skipped: Vec::new(),
             surface: tools::surface_fingerprint(),
         }
     }
@@ -255,12 +260,17 @@ impl Agent {
             self.msgs.push(Msg::Assistant(text.clone()));
             return Step::Answered(text);
         };
-        if calls.len() > 1 {
+        // A batched turn used to have its extra calls dropped with a note in
+        // the event feed and nothing said to the model. It then believed five
+        // writes had landed when one had, and reported them to the human as
+        // done. Every id gets an answer now, even if the answer is "not run".
+        let skipped: Vec<String> = calls.iter().skip(1).map(|c| c.id.clone()).collect();
+        if !skipped.is_empty() {
             let _ = relay.emit(
                 &self.session,
                 "step.note",
                 "",
-                format!("model asked for {} tools; taking the first only", calls.len()),
+                format!("model asked for {} tools at once; running the first", calls.len()),
             );
         }
 
@@ -271,7 +281,25 @@ impl Agent {
             None => return Step::Stopped("reply announced tool calls but none could be read".into()),
         }
 
-        self.dispatch(first, relay, runner, shell_policy)
+        let step = self.dispatch(first, relay, runner, shell_policy);
+        // A held approval answers its own call later, so the declines wait
+        // with it and stay behind the result they follow.
+        if matches!(step, Step::NeedsApproval(_)) {
+            self.skipped = skipped;
+        } else {
+            self.decline_skipped(&skipped);
+        }
+        step
+    }
+
+    /// Tell the model, per call id, that a batched call was not run.
+    fn decline_skipped(&mut self, ids: &[String]) {
+        for id in ids {
+            self.observe(
+                id,
+                "not run: this turn asked for several tools at once and only the first was taken.                  Send this one again on its own, after reading the first result.",
+            );
+        }
     }
 
     fn dispatch(&mut self, tc: ToolCall, relay: &mut Relay, runner: &mut Runner, shell_policy: &ShellPolicy) -> Step {
@@ -341,6 +369,7 @@ impl Agent {
         let Some(p) = self.pending.take() else {
             return Step::Stopped("nothing is waiting for approval".into());
         };
+        let held = std::mem::take(&mut self.skipped);
         let _ = relay.emit(&self.session, "step.start", "shell", p.preview.clone());
         match shell::run(shell_policy, &p.program, &p.args) {
             Ok(out) => {
@@ -352,11 +381,13 @@ impl Agent {
                 );
                 let _ = relay.emit(&self.session, "step.done", "shell", detail.clone());
                 self.observe(&p.call_id, &shell::observation(&out));
+                self.decline_skipped(&held);
                 Step::Ran { tool: "shell".into(), detail }
             }
             Err(e) => {
                 let _ = relay.emit(&self.session, "step.error", "shell", e.clone());
                 self.observe(&p.call_id, &format!("refused: {e}"));
+                self.decline_skipped(&held);
                 Step::Refused(e)
             }
         }
@@ -371,6 +402,8 @@ impl Agent {
         let _ = relay.emit(&self.session, "step.denied", "shell", p.preview.clone());
         let why = if reason.trim().is_empty() { "the human declined".to_string() } else { reason.to_string() };
         self.observe(&p.call_id, &format!("denied by the human: {why}. Do not ask again for the same command."));
+        let held = std::mem::take(&mut self.skipped);
+        self.decline_skipped(&held);
         Step::Refused(why)
     }
 }
@@ -445,6 +478,40 @@ mod tests {
 
     fn agent(goal: &str) -> Agent {
         Agent::for_task("s", goal, "test/model", TaskKind::Routine)
+    }
+
+    /// Two calls in one assistant turn, the shape that made the model
+    /// believe five writes had landed when one had.
+    fn batched_reply(h: &str) -> String {
+        let a1 = format!(r#"{{\"handle\":\"{h}\",\"selector\":\"Sheet1\"}}"#);
+        format!(
+            r#"{{"choices":[{{"message":{{"role":"assistant","content":null,"tool_calls":[{{"id":"c1","type":"function","function":{{"name":"read","arguments":"{a1}"}}}},{{"id":"c2","type":"function","function":{{"name":"read","arguments":"{a1}"}}}}]}}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn a_batched_turn_answers_every_call_id() {
+        let (mut relay, mut runner, _s, h) = world();
+        let mut brain = FakeBrain::new(&[batched_reply(&h)]);
+        let mut a = agent("read it twice at once");
+        assert!(matches!(a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()), Step::Ran { .. }));
+
+        // Both ids come back, or the assistant turn this echoed is malformed
+        // and the model never learns the second call did not run.
+        let answered: Vec<&str> = a
+            .msgs
+            .iter()
+            .filter_map(|m| match m {
+                Msg::Tool { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answered, vec!["c1", "c2"]);
+        let second = a.msgs.iter().find_map(|m| match m {
+            Msg::Tool { id, content } if id == "c2" => Some(content.clone()),
+            _ => None,
+        });
+        assert!(second.unwrap().contains("not run"), "the model must be told, not just the event feed");
     }
 
     #[test]

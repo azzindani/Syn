@@ -36,7 +36,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "write",
         description: "Write values into an OPEN handle at a selector. Only the selected cells change. Does NOT create sheets, slides or paragraphs (use struct). Snapshots first so undo works. Refuses writes over the bulk cap instead of truncating them.",
-        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"selector":{"type":"string","maxLength":200},"values":{"type":"string","maxLength":8000,"description":"cells joined by , and rows by ; e.g. a,b;c,d"}},"required":["handle","selector","values"],"additionalProperties":false}"#,
+        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"selector":{"type":"string","maxLength":200},"values":{"type":"string","maxLength":8000,"description":"cells joined by , and rows by ; e.g. a,b;c,d. One cell per row is a;b;c. Write \\, for a comma inside a value."}},"required":["handle","selector","values"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "format",
@@ -299,8 +299,33 @@ pub fn parse_tool_calls(body: &str) -> Vec<ToolCall> {
     out
 }
 
-fn grid(s: &str) -> Vec<Vec<String>> {
-    s.split(';').map(|r| r.split(',').map(|c| c.trim().to_string()).collect()).collect()
+/// Split the grid encoding, honouring a backslash escape.
+///
+/// Without it a cell simply cannot hold a comma, and prose is full of
+/// them: asked to put a poem in a spreadsheet, a model writes a line with
+/// a comma in it and the line silently lands in two cells. `\\,` and
+/// `\\;` are literal, `\\\\` is a backslash; everything else after a
+/// backslash is taken verbatim rather than being an error worth failing a
+/// whole write over.
+pub fn grid(s: &str) -> Vec<Vec<String>> {
+    let mut rows: Vec<Vec<String>> = vec![vec![String::new()]];
+    let mut escaped = false;
+    for c in s.chars() {
+        let row = rows.last_mut().expect("never empty");
+        if escaped {
+            row.last_mut().expect("never empty").push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ';' {
+            rows.push(vec![String::new()]);
+        } else if c == ',' {
+            row.push(String::new());
+        } else {
+            row.last_mut().expect("never empty").push(c);
+        }
+    }
+    rows.iter().map(|r| r.iter().map(|c| c.trim().to_string()).collect()).collect()
 }
 
 /// A shell request, kept separate from the six document ops.
@@ -411,6 +436,23 @@ mod tests {
         assert_eq!(TOOLS.len(), 7, "six document ops plus shell");
         assert!(spec("read").is_some());
         assert!(spec("rm -rf").is_none());
+    }
+
+    #[test]
+    fn a_cell_can_hold_a_comma_if_it_escapes_it() {
+        // The failure this exists for: a poem line with a comma in it landed
+        // in two cells, and the model reported one.
+        let one = grid(r"Shutters rattle\, palms bow low");
+        assert_eq!(one, vec![vec!["Shutters rattle, palms bow low".to_string()]]);
+        // The separators still separate when they are not escaped.
+        assert_eq!(grid("a,b;c,d"), vec![vec!["a", "b"], vec!["c", "d"]]);
+        assert_eq!(grid("one;two;three").len(), 3);
+        // A semicolon survives too, and a doubled backslash is one backslash.
+        assert_eq!(grid(r"x\;y"), vec![vec!["x;y".to_string()]]);
+        assert_eq!(grid(r"a\\b"), vec![vec![r"a\b".to_string()]]);
+        // And what goes to the sidecar comes back as the same cells.
+        let cells = vec![vec!["Shutters rattle, palms bow low".to_string()]];
+        assert_eq!(grid(&crate::hand::grid_payload(&cells)), cells);
     }
 
     #[test]

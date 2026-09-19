@@ -18,7 +18,9 @@
 // the user's app, no orphans). Word and PowerPoint paths are written but
 // NOT yet exercised live -- see docs/runbook-windows.md.
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -297,10 +299,27 @@ namespace Syn.Sidecar
             Console.Error.Flush();
         }
 
+        // A selector with no sheet name used to reach COM as a worksheet key
+        // and come back as `0x8002000B Invalid index`, which tells a caller
+        // nothing about what to send instead. The write path already refused
+        // that shape in words; reads say the same thing now.
+        private static dynamic Sheet(dynamic wb, string name)
+        {
+            try { return wb.Worksheets[name]; }
+            catch (COMException)
+            {
+                int n = wb.Worksheets.Count;
+                var names = new string[n];
+                for (var i = 1; i <= n; i++) names[i - 1] = (string)wb.Worksheets[i].Name;
+                throw new InvalidOperationException(
+                    $"no sheet named '{name}': a selector is Sheet!A1:B2, and this workbook has {string.Join(", ", names)}");
+            }
+        }
+
         private static string ReadRange(dynamic wb, string selector)
         {
             var (sheet, addr) = SplitRange(selector);
-            dynamic ws = wb.Worksheets[sheet];
+            dynamic ws = Sheet(wb, sheet);
             dynamic rng = string.IsNullOrEmpty(addr) ? ws.UsedRange : ws.Range[addr];
             return $"grid {sheet}: {rng.Rows.Count}x{rng.Columns.Count}";
         }
@@ -310,17 +329,41 @@ namespace Syn.Sidecar
             Snapshot(handle);
             var (sheet, addr) = SplitRange(selector);
             if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("write needs Sheet!A1:B2");
-            dynamic ws = wb.Worksheets[sheet];
-            var rows = payload.Split(';');
+            dynamic ws = Sheet(wb, sheet);
+            var rows = ParseGrid(payload);
             var r0 = ws.Range[addr].Row;
             var c0 = ws.Range[addr].Column;
             for (var i = 0; i < rows.Length; i++)
+                for (var j = 0; j < rows[i].Length; j++)
+                    ws.Cells[r0 + i, c0 + j].Value2 = rows[i][j];
+            // Name the range that actually took the values, not just a shape.
+            // "1x9" reads as success to a model that meant to write a column;
+            // "A1:I1" is the same fact in a form it cannot skim past.
+            var wide = rows.Max(r => r.Length);
+            dynamic last = ws.Cells[r0 + rows.Length - 1, c0 + wide - 1];
+            string endCell = last.Address(false, false);
+            dynamic first = ws.Cells[r0, c0];
+            string startCell = first.Address(false, false);
+            return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}");
+        }
+
+        // Mirrors grid() in core/src/tools.rs: a backslash escapes the next
+        // character, so a cell can hold a comma. Splitting naively meant a
+        // line of prose with a comma in it landed in two cells.
+        private static string[][] ParseGrid(string payload)
+        {
+            var rows = new List<List<string>> { new() { "" } };
+            var escaped = false;
+            foreach (var ch in payload)
             {
-                var cells = rows[i].Split(',');
-                for (var j = 0; j < cells.Length; j++)
-                    ws.Cells[r0 + i, c0 + j].Value2 = cells[j];
+                var row = rows[^1];
+                if (escaped) { row[^1] += ch; escaped = false; }
+                else if (ch == '\\') { escaped = true; }
+                else if (ch == ';') rows.Add(new List<string> { "" });
+                else if (ch == ',') row.Add("");
+                else row[^1] += ch;
             }
-            return Ok($"wrote {rows.Length}x{rows[0].Split(',').Length} at {selector}");
+            return rows.Select(r => r.ToArray()).ToArray();
         }
 
         private static string ExportWb(dynamic wb, string handle, string format, string path)

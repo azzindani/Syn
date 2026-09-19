@@ -105,9 +105,19 @@ pub fn envelope(method: &str, handle: &str, args_json: &str, payload: Option<&st
 }
 
 /// Serialise a grid the way the sidecar's write path parses it: cells joined
-/// by `,` and rows by `;`.
+/// by `,` and rows by `;`, with a separator inside a value escaped so it
+/// arrives as part of the value rather than splitting it.
 pub fn grid_payload(values: &[Vec<String>]) -> String {
-    values.iter().map(|r| r.join(",")).collect::<Vec<_>>().join(";")
+    fn cell(c: &str) -> String {
+        // Backslash first, or escaping the separators would escape the
+        // escapes this adds.
+        c.replace('\\', "\\\\").replace(',', "\\,").replace(';', "\\;")
+    }
+    values
+        .iter()
+        .map(|r| r.iter().map(|c| cell(c)).collect::<Vec<_>>().join(","))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// Map one primitive op onto a sidecar method + envelope.

@@ -154,9 +154,6 @@ fn drive(
     }
 }
 
-fn parse_grid(s: &str) -> Vec<Vec<String>> {
-    s.split(';').map(|r| r.split(',').map(str::to_string).collect()).collect()
-}
 
 fn main() {
     // Deployment config before anything else: .env seeds the process env,
@@ -298,7 +295,7 @@ fn main() {
                     println!("ERROR usage: write <handle> <selector> <v11,v12;r21>");
                     continue;
                 }
-                let call = Call::Write(WriteArgs { selector: a[1].into(), values: parse_grid(a[2]) });
+                let call = Call::Write(WriteArgs { selector: a[1].into(), values: core::tools::grid(a[2]) });
                 run_op(&mut runner, &mut relay, a[0], "write", call);
             }
             "para" => {

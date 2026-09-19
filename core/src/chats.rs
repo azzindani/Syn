@@ -60,10 +60,10 @@ pub fn field(line: &str, name: &str) -> Option<String> {
                 Some('t') => out.push('\t'),
                 Some('u') => {
                     let hex: String = it.by_ref().take(4).collect();
-                    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                        Some(c) => out.push(c),
-                        None => return None,
-                    }
+                    // A malformed escape aborts the field rather than
+                    // substituting a replacement character, so a corrupt
+                    // line is reported missing instead of silently altered.
+                    out.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)?);
                 }
                 Some(other) => out.push(other),
                 None => return None,

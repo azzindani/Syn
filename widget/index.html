@@ -1,124 +1,194 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Syn — one brain, many hands</title>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syn — one brain, many hands</title>
 <style>
-:root{--bg:#141311;--panel:#1e1c19;--line:#35322c;--txt:#ece7dd;--mut:#a49d90;--acc:#e0a63c;--ok:#7fb069;--err:#d1604f}
-body{font:13px/1.45 system-ui;background:var(--bg);color:var(--txt);margin:0;padding:10px;max-width:560px}
-header{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-select,input,button{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
+:root{--bg:#141311;--panel:#1e1c19;--line:#35322c;--txt:#ece7dd;--mut:#a49d90;--acc:#e0a63c;--ok:#7fb069;--err:#d1604f;--info:#6f9fd8}
+*{box-sizing:border-box}
+body{font:13px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--txt);margin:0;padding:12px;max-width:940px;margin-inline:auto}
+header{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+header b{font-size:15px;letter-spacing:.3px}
+header small{color:var(--mut)}
+select,input,button{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit}
 button{cursor:pointer}button:hover{border-color:var(--acc)}
+button:disabled{opacity:.45;cursor:default}
 #kill{border-color:var(--err);color:var(--err)}
-#feed{height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0;background:#100f0e}
-.ev{margin:0 0 6px}.ev .t{color:var(--mut);font-size:11px}
-.ev.done{border-left:3px solid var(--ok);padding-left:6px}
-.ev.start{border-left:3px solid var(--acc);padding-left:6px}
-.ev.err{border-left:3px solid var(--err);padding-left:6px}
-.ev.chat{border-left:3px solid #6f9fd8;padding-left:6px;white-space:pre-wrap}
-#box{width:100%;box-sizing:border-box}
-#budgetbar{height:4px;background:var(--line);border-radius:2px;margin-top:6px}
-#budgetfill{height:100%;width:0;background:var(--acc);border-radius:2px}
-.row{display:flex;gap:6px;margin-top:6px}
+.grid{display:grid;grid-template-columns:200px 1fr;gap:10px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:9px}
+.card h3{margin:0 0 7px;font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--mut);font-weight:600}
+.card button{display:block;width:100%;text-align:left;margin-bottom:5px;padding:5px 8px}
+#feed{height:58vh;min-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:9px;background:#100f0e;white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,Consolas,monospace}
+.ev{margin:0 0 7px;padding-left:7px;border-left:3px solid var(--line)}
+.ev .t{color:var(--mut);font-size:10px;display:block;margin-bottom:1px}
+.ev.you{border-left-color:var(--info);color:var(--info)}
+.ev.ok{border-left-color:var(--ok)}
+.ev.err{border-left-color:var(--err);color:#f0a99c}
+.ev.sys{border-left-color:var(--acc);color:var(--mut)}
+.row{display:flex;gap:6px;margin-top:8px}
 .row input{flex:1}
-small{color:var(--mut)}
+.hint{color:var(--mut);margin-top:6px;display:block}
+kbd{background:#2a2723;border:1px solid var(--line);border-radius:4px;padding:0 4px;font:11px ui-monospace,monospace}
 </style></head>
 <body>
+
 <header>
   <b>Syn</b>
-  <select id="sess"><option value="cli">cli</option></select>
-  <select id="model">
-    <option value="auto">Auto (router)</option>
-    <option value="openai/gpt-5.6-luna">Luna (skim)</option>
-    <option value="openai/gpt-5.6-terra">Terra (routine)</option>
-    <option value="openai/gpt-5.6-sol">Sol (code)</option>
-    <option value="openai/gpt-6-astra">Astra (vision/deep)</option>
-  </select>
+  <small>one brain, many hands</small>
+  <span style="flex:1"></span>
+  <span id="dot" title="console link" style="color:var(--mut)">connecting…</span>
   <button id="pause">Pause</button>
   <button id="resume">Resume</button>
   <button id="kill">Kill</button>
 </header>
-<div id="feed"></div>
-<div class="row"><input id="box" placeholder="chat — Enter sends to model, streams back here"></div>
-<div class="row"><input id="key" type="password" placeholder="OpenRouter key (memory only, never stored)"><input id="cap" type="number" value="40" style="max-width:90px" title="session cost-rank budget"></div>
-<div id="budgetbar"><div id="budgetfill"></div></div>
-<small id="spent">spent 0 / cap 40</small>
+
+<div class="grid">
+  <div>
+    <div class="card">
+      <h3>Look</h3>
+      <button data-cmd="hands">hands</button>
+      <button data-cmd="registry">registry</button>
+      <button data-cmd="events">events</button>
+      <button data-cmd="config">config</button>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>Connect a hand</h3>
+      <button data-cmd="hand synuia ui">UI Automation</button>
+      <button data-cmd="cdp 127.0.0.1:9222 web">Browser (CDP)</button>
+      <button data-cmd="hand synhand-excel excel word ppt">Office</button>
+      <span class="hint">Each needs its sidecar or browser already running — see the README.</span>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>Router slot</h3>
+      <select id="task">
+        <option value="routine">routine (Terra)</option>
+        <option value="skim">skim (Luna)</option>
+        <option value="code">code (Sol)</option>
+        <option value="deep">deep (Astra)</option>
+      </select>
+      <span class="hint">Free-tier models rate-limit separately; switch slots on a 429.</span>
+    </div>
+  </div>
+
+  <div>
+    <div id="feed"></div>
+
+    <div class="row">
+      <input id="goal" placeholder="goal for the agent — e.g. Read the sheet and write its shape into the report">
+      <button id="go">do</button>
+    </div>
+    <div class="row">
+      <input id="box" placeholder="command — e.g. read ui:Calculator::self :tree" autocomplete="off" spellcheck="false">
+      <button id="run">run</button>
+    </div>
+    <span class="hint">
+      <kbd>Enter</kbd> sends · <kbd>↑</kbd>/<kbd>↓</kbd> history ·
+      every button here types a line you could type yourself, and the receipts come back verbatim.
+    </span>
+  </div>
+</div>
+
 <script>
 "use strict";
-// Syn widget: chat + live orchestration feed + model picker + budget + kill.
-// Bridge: window.__SYN__ (Tauri invoke op/event) when hosted;
-// otherwise DEMO bus with the exact core event shapes, so the UI is testable
-// in any browser. Streaming parse mirrors core provider::parse_sse_text.
-const $=id=>document.getElementById(id);
-const feed=$("feed"), box=$("box"), sess=$("sess"), model=$("model"), key=$("key"), cap=$("cap");
-let spent=0, paused=false;
-const COST={luna:1,terra:2,sol:3,astra:4};
+// The console never talks to a model or a document itself. It posts one
+// command line to the local server, which types it into the real CLI. That
+// keeps this page honest: it can only do what the CLI can do, and it shows
+// exactly what the CLI said.
+const TOKEN = "__SYN_TOKEN__";
+const feed = document.getElementById("feed");
+const box = document.getElementById("box");
+const goal = document.getElementById("goal");
+const dot = document.getElementById("dot");
+const hist = [];
+let hi = 0, busy = false;
 
-function ev(cls,title,body){
-  const d=document.createElement("div");d.className="ev "+cls;
-  d.innerHTML="<div class=t></div><div class=b></div>";
-  d.querySelector(".t").textContent=title;
-  d.querySelector(".b").textContent=body||"";
-  feed.appendChild(d);feed.scrollTop=feed.scrollHeight;
-}
-// Core event shape: {session, t:"step.start"|"step.done"|"receipt"|"error", handle, detail}
-function onCoreEvent(e){ 
-  const cls=e.t==="step.done"||e.t==="receipt"?"done":e.t==="error"?"err":"start";
-  ev(cls,`[${e.session}] ${e.t} ${e.handle||""}`,e.detail||"");
-}
-const Bus={
-  async op(name,args){
-    if(window.__SYN__&&window.__SYN__.invoke) return window.__SYN__.invoke("op",{name,...args});
-    onCoreEvent({session:sess.value,t:"step.start",handle:args.handle||"",detail:name+" "+JSON.stringify(args)});
-    await new Promise(r=>setTimeout(r,150));
-    const out={session:sess.value,t:"step.done",handle:args.handle||"",detail:"demo-ok (no Tauri bridge; hosted widget runs this live)"};
-    onCoreEvent(out);return out;
-  },
-  onEvent(fn){ if(window.__SYN__&&window.__SYN__.listen) window.__SYN__.listen("syn-event",fn); }
-};
-Bus.onEvent(onCoreEvent);
-
-function routeTask(prompt){
-  if(/look|see|screenshot|pixel|ui gap/i.test(prompt)) return "astra";
-  if(/code|script|function|regex/i.test(prompt)) return "sol";
-  if(/summar|skim|list/i.test(prompt)) return "luna";
-  return "terra";
-}
-function spend(rank){
-  spent+=rank;const c=+cap.value||40;
-  $("budgetfill").style.width=Math.min(100,100*spent/c)+"%";
-  $("spent").textContent=`spent ${spent} / cap ${c}${spent>=c?" — BUDGET HIT, auto-paused":""}`;
-  if(spent>=c){paused=true;ev("err","budget","cap reached — queue auto-paused. Raise cap or start a new session.");}
-}
-async function send(){
-  const prompt=box.value.trim();if(!prompt)return;box.value="";
-  ev("chat","you",prompt);
-  const fam=model.value==="auto"?routeTask(prompt):model.value.split("/")[1].split("-")[2];
-  if(paused){ev("err","queue","paused — Resume first.");return;}
-  const k=key.value.trim();
-  if(!k){ // no key: route through core demo path so orchestration still works
-    await Bus.op("chat",{prompt,model:fam});spend(COST[fam]||2);return;
+function line(cls, text, label) {
+  const d = document.createElement("div");
+  d.className = "ev " + cls;
+  if (label) {
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = label;
+    d.appendChild(t);
   }
-  const id=model.value==="auto"?{luna:"openai/gpt-5.6-luna",terra:"openai/gpt-5.6-terra",sol:"openai/gpt-5.6-sol",astra:"openai/gpt-6-astra"}[fam]:model.value;
-  const res=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
-    headers:{"Content-Type":"application/json","Authorization":"Bearer "+k},
-    body:JSON.stringify({model:id,stream:true,messages:[{role:"user",content:prompt}]})});
-  if(!res.ok){ev("err","model",`HTTP ${res.status}`);return;}
-  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
-  const div=document.createElement("div");div.className="ev chat";
-  div.innerHTML="<div class=t>model · "+fam+"</div><div class=b></div>";
-  feed.appendChild(div);const b=div.querySelector(".b");
-  for(;;){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
-    const parts=buf.split("\n\n");buf=parts.pop();
-    for(const p of parts)for(const line of p.split("\n")){
-      const t=line.trim();if(!t.startsWith("data:"))continue;
-      const pay=t.slice(5).trim();if(pay==="[DONE]")continue;
-      try{const j=JSON.parse(pay);const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content||"";
-        full+=d;b.textContent=full;feed.scrollTop=feed.scrollHeight;}catch(e){/* skip partial */}
-    }}
-  spend(COST[fam]||2);
+  d.appendChild(document.createTextNode(text));
+  feed.appendChild(d);
+  feed.scrollTop = feed.scrollHeight;
 }
-box.addEventListener("keydown",e=>{if(e.key==="Enter")send();});
-$("pause").onclick=()=>{paused=true;Bus.op("pause",{session:sess.value});ev("start","queue","paused — files stay open.")};
-$("resume").onclick=()=>{paused=false;Bus.op("resume",{session:sess.value});ev("done","queue","resumed — handles revalidated.")};
-$("kill").onclick=()=>{if(confirm("Latch the kill switch? Dispatch stops now.")){Bus.op("kill",{session:sess.value});ev("err","kill","latched. Fresh session required to re-arm.");}};
-ev("done","syn","widget ready. session=cli · pick a model or Auto · key stays in memory.");
+
+// Classify by the CLI's own receipt prefixes rather than guessing, so an
+// error never renders as a success.
+function show(out) {
+  const txt = (out || "").replace(/\s+$/, "");
+  if (!txt) { line("sys", "(no output)"); return; }
+  for (const l of txt.split("\n")) {
+    if (!l.trim()) continue;
+    if (l.startsWith("ERROR")) line("err", l);
+    else if (l.startsWith("REFUSED") || l.startsWith("CONFIRM")) line("sys", l);
+    else if (l.startsWith("RECEIPT") || l.startsWith("STEP") || l.startsWith("ANSWER")) line("ok", l);
+    else line("", l);
+  }
+}
+
+async function run(cmd, echo = true) {
+  if (!cmd.trim() || busy) return;
+  busy = true;
+  if (echo) line("you", cmd, "you");
+  try {
+    const r = await fetch("/cmd", {
+      method: "POST",
+      headers: { "X-Syn-Token": TOKEN, "Content-Type": "text/plain" },
+      body: cmd,
+    });
+    if (!r.ok) { line("err", "console: " + r.status + " " + (await r.text())); return; }
+    show((await r.json()).out);
+    dot.textContent = "linked";
+    dot.style.color = "var(--ok)";
+  } catch (e) {
+    dot.textContent = "offline";
+    dot.style.color = "var(--err)";
+    line("err", "console unreachable: " + e.message + " — is `ui.exe` still running?");
+  } finally {
+    busy = false;
+  }
+}
+
+document.querySelectorAll("button[data-cmd]").forEach(b =>
+  b.addEventListener("click", () => run(b.dataset.cmd)));
+
+document.getElementById("run").addEventListener("click", send);
+document.getElementById("pause").addEventListener("click", () => run("pause"));
+document.getElementById("resume").addEventListener("click", () => run("resume"));
+document.getElementById("kill").addEventListener("click", () => run("kill"));
+document.getElementById("task").addEventListener("change", e => run("task " + e.target.value));
+document.getElementById("go").addEventListener("click", sendGoal);
+
+function send() {
+  const v = box.value.trim();
+  if (!v) return;
+  hist.push(v); hi = hist.length;
+  box.value = "";
+  run(v);
+}
+
+function sendGoal() {
+  const v = goal.value.trim();
+  if (!v) return;
+  goal.value = "";
+  // `do` can pause for approval; the receipt says so and `approve` / `deny`
+  // are ordinary commands, so nothing special is needed here.
+  run("do " + v);
+}
+
+box.addEventListener("keydown", e => {
+  if (e.key === "Enter") { send(); return; }
+  if (e.key === "ArrowUp" && hi > 0) { box.value = hist[--hi]; e.preventDefault(); }
+  if (e.key === "ArrowDown") { hi = Math.min(hi + 1, hist.length); box.value = hist[hi] || ""; e.preventDefault(); }
+});
+goal.addEventListener("keydown", e => { if (e.key === "Enter") sendGoal(); });
+
+line("sys", "Console ready. `hands` shows what is attached; `do <goal>` runs the agent.");
+run("config", false);
+box.focus();
 </script>
 </body></html>

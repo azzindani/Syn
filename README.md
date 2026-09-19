@@ -30,8 +30,10 @@ software hands (Office first) in one live session, any model via OpenRouter.
     because `core` has no dependencies.
   - bins: `cli` (REPL: `do`/`approve`/`deny`, `hand`/`live`, `shellallow`),
     `mcpgate` (stdio bridge).
-- `widget/index.html` — chat + live feed + model picker + budget + kill
-  (Tauri shell in `widget/src-tauri`; UI runs standalone in demo mode).
+- `widget/index.html` — the web console, served by the `ui` binary. It posts
+  one command line to a loopback server that types it into a real `cli`
+  process, so the page can only do what the CLI can do and shows exactly
+  what the CLI said. (Tauri shell in `widget/src-tauri`, still unbuilt.)
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
   named-pipe office-rpc/1, timeout-guarded calls, .bak snapshots).
   Needs Windows + .NET 8 + Office to compile/run.
@@ -140,6 +142,23 @@ punctuation and shortcut hints; `id` never does, since a fuzzy id match
 presses the neighbouring button.
 
 Reproduce with `scripts/live-uia-smoke.ps1`.
+
+## Drive it from a browser
+
+```
+powershell -File scripts\console.ps1 -WithUia
+```
+
+Starts the console (and the UIA sidecar), prints a tokenised URL and opens
+it. Buttons for `hands` / `registry` / `events`, one click to attach each
+hand, a command box with history, and a goal box that runs the agent.
+
+It binds 127.0.0.1 and every request carries a per-run token in a custom
+header. A custom header forces a CORS preflight, which the server refuses,
+so a page you happen to visit cannot post commands to this port — and a
+request that arrives with any `Origin` header is rejected outright.
+
+Stop it with `Get-Process ui, uia-host | Stop-Process`.
 
 ## Drive it from a terminal
 

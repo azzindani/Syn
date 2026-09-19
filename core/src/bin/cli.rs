@@ -14,6 +14,7 @@
 //!   page <app> <match> [u]  register a page/window as a handle (alias: win)
 //!   invoke <h> <sel> [act]  press a control on a live handle
 //!   hands                   attached hands, in routing order
+//!   mark <token>            echo a sentinel (used by the web console)
 //!   live <handle>           route that handle's ops to the open document
 //!   lread <h> <sel>         queued read of a live handle
 //!                           (once `live`, plain `write` also hits the document)
@@ -190,6 +191,10 @@ fn main() {
                 relay.attach(&session, kind.clone(), file);
                 println!("RECEIPT attached={kind}");
             }
+            // A sentinel so a non-interactive driver knows where one
+            // command's output ends. Commands print a variable number of
+            // lines, so a reader with no marker either guesses or blocks.
+            "mark" => println!("RECEIPT mark={}", rest.trim()),
             "registry" => println!("RECEIPT registry={:?}", relay.registry(&session).unwrap_or_default()),
             "read" => {
                 let a: Vec<&str> = rest.splitn(2, ' ').collect();

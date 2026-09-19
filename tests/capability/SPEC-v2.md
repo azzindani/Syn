@@ -175,17 +175,37 @@ closed and verified against live Office; the note says how.
 Everything above is ordinary late-bound COM. The engine had simply never
 been asked for it.
 
+## Results
+
+| Run | Score | What it says |
+|---|---|---|
+| 2026-09-19, control (`load.txt`, scripted) | **70/70** artifacts and judgement | Every part of the job is expressible and lands correctly. 180 operations, 18s. |
+| provider run | not yet run | |
+
+The control is run with `score-v2.ps1 -Control` and is deliberately scored
+out of 70: it has no transcript, so the ten process points do not apply, and
+totalling them from some other run would report a number nobody earned. It
+is **not a pass**. It isolates one variable -- whether the harness can
+express the job at all -- from the other -- whether a model can drive it.
+
+Two scorer defects were fixed after the first control run and before any
+model run, and both were false negatives rather than loosened checks: J2
+did not recognise "a factor of 6.7", only "6.7x"; and J5 held no reading
+counts in its truth set, so a correct figure in the prose scored as a miss.
+Git order is the evidence.
+
 ## Engine load test
 
 Separate from the capability test, and not scored: it answers "can the
 engine carry this volume", not "can a model plan it". `load.txt` is scripted
 by hand, so it says nothing about the model.
 
-    52 operations, 11.3s, 0 failures
+    180 operations, 18s, 0 failures
     1,033,692 derived formula cells over 258,423 rows
     11-site scorecard, 7 metrics each, every one a live formula
     108 year-month rows, 24 hour rows, 4 seasons
-    5 charts, 2 pivots, 1 slicer, 5 conditional-format rules
+    5 charts laid out by range anchor, 2 pivots, 1 slicer, 6 shading rules
+    a 20-page report: contents, 24 headings, 4 tables, 5 charts, 3,286 words
 
 Every figure exact against `ground-truth.json`: all 11 site totals, the four
 season totals, peak hour 13:00 at 1,300,197 kWh, and 91 non-zero year-months

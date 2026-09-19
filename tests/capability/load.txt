@@ -1,6 +1,9 @@
 hand synhand-excel excel
+hand synhand-word word
 attach excel solar.xlsx data
+attach word solar-memo.docx
 live excel:solar.xlsx:data
+live word:solar-memo.docx:body
 write excel:solar.xlsx:data data!I1 Year|Month|Hour|Season
 write excel:solar.xlsx:data data!I2:I258424 =YEAR(D2)
 write excel:solar.xlsx:data data!J2:J258424 =MONTH(D2)
@@ -8,6 +11,7 @@ write excel:solar.xlsx:data data!K2:K258424 =HOUR(D2)
 write excel:solar.xlsx:data data!L2:L258424 =IF(OR(J2=12,J2<3),"Winter",IF(J2<6,"Spring",IF(J2<9,"Summer","Autumn")))
 table excel:solar.xlsx:data data!A1:L258424 SolarData
 name excel:solar.xlsx:data EstateKwh data!E2:E258424
+format excel:solar.xlsx:data data!A1 freeze=1
 sheet excel:solar.xlsx:data Scorecard
 write excel:solar.xlsx:data Scorecard!A1 Site|Total kWh|Mean|Median|P95|Peak|Readings|Share
 write excel:solar.xlsx:data Scorecard!A2 Bearspaw Water Treatment Plant;Whitehorn Multi-Service Centre;Glenmore Water Treatment Plant;Southland Leisure Centre;City of Calgary North Corporate Warehouse;Hillhurst Sunnyside Community Association;Manchester Building M;CFD Firehall #7;Calgary Fire Hall Headquarters;Richmond - Knob Hill Community Hall;Telus Spark
@@ -18,11 +22,12 @@ write excel:solar.xlsx:data Scorecard!E2:E12 =PERCENTILE.INC(IF(data!$A$2:$A$258
 write excel:solar.xlsx:data Scorecard!F2:F12 =MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A2)
 write excel:solar.xlsx:data Scorecard!G2:G12 =COUNTIF(data!$A$2:$A$258424,$A2)
 write excel:solar.xlsx:data Scorecard!H2:H12 =B2/SUM(EstateKwh)
-format excel:solar.xlsx:data Scorecard!A1:H1 bold=1
+format excel:solar.xlsx:data Scorecard!A1:H1 bold=1;fill=#1F4E79;color=#FFFFFF;align=center;border=1
 format excel:solar.xlsx:data Scorecard!B2:F12 numberFormat=#,##0.0
 format excel:solar.xlsx:data Scorecard!G2:G12 numberFormat=#,##0
 format excel:solar.xlsx:data Scorecard!H2:H12 numberFormat=0.0%
 format excel:solar.xlsx:data Scorecard!A:A width=36
+format excel:solar.xlsx:data Scorecard!A2 freeze=1
 conditional excel:solar.xlsx:data Scorecard!B2:B12 dataBar
 conditional excel:solar.xlsx:data Scorecard!H2:H12 colorScale
 conditional excel:solar.xlsx:data Scorecard!C2:C12 iconSet
@@ -30,26 +35,146 @@ sheet excel:solar.xlsx:data Monthly
 write excel:solar.xlsx:data Monthly!A1 Year|Month|Total kWh
 write excel:solar.xlsx:data Monthly!A2 2015|1;2015|2;2015|3;2015|4;2015|5;2015|6;2015|7;2015|8;2015|9;2015|10;2015|11;2015|12;2016|1;2016|2;2016|3;2016|4;2016|5;2016|6;2016|7;2016|8;2016|9;2016|10;2016|11;2016|12;2017|1;2017|2;2017|3;2017|4;2017|5;2017|6;2017|7;2017|8;2017|9;2017|10;2017|11;2017|12;2018|1;2018|2;2018|3;2018|4;2018|5;2018|6;2018|7;2018|8;2018|9;2018|10;2018|11;2018|12;2019|1;2019|2;2019|3;2019|4;2019|5;2019|6;2019|7;2019|8;2019|9;2019|10;2019|11;2019|12;2020|1;2020|2;2020|3;2020|4;2020|5;2020|6;2020|7;2020|8;2020|9;2020|10;2020|11;2020|12;2021|1;2021|2;2021|3;2021|4;2021|5;2021|6;2021|7;2021|8;2021|9;2021|10;2021|11;2021|12;2022|1;2022|2;2022|3;2022|4;2022|5;2022|6;2022|7;2022|8;2022|9;2022|10;2022|11;2022|12;2023|1;2023|2;2023|3;2023|4;2023|5;2023|6;2023|7;2023|8;2023|9;2023|10;2023|11;2023|12
 write excel:solar.xlsx:data Monthly!C2:C109 =SUMIFS(data!$E$2:$E$258424,data!$I$2:$I$258424,$A2,data!$J$2:$J$258424,$B2)
-format excel:solar.xlsx:data Monthly!A1:C1 bold=1
+format excel:solar.xlsx:data Monthly!A1:C1 bold=1;fill=#1F4E79;color=#FFFFFF;border=1
 format excel:solar.xlsx:data Monthly!C2:C109 numberFormat=#,##0
 conditional excel:solar.xlsx:data Monthly!C2:C109 colorScale
+format excel:solar.xlsx:data Monthly!A1:C1 autofitSheet=1
 sheet excel:solar.xlsx:data Profiles
-write excel:solar.xlsx:data Profiles!A1 Season|Total kWh
+write excel:solar.xlsx:data Profiles!A1 Season|Total kWh|Share
 write excel:solar.xlsx:data Profiles!A2 Winter;Spring;Summer;Autumn
 write excel:solar.xlsx:data Profiles!B2:B5 =SUMIF(data!$L$2:$L$258424,$A2,data!$E$2:$E$258424)
-write excel:solar.xlsx:data Profiles!D1 Hour|Total kWh
-write excel:solar.xlsx:data Profiles!D2 0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23
-write excel:solar.xlsx:data Profiles!E2:E25 =SUMIF(data!$K$2:$K$258424,$D2,data!$E$2:$E$258424)
-format excel:solar.xlsx:data Profiles!A1:E1 bold=1
+write excel:solar.xlsx:data Profiles!C2:C5 =B2/SUM($B$2:$B$5)
+write excel:solar.xlsx:data Profiles!E1 Hour|Total kWh
+write excel:solar.xlsx:data Profiles!E2 0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23
+write excel:solar.xlsx:data Profiles!F2:F25 =SUMIF(data!$K$2:$K$258424,$E2,data!$E$2:$E$258424)
+format excel:solar.xlsx:data Profiles!A1:F1 bold=1;fill=#1F4E79;color=#FFFFFF;border=1
 format excel:solar.xlsx:data Profiles!B2:B5 numberFormat=#,##0
-format excel:solar.xlsx:data Profiles!E2:E25 numberFormat=#,##0
-conditional excel:solar.xlsx:data Profiles!E2:E25 dataBar
+format excel:solar.xlsx:data Profiles!C2:C5 numberFormat=0.0%
+format excel:solar.xlsx:data Profiles!F2:F25 numberFormat=#,##0
+conditional excel:solar.xlsx:data Profiles!F2:F25 dataBar
+conditional excel:solar.xlsx:data Profiles!B2:B5 colorScale
 sheet excel:solar.xlsx:data Dashboard
-chart excel:solar.xlsx:data column Scorecard!A1:B12 Dashboard!A1 Total output by site
-chart excel:solar.xlsx:data line Monthly!C1:C109 Dashboard!A18 Monthly output 2015-2023
-chart excel:solar.xlsx:data column Profiles!D1:E25 Dashboard!A35 Generation by hour of day
-chart excel:solar.xlsx:data pie Profiles!A1:B5 Dashboard!J1 Share of output by season
-chart excel:solar.xlsx:data bar Scorecard!A1:A12 Dashboard!J18 Site readings
+chart excel:solar.xlsx:data column Scorecard!A1:B12 Dashboard!A1:H16 legend=0;gridlines=0;yTitle=kWh Total output by site
+chart excel:solar.xlsx:data line Monthly!C1:C109 Dashboard!A18:H33 legend=0;xTitle=Month;yTitle=kWh Monthly output 2015-2023
+chart excel:solar.xlsx:data column Profiles!E1:F25 Dashboard!A35:H50 legend=0;xTitle=Hour of day;yTitle=kWh Generation by hour of day
+chart excel:solar.xlsx:data pie Profiles!A1:B5 Dashboard!J1:Q16 dataLabels=1 Share of output by season
+chart excel:solar.xlsx:data bar Scorecard!A1:B12 Dashboard!J18:Q33 legend=0;gridlines=0 Sites ranked by total output
 pivot excel:solar.xlsx:data data!A1:L258424 name kWh Dashboard!S1 Season
 pivot excel:solar.xlsx:data data!A1:L258424 Year kWh Dashboard!S20 Season
 slicer excel:solar.xlsx:data name Dashboard!Y1
+export excel:solar.xlsx:data png D:\Github\Syn\testbed\out\fig.png
+para word:solar-memo.docx:body Title Calgary Solar Estate: Quarterly Performance Review
+para word:solar-memo.docx:body Subtitle Prepared for the Infrastructure Committee
+para word:solar-memo.docx:body . Covering 2015 to 2023, 258,423 hourly readings across 11 sites.
+pagebreak word:solar-memo.docx:body page
+contents word:solar-memo.docx:body Contents
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Executive summary
+para word:solar-memo.docx:body . The estate generated 9,835,518 kWh over the period. Bearspaw Water Treatment Plant produced 3,082,638 kWh of that total, 31.3 per cent, and more than the eight smallest sites combined. Any conversation about estate performance is, to a first approximation, a conversation about that one site.
+para word:solar-memo.docx:body . Output is strongly seasonal. Summer generation reaches 4,040,022 kWh against 607,481 kWh in winter, a factor of 6.7. At the calendar-month level the swing is sharper still: July delivers 1,444,872 kWh and December 93,541 kWh, a factor of 15. Generation peaks at 13:00, which accounts for 1,300,197 kWh across the period.
+para word:solar-memo.docx:body . Two caveats bound every year-on-year comparison in this report. 2015 and 2023 are partial years: the fleet was still being commissioned in the first and the data ends part-way through the last. The strongest complete year was 2020 at 1,765,072 kWh. Reading counts also differ by site, from 317 to 31,590, so totals are not like-for-like and mean hourly output is the fairer ranking.
+para word:solar-memo.docx:body . Three things follow. First, the winter trough is steeper than irradiance alone explains, which points at snow cover on the arrays; clearing after heavy snowfall is probably the cheapest marginal kWh available to the estate. Second, the smallest sites generate so little that their metering and maintenance overhead deserves review on its own terms. Third, the concentration of output in one site is a single point of failure worth planning around.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Estate performance
+para word:solar-memo.docx:body . The table below ranks all 11 sites by total output. Every figure is a live formula over the 258,423-row data sheet and recalculates if the underlying readings are refreshed.
+wtable word:solar-memo.docx:body . Site|Total kWh|Mean|Median|Peak|Readings|Share;Bearspaw Water Treatment Plant|3,082,638|124.0|61.7|514.5|24,869|31.3%;Whitehorn Multi-Service Centre|2,558,802|92.3|51.8|369.1|27,716|26.0%;Glenmore Water Treatment Plant|1,551,178|59.8|32.8|240.0|25,920|15.8%;Southland Leisure Centre|1,147,494|36.3|20.8|123.6|31,590|11.7%;City of Calgary North Corporate Warehouse|768,965|28.4|16.6|102.9|27,092|7.8%;Hillhurst Sunnyside Community Association|186,441|7.9|5.1|29.0|23,467|1.9%;Manchester Building M|183,243|8.1|4.5|34.1|22,533|1.9%;CFD Firehall #7|170,081|7.5|4.3|29.2|22,659|1.7%;Calgary Fire Hall Headquarters|110,212|4.3|2.5|16.6|25,637|1.1%;Richmond - Knob Hill Community Hall|75,130|2.8|1.9|9.3|26,623|0.8%;Telus Spark|1,335|4.2|3.5|23.9|317|0.0%
+para word:solar-memo.docx:body . Output is concentrated. The top three sites carry 73 per cent of all generation between them, and the bottom four together account for less than 4 per cent. That distribution is a function of installed capacity rather than of performance: the largest sites are water treatment plants and warehouses with the roof area to match.
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\fig-Dashboard-1.png 430
+para word:solar-memo.docx:body . Mean hourly output tells a different and more useful story than the totals, because it is insensitive to how long a site has been metered. On that measure the ranking compresses considerably, and the gap between the largest and smallest sites is a factor of capacity rather than of reliability.
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\fig-Dashboard-5.png 430
+para word:solar-memo.docx:body . The 95th-percentile column is the figure to use when sizing inverters and export limits. It shows what a site reaches on a good hour without being dragged upward by a handful of exceptional ones, and for most of the estate it sits well below the observed peak.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Site-by-site results
+para word:solar-memo.docx:body Heading_2 Bearspaw Water Treatment Plant
+para word:solar-memo.docx:body . Total output 3,082,638 kWh across 24,869 readings, 31.3 per cent of the estate. Mean hourly output 123.95 kWh, median 61.66 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 420.0 kWh and the observed peak 514.5 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 22 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 31.3 per cent of estate output this site ranks 1 of 11. Its 24,869 readings represent 9.6 per cent of the dataset, so its contribution to the estate total is larger than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 Whitehorn Multi-Service Centre
+para word:solar-memo.docx:body . Total output 2,558,802 kWh across 27,716 readings, 26.0 per cent of the estate. Mean hourly output 92.32 kWh, median 51.82 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 282.8 kWh and the observed peak 369.1 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 31 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 26.0 per cent of estate output this site ranks 2 of 11. Its 27,716 readings represent 10.7 per cent of the dataset, so its contribution to the estate total is larger than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 Glenmore Water Treatment Plant
+para word:solar-memo.docx:body . Total output 1,551,178 kWh across 25,920 readings, 15.8 per cent of the estate. Mean hourly output 59.84 kWh, median 32.76 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 190.4 kWh and the observed peak 240.0 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 26 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 15.8 per cent of estate output this site ranks 3 of 11. Its 25,920 readings represent 10.0 per cent of the dataset, so its contribution to the estate total is larger than its share of metering coverage alone would suggest.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_2 Southland Leisure Centre
+para word:solar-memo.docx:body . Total output 1,147,494 kWh across 31,590 readings, 11.7 per cent of the estate. Mean hourly output 36.32 kWh, median 20.82 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 110.0 kWh and the observed peak 123.6 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 12 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 11.7 per cent of estate output this site ranks 4 of 11. Its 31,590 readings represent 12.2 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 City of Calgary North Corporate Warehouse
+para word:solar-memo.docx:body . Total output 768,965 kWh across 27,092 readings, 7.8 per cent of the estate. Mean hourly output 28.38 kWh, median 16.63 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 85.3 kWh and the observed peak 102.9 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 21 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 7.8 per cent of estate output this site ranks 5 of 11. Its 27,092 readings represent 10.5 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 Hillhurst Sunnyside Community Association
+para word:solar-memo.docx:body . Total output 186,441 kWh across 23,467 readings, 1.9 per cent of the estate. Mean hourly output 7.94 kWh, median 5.07 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 22.9 kWh and the observed peak 29.0 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 26 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 1.9 per cent of estate output this site ranks 6 of 11. Its 23,467 readings represent 9.1 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_2 Manchester Building M
+para word:solar-memo.docx:body . Total output 183,243 kWh across 22,533 readings, 1.9 per cent of the estate. Mean hourly output 8.13 kWh, median 4.50 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 26.8 kWh and the observed peak 34.1 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 28 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 1.9 per cent of estate output this site ranks 7 of 11. Its 22,533 readings represent 8.7 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 CFD Firehall #7
+para word:solar-memo.docx:body . Total output 170,081 kWh across 22,659 readings, 1.7 per cent of the estate. Mean hourly output 7.51 kWh, median 4.25 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 23.0 kWh and the observed peak 29.2 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 27 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 1.7 per cent of estate output this site ranks 8 of 11. Its 22,659 readings represent 8.8 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 Calgary Fire Hall Headquarters
+para word:solar-memo.docx:body . Total output 110,212 kWh across 25,637 readings, 1.1 per cent of the estate. Mean hourly output 4.30 kWh, median 2.48 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 13.2 kWh and the observed peak 16.6 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 26 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 1.1 per cent of estate output this site ranks 9 of 11. Its 25,637 readings represent 9.9 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_2 Richmond - Knob Hill Community Hall
+para word:solar-memo.docx:body . Total output 75,130 kWh across 26,623 readings, 0.8 per cent of the estate. Mean hourly output 2.82 kWh, median 1.90 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 7.9 kWh and the observed peak 9.3 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 17 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 0.8 per cent of estate output this site ranks 10 of 11. Its 26,623 readings represent 10.3 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+para word:solar-memo.docx:body Heading_2 Telus Spark
+para word:solar-memo.docx:body . Total output 1,335 kWh across 317 readings, 0.0 per cent of the estate. Mean hourly output 4.21 kWh, median 3.54 kWh. The gap between the two says the distribution is heavily right-skewed, which is what an hourly solar series always looks like: many low readings overnight and at the shoulders of the day, a small number of very high ones around noon.
+para word:solar-memo.docx:body . The 95th percentile is 12.7 kWh and the observed peak 23.9 kWh. The distance between those two figures is the headroom a design would have to carry to avoid clipping, and here it is 88 per cent above the 95th percentile.
+para word:solar-memo.docx:body . At 0.0 per cent of estate output this site ranks 11 of 11. Its 317 readings represent 0.1 per cent of the dataset, so its contribution to the estate total is smaller than its share of metering coverage alone would suggest.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Method and assumptions
+para word:solar-memo.docx:body . Every figure in this report derives from the 258,423 hourly readings on the data sheet. Nothing has been transcribed by hand. The scorecard columns are live Excel formulas -- SUMIF, AVERAGEIF, MEDIAN over an array condition, PERCENTILE.INC, MAXIFS and COUNTIF -- so refreshing the underlying readings updates the whole report chain without re-deriving anything.
+para word:solar-memo.docx:body . Year, month, hour and season are derived columns on the data sheet rather than computed inside each aggregate. That choice matters at this row count: a SUMIFS against a materialised month column is dramatically faster than a SUMPRODUCT that recomputes MONTH() over a quarter of a million dates for every row of output. The seasonal assignment follows the meteorological convention, with December grouped into winter alongside January and February rather than split across two years.
+para word:solar-memo.docx:body . Medians and percentiles are computed with array conditions rather than with helper columns, which keeps the scorecard self-contained but makes those two columns the most expensive to recalculate. If the workbook is extended to substantially more rows, they are the first candidates for a helper-column rewrite.
+para word:solar-memo.docx:body . Percentages of estate output are computed against a named range covering the whole kWh column, so the share column sums to exactly one by construction rather than by coincidence. Where this report quotes a share to one decimal place, the underlying formula carries full precision.
+para word:solar-memo.docx:body . Two conventions are worth stating because they change the numbers. Zero readings, which dominate the overnight hours, are retained rather than filtered: removing them would raise every mean in the scorecard by roughly the proportion of dark hours and make cross-site comparison meaningless. And totals are reported as metered, without any normalisation for installed capacity, because capacity figures are not present in this dataset. Where capacity matters to the interpretation it is flagged in the text rather than silently corrected for.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Seasonal and daily patterns
+para word:solar-memo.docx:body . Seasonality dominates the series. Summer contributes 4,040,022 kWh and spring 3,331,244 kWh; autumn falls to 1,856,771 kWh and winter to 607,481 kWh. Summer and spring together account for 75 per cent of annual generation.
+wtable word:solar-memo.docx:body . Season|Total kWh|Share of year;Winter|607,481|6.2%;Spring|3,331,244|33.9%;Summer|4,040,022|41.1%;Autumn|1,856,771|18.9%
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\fig-Dashboard-4.png 380
+para word:solar-memo.docx:body . The winter figure deserves scrutiny. Calgary in December receives roughly a third of the irradiance it receives in June, yet December output is about one 15th of July. Irradiance alone does not account for a gap that wide. Snow cover on the panels is the most plausible explanation, and it is the one operational factor on this list that the facilities team can actually do something about.
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\fig-Dashboard-2.png 430
+para word:solar-memo.docx:body . The daily profile is more regular. Generation begins shortly after sunrise, rises steadily to a peak at 13:00 with 1,300,197 kWh over the period, and falls away symmetrically through the afternoon. The curve is close to what a fixed-tilt south-facing array should produce, which is a reassuring sign that the arrays are correctly oriented and not significantly shaded.
+wtable word:solar-memo.docx:body . Hour|Total kWh;06:00|15,963;09:00|613,001;12:00|1,290,535;13:00|1,300,197;15:00|1,063,455;18:00|306,373;21:00|3,141
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\fig-Dashboard-3.png 430
+para word:solar-memo.docx:body . There is no evidence in the hourly profile of systematic afternoon underperformance, which would be the signature of thermal derating or of shading from nearby structures. The symmetry of the curve either side of the peak is a useful negative finding.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Data quality
+para word:solar-memo.docx:body . The dataset holds 258,423 hourly readings across 91 distinct year-months. Coverage is not uniform. Sites were commissioned at different dates, so reading counts range from 317 to 31,590. Ranking sites by total output therefore rewards the ones that have been metered longest, and the mean and median columns on the scorecard exist to correct for that.
+wtable word:solar-memo.docx:body . Year|Total kWh|Note;2015|36,570|partial;2016|166,262|complete;2017|1,143,066|complete;2018|1,714,572|complete;2019|1,725,009|complete;2020|1,765,072|complete;2021|1,603,815|complete;2022|1,584,848|complete;2023|96,304|partial
+para word:solar-memo.docx:body . 2015 and 2023 are partial and must not be read as a trend. The apparent decline at the end of the series is an artefact of the data ending mid-year, not a fall in performance. Excluding both, the strongest year was 2020 at 1,765,072 kWh.
+para word:solar-memo.docx:body . Readings are hourly and appear to be meter totals rather than instantaneous power, which is the right basis for the energy figures used throughout this report. No negative values were observed. Zero readings overnight are expected and have been retained rather than filtered, because removing them would inflate every mean in the scorecard.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Recommendations
+para word:solar-memo.docx:body Heading_2 Clear snow from the arrays after heavy snowfall
+para word:solar-memo.docx:body . The winter trough is steeper than irradiance explains. If snow cover accounts for even a third of the gap between December and a seasonally adjusted expectation, clearing is the cheapest marginal generation available to the estate. Start with Bearspaw Water Treatment Plant, where the same proportional gain is worth the most in absolute terms.
+para word:solar-memo.docx:body Heading_2 Rank sites on mean hourly output, not on totals
+para word:solar-memo.docx:body . Reading counts differ by up to a third across the estate, so totals compare commissioning dates as much as they compare performance. The scorecard already carries mean and median columns; committee reporting should lead with those.
+para word:solar-memo.docx:body Heading_2 Review the smallest sites on their own terms
+para word:solar-memo.docx:body . The four smallest sites together generate less than 4 per cent of estate output. That does not make them failures, but it does mean their metering, maintenance and reporting overhead should be judged against a much smaller benefit than the rest of the fleet.
+para word:solar-memo.docx:body Heading_2 Plan around the concentration risk
+para word:solar-memo.docx:body . 31 per cent of estate output comes from a single site. An outage there is not a rounding error in the annual figures, and the estate has no other site large enough to absorb it. This is worth an explicit contingency rather than an implicit one.
+para word:solar-memo.docx:body Heading_2 Re-baseline once a full year is available
+para word:solar-memo.docx:body . With 2015 and 2023 both partial, 2020 remains the only sensible baseline. Once a further complete year is in hand, the year-on-year comparison in this report should be redrawn against it.
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Appendix A: output by calendar month
+para word:solar-memo.docx:body . Aggregated across all years and all sites, so it shows the shape of the year rather than any single year. This is the table behind the seasonal argument in the body of the report.
+wtable word:solar-memo.docx:body . Month|Total kWh|Share of year;January|198,084|2.0%;February|315,856|3.2%;March|891,937|9.1%;April|1,140,005|11.6%;May|1,299,302|13.2%;June|1,335,221|13.6%;July|1,444,872|14.7%;August|1,259,930|12.8%;September|921,700|9.4%;October|693,317|7.0%;November|241,754|2.5%;December|93,541|1.0%
+para word:solar-memo.docx:body . July and December bracket the year at 1,444,872 kWh and 93,541 kWh. The four months from May to August carry 54 per cent of annual output between them.
+para word:solar-memo.docx:body Heading_1 Appendix B: output by year
+para word:solar-memo.docx:body . Repeated here with the partial years marked, because it is the table most likely to be quoted out of context.
+wtable word:solar-memo.docx:body . Year|Total kWh|Coverage;2015|36,570|partial - do not compare;2016|166,262|complete;2017|1,143,066|complete;2018|1,714,572|complete;2019|1,725,009|complete;2020|1,765,072|complete;2021|1,603,815|complete;2022|1,584,848|complete;2023|96,304|partial - do not compare
+pagenumbers word:solar-memo.docx:body Calgary Solar Estate: Quarterly Performance Review
+contents word:solar-memo.docx:body

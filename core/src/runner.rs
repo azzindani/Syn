@@ -122,6 +122,26 @@ impl Runner {
         Ok(name)
     }
 
+    /// Ask the hand that claims this app to open a file.
+    ///
+    /// The one request that names no open document, because it is how a
+    /// document becomes open. Without it a session could only ever drive
+    /// what a human had already opened by hand, which is why the capability
+    /// fixture needed a PowerShell script and somebody at the keyboard.
+    pub fn open_file(&mut self, app: &str, path: &str) -> Result<String> {
+        let Some(name) = self.route(app).map(str::to_string) else {
+            return Err(Error::NoHand(app.to_string()));
+        };
+        let line = crate::hand::open_envelope(app, path);
+        let Some(a) = self.hands.iter_mut().find(|a| a.name == name) else {
+            return Err(Error::NoHand(app.to_string()));
+        };
+        match a.hand.send_envelope(&line) {
+            Ok(reply) => reply.into_result().map_err(Error::Live),
+            Err(e) => Err(Error::Transport(e.to_string())),
+        }
+    }
+
     pub fn is_live(&self, handle: &str) -> bool {
         self.hand_for(handle).is_some()
     }
@@ -208,6 +228,19 @@ impl Runner {
             return Ok(None);
         };
         self.guard.check(app_of(&job.handle))?;
+        // VBA is gated here, at the single point every op passes through,
+        // rather than at the hand. A gate the live path alone enforces is
+        // one an in-memory path can walk around, and this is the one
+        // capability on the surface that executes code.
+        if let crate::ops::Call::Struct(crate::ops::StructArgs::Macro { action, .. }) = &job.call
+            && !crate::guard::vba_allowed()
+        {
+            return Err(Error::Denied(format!(
+                "macro {action:?} refused: VBA is off. It runs code at your full privilege, \
+                 so a human turns it on for a session with SYN_VBA=1 and it is denied by \
+                 default in protocol/security_policy.json"
+            )));
+        }
         if self.is_live(&job.handle) {
             return self.pump_live(relay, job).map(Some);
         }
@@ -290,6 +323,34 @@ mod tests {
 
     fn read_job(h: &str) -> Job {
         Job { handle: h.into(), summary: "read".into(), call: Call::Read(ReadArgs { selector: "Sheet1".into() }) }
+    }
+
+    #[test]
+    fn vba_is_refused_unless_a_human_switched_it_on() {
+        // The default has to be off, and off at the dispatch every op
+        // passes through -- not at the hand, which an in-memory path
+        // would walk around. This is the one verb on the surface that
+        // executes code, and it is strictly more powerful than `shell`,
+        // which already stops for a human on every single call.
+        let (mut relay, s, h) = relay1();
+        let mut r = Runner::new(&s);
+        r.submit(Job {
+            handle: h.clone(),
+            summary: "macro".into(),
+            call: Call::Struct(crate::ops::StructArgs::Macro {
+                action: "run".into(),
+                module: "SynMacros".into(),
+                code: String::new(),
+                name: "DoThing".into(),
+            }),
+        });
+        match r.pump(&mut relay) {
+            Err(Error::Denied(why)) => {
+                assert!(why.contains("VBA is off"), "{why}");
+                assert!(why.contains("SYN_VBA=1"), "a refusal must say how to allow it: {why}");
+            }
+            other => panic!("VBA must be denied by default, got {other:?}"),
+        }
     }
 
     /// Scripted hand: hands back canned replies and records what it was

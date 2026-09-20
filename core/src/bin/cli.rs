@@ -500,6 +500,33 @@ fn main() {
                 let call = Call::Struct(StructArgs::Name { name: (*name).into(), at: (*at).into() });
                 run_op(&mut runner, &mut relay, h, "name", call);
             }
+            "macro" => {
+                // `macro <handle> <write|run|read|list> <module> [code...]`
+                // Code runs to the end of the line, so the short fields
+                // come first -- the same rule the geometry arguments
+                // follow, and for the same reason.
+                let mut p = rest.splitn(4, char::is_whitespace);
+                let (Some(h), Some(action)) = (p.next(), p.next()) else {
+                    pr!("ERROR usage: macro <handle> <write|run|read|list> [module] [code]");
+                    continue;
+                };
+                let module = p.next().unwrap_or("SynMacros").to_string();
+                let tail = p.next().unwrap_or("").to_string();
+                // `run` names the macro; `write` carries the source. Both
+                // ride in the last field, so which one it is depends on
+                // the action rather than on the position.
+                let (code, name) = match action {
+                    "run" => (String::new(), if tail.is_empty() { module.clone() } else { tail }),
+                    _ => (tail.replace("\\n", "\n"), String::new()),
+                };
+                let call = Call::Struct(StructArgs::Macro {
+                    action: action.into(),
+                    module,
+                    code,
+                    name,
+                });
+                run_op(&mut runner, &mut relay, h, "macro", call);
+            }
             "conditional" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
                 let [h, sel, rule] = a.as_slice() else {
@@ -679,10 +706,29 @@ fn main() {
                 pr!("RECEIPT say model={model} open={}", open.len());
                 let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
-                // Free-tier slots rate-limit independently, so a 429 on one
-                // says nothing about the next. Walk the rest rather than
-                // handing the human a provider's JSON and asking them to
-                // know which slot to pick.
+
+                // Wait and ask the SAME model again before giving up on
+                // it. A free-tier limit is per minute far more often than
+                // per day, and an overloaded provider recovers in
+                // seconds. Two capability runs abandoned the model they
+                // were meant to be testing at step ~15 on a single blip
+                // and spent the rest of the run on a weaker slot, which
+                // is a worse outcome than pausing for six seconds.
+                for wait in provider::BACKOFF_SECS {
+                    let Some(why) = stopped.as_deref() else { break };
+                    if !provider::worth_waiting(why) {
+                        break;
+                    }
+                    pr!("RECEIPT waiting {wait}s then asking {model} again");
+                    std::thread::sleep(std::time::Duration::from_secs(*wait));
+                    stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                }
+
+                // Only once the model has had its chances: free-tier slots
+                // rate-limit independently, so a 429 on one says nothing
+                // about the next. Walk the rest rather than handing the
+                // human a provider's JSON and asking them to know which
+                // slot to pick.
                 for (m, id) in fallbacks(&model) {
                     let Some(why) = stopped.as_deref() else { break };
                     if !provider::worth_another_model(why) {
@@ -691,6 +737,16 @@ fn main() {
                     pr!("RECEIPT retry model={id}");
                     a.retarget(&id, core::router::route_of(m));
                     stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                    // The new slot gets the same patience as the first.
+                    for wait in provider::BACKOFF_SECS {
+                        let Some(why) = stopped.as_deref() else { break };
+                        if !provider::worth_waiting(why) {
+                            break;
+                        }
+                        pr!("RECEIPT waiting {wait}s then asking {id} again");
+                        std::thread::sleep(std::time::Duration::from_secs(*wait));
+                        stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                    }
                 }
                 if let Some(why) = &stopped
                     && provider::worth_another_model(why)
@@ -789,6 +845,22 @@ fn main() {
                     let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 save_chat(&chat_id, a);
+            }
+            "open" => {
+                // `open <app> <path>`: the harness setting up its own
+                // session. Everything else here addresses a document that
+                // is already open; this is how one gets that way, so a run
+                // no longer needs a person to open three files by hand
+                // before it can start.
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let (Some(app), Some(path)) = (parts.next(), parts.next()) else {
+                    pr!("ERROR usage: open <app> <path>");
+                    continue;
+                };
+                match runner.open_file(app.trim(), path.trim()) {
+                    Ok(detail) => pr!("RECEIPT open {app} {detail}"),
+                    Err(e) => pr!("ERROR open {e}"),
+                }
             }
             "hand" => {
                 // `hand <pipe> [app...]`: with apps, this hand claims them;

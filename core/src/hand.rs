@@ -90,6 +90,17 @@ pub fn parse_reply(line: &str) -> Reply {
 
 /// Build an `office-rpc/1` envelope. `payload` is a top-level field because
 /// that is where the sidecar's write path reads it from.
+/// Ask a hand to open a file, so a session can set itself up.
+///
+/// Every other envelope addresses a document that is already open. This one
+/// is how it gets that way: without it the harness could only drive what a
+/// human had opened by hand, which is why the capability fixture needed a
+/// PowerShell script and a person at the keyboard.
+pub fn open_envelope(app: &str, path: &str) -> String {
+    let esc = path.replace('\\', "\\\\").replace('"', "\\\"");
+    envelope("open", &format!("{app}::open"), &format!(r#"{{"path":"{esc}"}}"#), None)
+}
+
 pub fn envelope(method: &str, handle: &str, args_json: &str, payload: Option<&str>) -> String {
     let mut s = format!(
         "{{\"jsonrpc\":\"office-rpc/1\",\"method\":\"{}\",\"handle\":\"{}\",\"args\":{}",
@@ -229,6 +240,20 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             ),
             None,
         )),
+        Call::Struct(StructArgs::Macro { action, module, code, name }) => Some(envelope(
+            "macro",
+            handle,
+            &format!(
+                "{{\"action\":\"{}\",\"name\":\"{}\",\"title\":\"{}\"}}",
+                esc(action),
+                esc(module),
+                esc(name)
+            ),
+            // The source rides as the payload, like prose and grids: it is
+            // the long field, and `args` is for the short ones describing
+            // it. A module of VBA would not survive being an arg.
+            Some(code),
+        )),
         Call::Struct(StructArgs::InsertParagraph { text, style }) => Some(envelope(
             "insertParagraph",
             handle,
@@ -338,11 +363,25 @@ impl<S: Read + Write> Hand<S> {
 /// lets the live dispatch path be tested off Windows.
 pub trait LiveHand: std::fmt::Debug {
     fn dispatch_call(&mut self, call: &Call, handle: &str) -> std::io::Result<Reply>;
+
+    /// Send a line that is not one of the six ops.
+    ///
+    /// Only `open` uses this, and only because opening a file is the one
+    /// request that cannot name an open document. Defaulted to a refusal
+    /// so a hand with no such channel -- a browser, a UIA tree -- says so
+    /// rather than having to grow a method it cannot honour.
+    fn send_envelope(&mut self, _line: &str) -> std::io::Result<Reply> {
+        Err(std::io::Error::other("this hand takes document ops only"))
+    }
 }
 
 impl<S: Read + Write + std::fmt::Debug> LiveHand for Hand<S> {
     fn dispatch_call(&mut self, call: &Call, handle: &str) -> std::io::Result<Reply> {
         self.dispatch(call, handle)
+    }
+
+    fn send_envelope(&mut self, line: &str) -> std::io::Result<Reply> {
+        self.send(line)
     }
 }
 
@@ -662,5 +701,18 @@ mod tests {
         // style rides as a payload rather than as a second grammar.
         assert!(out.contains("\"at\":\"Dashboard!A1:H16\""), "{out}");
         assert!(out.contains("legend=0;yTitle=kWh"), "{out}");
+    }
+
+    #[test]
+    fn an_open_envelope_escapes_a_windows_path() {
+        // Backslashes are the normal case here and an unescaped one makes
+        // the line unparseable at the far end, which shows up as a sidecar
+        // that silently ignores the request.
+        let e = open_envelope("excel", r"D:\Github\Syn\testbed\docs\solar.xlsx");
+        assert!(e.contains(r"D:\\Github\\Syn\\testbed\\docs\\solar.xlsx"), "{e}");
+        assert!(e.contains(r#""method":"open""#), "{e}");
+        // `envelope` builds the line; `Hand::send` adds the newline, so
+        // the envelope itself must contain none.
+        assert!(!e.contains(char::from(10)), "an envelope is one line: {e}");
     }
 }

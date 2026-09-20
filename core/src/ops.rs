@@ -83,6 +83,22 @@ pub enum StructArgs {
     Conditional { selector: String, rule: String },
     /// A filter control the human drives, wired to a pivot.
     Slicer { pivot: String, field: String, at: String },
+    /// Write, run or read VBA in the open document.
+    ///
+    /// The point of this verb is the loop it enables: write a macro, run
+    /// it, read the error, fix it. That is the edit-compile-test cycle
+    /// these models have the most training on, and it turns a job of two
+    /// hundred tool calls into one program -- which also sidesteps the two
+    /// failures that have actually ended runs here, the transcript growing
+    /// past the context limit and the step budget running out.
+    ///
+    /// Live-only, and gated harder than anything else on this surface.
+    /// Running VBA is arbitrary code execution at full user privilege, so
+    /// it is strictly more powerful than `shell`, which already stops for
+    /// a human every time. `protocol/security_policy.json` denies it by
+    /// default; `SYN_VBA=1` is what a human sets to allow it for one
+    /// session, and the kill switch still ends it.
+    Macro { action: String, module: String, code: String, name: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -459,6 +475,17 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
         // A table, a name, a shading rule and a filter control are all things
         // an application owns. The in-memory model is a grid of strings and
         // has none of them, so it says so rather than reporting one made.
+        // VBA is a property of the application, not of a grid of strings.
+        // It refuses here rather than pretending, for the same reason the
+        // others do -- and more so, because a macro reported as written
+        // and then never run is the quietest failure on this surface.
+        StructArgs::Macro { action, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "macro {action:?} needs a live handle: VBA lives in the application, not in the model"
+            )))
+        }
         StructArgs::Table { name, .. }
         | StructArgs::Name { name, .. }
         | StructArgs::Slicer { field: name, .. } => {

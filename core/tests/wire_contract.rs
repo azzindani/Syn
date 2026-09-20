@@ -1,0 +1,163 @@
+//! The Rust side and the C# sidecars must agree on the wire, and this
+//! checks it without Office, without dotnet, and without a live document.
+//!
+//! Why it exists: every verb added to this project so far has been added in
+//! two places, and the gap between them is only discovered by driving real
+//! Office — which needs a Windows machine with Microsoft 365 on it, and is
+//! therefore the one test that cannot be run from a cloud session or a CI
+//! runner. That makes adding a tool remotely a guess.
+//!
+//! The wire is a string. `hand::envelope_for` turns a `Call` into a method
+//! name, and each sidecar dispatches on that name in a `method switch`.
+//! Both sides are text in this repository, so the agreement between them is
+//! checkable by reading them. A verb added to the Rust side with no handler
+//! behind it now fails here, in under a second, on any machine.
+//!
+//! What this does NOT check: that the handler is correct, that COM accepts
+//! the arguments, or that the document ends up right. Those need Office and
+//! always will. This only catches the case that has actually bitten —
+//! sending a method nobody implements.
+
+use std::fs;
+use std::path::PathBuf;
+
+fn repo(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
+}
+
+/// Every quoted identifier inside `envelope_for`, which is every method the
+/// Rust side can put on the wire.
+fn methods_rust_can_send() -> Vec<String> {
+    let src = fs::read_to_string(repo("core/src/hand.rs")).expect("hand.rs");
+    let from = src.find("pub fn envelope_for").expect("envelope_for");
+    let body = &src[from..];
+    let to = body.find("\n}\n").expect("end of envelope_for");
+    let mut found = quoted_words(&body[..to]);
+    // Methods sent from outside `envelope_for` too -- `open` is one, and
+    // it lives apart because it names no open document. A method added in
+    // some new helper must be covered as well, or this test quietly stops
+    // guarding the thing it was written for.
+    let mut rest = src.as_str();
+    while let Some(i) = rest.find("envelope(\"") {
+        rest = &rest[i + 10..];
+        if let Some(j) = rest.find(char::from(34))
+            && is_word(&rest[..j])
+        {
+            found.push(rest[..j].to_string());
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Every method name a sidecar dispatches on: `"name" when ...` or
+/// `"name" => ...` inside its `method switch`.
+fn methods_a_sidecar_handles(path: &str) -> Vec<String> {
+    let src = fs::read_to_string(repo(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let mut out = Vec::new();
+    for line in src.lines() {
+        let t = line.trim_start();
+        if !t.starts_with('"') {
+            continue;
+        }
+        let Some(end) = t[1..].find('"') else { continue };
+        let name = &t[1..=end];
+        let rest = t[end + 2..].trim_start();
+        if (rest.starts_with("when") || rest.starts_with("=>")) && is_word(name) {
+            out.push(name.to_string());
+        }
+    }
+    // The other dispatch shape: `if (method == "open")`, used by the one
+    // request that has to be answered before the per-application switch
+    // because it names no open document.
+    let mut rest = src.as_str();
+    while let Some(i) = rest.find("method == \"") {
+        rest = &rest[i + "method == \"".len()..];
+        if let Some(j) = rest.find(char::from(34))
+            && is_word(&rest[..j])
+        {
+            out.push(rest[..j].to_string());
+        }
+    }
+    out
+}
+
+fn quoted_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(i) = rest.find('"') {
+        rest = &rest[i + 1..];
+        let Some(j) = rest.find('"') else { break };
+        let w = &rest[..j];
+        if is_word(w) {
+            out.push(w.to_string());
+        }
+        rest = &rest[j + 1..];
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn is_word(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Methods the Rust side sends that no sidecar implements, on purpose.
+///
+/// `undo` is the only one. The runbook says why: undo for a live handle
+/// belongs to the sidecar's `.bak` and to the application's own undo stack,
+/// and taking a relay snapshot would make `undo` look available when it is
+/// not. The op is sent, refused by the sidecar, and reported — which is the
+/// intended behaviour, not a missing handler. If that ever changes, delete
+/// the entry and the test starts requiring a handler.
+const DELIBERATELY_UNIMPLEMENTED: &[&str] = &["undo"];
+
+#[test]
+fn every_method_the_rust_side_sends_has_a_handler_behind_it() {
+    let rust = methods_rust_can_send();
+    assert!(rust.len() > 10, "envelope_for parsed as {rust:?}, which cannot be right");
+
+    let mut handled = methods_a_sidecar_handles("sidecar-csharp/Host/Program.cs");
+    handled.extend(methods_a_sidecar_handles("sidecar-csharp/Uia/Program.cs"));
+    handled.extend(DELIBERATELY_UNIMPLEMENTED.iter().map(|s| s.to_string()));
+
+    let orphans: Vec<&String> = rust.iter().filter(|m| !handled.contains(m)).collect();
+    assert!(
+        orphans.is_empty(),
+        "these methods go on the wire and no sidecar dispatches on them: {orphans:?}\n\
+         Add a case to the `method switch` in sidecar-csharp/Host/Program.cs (or Uia), \
+         or list it in DELIBERATELY_UNIMPLEMENTED with the reason."
+    );
+}
+
+#[test]
+fn the_struct_verbs_the_model_can_call_all_reach_the_wire() {
+    // The other half of the same gap, one layer up: a verb offered in the
+    // `struct` schema that `envelope_for` has no case for is refused only
+    // once a live hand is attached, which is to say on someone's desk
+    // rather than in CI.
+    let wire = methods_rust_can_send();
+    // These are handled by the in-memory model or by the relay and never
+    // become an office-rpc method of their own.
+    let not_on_the_wire = ["transfer"];
+    let missing: Vec<&&str> = core::tools::STRUCT_VERBS
+        .iter()
+        .filter(|v| !wire.contains(&v.to_string()) && !not_on_the_wire.contains(*v))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these struct verbs are offered to the model but never reach a hand: {missing:?}"
+    );
+}
+
+#[test]
+fn the_sidecars_are_where_the_test_thinks_they_are() {
+    // A rename that silently emptied the lists above would make both tests
+    // pass by checking nothing.
+    for p in ["sidecar-csharp/Host/Program.cs", "sidecar-csharp/Uia/Program.cs"] {
+        let n = methods_a_sidecar_handles(p).len();
+        assert!(n >= 4, "{p} parsed as only {n} handled methods");
+    }
+}

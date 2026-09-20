@@ -62,6 +62,29 @@ impl Guard {
     }
 }
 
+/// Whether VBA may be written or run in this session.
+///
+/// Off unless a human turns it on, and `protocol/security_policy.json`
+/// denies it by default. This is a harder gate than anything else here
+/// because it is a harder capability: every other op edits a document,
+/// while a macro is a program running at the user's full privilege, able
+/// to reach the file system, the network and other processes. `shell`,
+/// which is strictly weaker, already stops for a human on every call.
+///
+/// Session-scoped rather than per-call on purpose. The value of this verb
+/// is the write-run-read-the-error-fix loop, and a prompt on every
+/// iteration would either destroy the loop or train the human to click
+/// through prompts, which is worse than no prompt at all. So the human
+/// grants it once, knowingly, and the kill switch still ends the run.
+///
+/// Note for anyone enabling it: Office also needs "Trust access to the VBA
+/// project object model" turned on. Without it `VBComponents.Add` returns
+/// **null with no exception** -- verified on this machine -- so the sidecar
+/// must read the module back rather than trust the add.
+pub fn vba_allowed() -> bool {
+    matches!(std::env::var("SYN_VBA").as_deref(), Ok("1"))
+}
+
 /// Split "app:rest..." handles into the app prefix.
 pub fn app_of(handle: &str) -> &str {
     handle.split(':').next().unwrap_or(handle)

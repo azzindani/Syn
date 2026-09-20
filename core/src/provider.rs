@@ -178,6 +178,11 @@ pub fn empty_turn_diagnosis(body: &str) -> String {
     if let Some(r) = refusal {
         why.push_str(&format!(", refusal={r:?}"));
     }
+    // The body, bounded. Twice now a run has ended on a reply nobody
+    // could inspect afterwards, because the diagnosis kept the shape and
+    // threw the evidence away.
+    let head: String = body.chars().take(240).collect();
+    let head = if head.trim().is_empty() { "<empty>".to_string() } else { head };
     if finish == "length" {
         why.push_str(" — the completion was cut off, so raise the budget or lower reasoning effort");
     }
@@ -188,7 +193,20 @@ pub fn empty_turn_diagnosis(body: &str) -> String {
         let head: String = body.chars().take(400).collect();
         why.push_str(&format!(", body={head:?}"));
     }
+    why.push_str(&format!(", body: {head}"));
     why
+}
+
+/// A reply that says it made tool calls and carries none.
+///
+/// `finish_reason: "tool_calls"` with nothing parseable in `tool_calls` is
+/// the provider failing to serialise what the model produced, often
+/// alongside a long `reasoning` field showing where the budget went. It is
+/// not the model ending its turn, and reading it as one ended a capability
+/// run at step 70 of 300 with the workbook half built. Worth waiting and
+/// asking again, like any other transport failure.
+pub fn announced_calls_but_sent_none(body: &str) -> bool {
+    scan_field(body, "\"finish_reason\"").as_deref() == Some("tool_calls")
 }
 
 /// The first string value of a field, or None when it is absent or null.
@@ -360,6 +378,58 @@ pub fn worth_another_model(err: &str) -> bool {
         || e.contains("(503)")
         || e.contains("overloaded")
         || e.contains("temporarily unavailable")
+        || e.contains("no completion in it")
+}
+
+/// Whether waiting and asking the SAME model again is the right move.
+///
+/// A rate limit is per minute far more often than per day, and an
+/// overloaded provider recovers. Walking straight to the next slot on one
+/// blip cost two capability runs the model they were meant to be testing:
+/// both switched off the model named in the experiment at step ~15 and
+/// spent the rest of the run on a weaker one. `08-production-grade.md`
+/// lists opencode's exponential backoff as ported; only the model-fallback
+/// half of it ever landed.
+pub fn worth_waiting(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("429")
+        || e.contains("rate limit")
+        || e.contains("rate-limit")
+        || e.contains("overloaded")
+        || e.contains("temporarily")
+        || e.contains("no completion in it")
+        || e.contains("announced tool calls but sent none")
+        || e.contains("(502)")
+        || e.contains("(503)")
+}
+
+/// How long to wait before each re-ask of the same model.
+pub const BACKOFF_SECS: &[u64] = &[2, 6, 15];
+
+/// A 200 that carries no completion at all.
+///
+/// The second member of the family `error_in_ok_body` opened. A capability
+/// run died at step 11 on an HTTP 200 whose body was zero bytes long: no
+/// choices, no error object, nothing. The loop had no way to tell that from
+/// a model with nothing to say, so it reported the model as having ended
+/// the turn -- the same wrong verdict, arrived at a different way.
+///
+/// A completion without a `choices` key is not a completion, whatever the
+/// status line says. Saying so here puts it on the retry path instead.
+pub fn no_completion_in_ok_body(body: &str) -> Option<String> {
+    if body.contains(r#""choices""#) {
+        return None;
+    }
+    // The body, not just its length. Reporting "220 bytes" and throwing
+    // the content away is the same mistake `empty_turn_diagnosis` exists
+    // to undo: two capability runs switched model on this reply and
+    // nobody could say what it was.
+    let head: String = body.chars().take(200).collect();
+    Some(format!(
+        "the provider returned a 200 with no completion in it ({} bytes): not a model turn. body: {}",
+        body.len(),
+        if head.trim().is_empty() { "<empty>".into() } else { head }
+    ))
 }
 
 /// An upstream failure reported inside a 200.
@@ -650,5 +720,67 @@ mod cover_tests {
         // A real completion is not an error, even when it says the word.
         let fine = r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"the write returned an error, so I tried again"}}]}"#;
         assert_eq!(error_in_ok_body(fine), None, "a reply that mentions an error is still a reply");
+    }
+
+    #[test]
+    fn a_200_with_nothing_in_it_is_a_provider_failure_not_a_silent_model() {
+        // Arm B of the manual experiment died here at step 11, eleven
+        // correct operations in, and it was scored as the model quitting.
+        // It is the same mistake as reading a 503 inside a 200 as silence.
+        let nothing = "";
+        let why = no_completion_in_ok_body(nothing).expect("an empty body is not a turn");
+        assert!(why.contains("0 bytes"), "{why}");
+        assert!(worth_another_model(&why), "it has to reach the fallback chain: {why}");
+
+        // Truncated JSON is the same case: no choices, no completion.
+        assert!(no_completion_in_ok_body(r#"{"id":"gen-1"}"#).is_some());
+
+        // A real completion passes through untouched, including an empty
+        // one -- a model that genuinely said nothing still sent choices,
+        // and that IS a model turn, to be nudged rather than retried.
+        let real = r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#;
+        assert_eq!(no_completion_in_ok_body(real), None);
+    }
+
+    #[test]
+    fn a_transient_failure_is_worth_waiting_for_before_changing_model() {
+        // Both arms of experiment 3 abandoned the model under test at
+        // step ~15 on a single blip, and ran the rest on a weaker slot.
+        for e in [
+            "rate limited (429): temporarily rate-limited upstream",
+            "upstream failed inside a 200 (provider_overloaded): Service temporarily overloaded",
+            "the provider returned a 200 with no completion in it (220 bytes)",
+        ] {
+            assert!(worth_waiting(e), "should wait and re-ask: {e}");
+        }
+        // A real refusal or a bad key is not transient: waiting just
+        // spends the clock to be told the same thing.
+        assert!(!worth_waiting("provider error (401): invalid api key"));
+        assert!(!worth_waiting("provider error (413): Request too large"));
+    }
+
+    #[test]
+    fn a_non_completion_reports_what_it_actually_was() {
+        let why = no_completion_in_ok_body(r#"{"id":"gen-1","detail":"quota"}"#).unwrap();
+        assert!(why.contains("quota"), "the body has to survive the diagnosis: {why}");
+        assert!(no_completion_in_ok_body("").unwrap().contains("<empty>"));
+    }
+
+    #[test]
+    fn announced_calls_with_none_attached_is_a_transport_failure() {
+        // Ended a run at step 70 of 300: finish_reason said tool_calls,
+        // 876 characters of reasoning arrived, and the calls themselves
+        // did not. The loop read that as the model having nothing to say.
+        let broken = r#"{"choices":[{"finish_reason":"tool_calls","message":{"content":null,"reasoning":"working out the next write"}}]}"#;
+        assert!(announced_calls_but_sent_none(broken));
+        assert!(worth_waiting("the model announced tool calls but sent none"));
+
+        // A model that genuinely stopped is not this, and must still be
+        // believed rather than walked round the loop.
+        let done = r#"{"choices":[{"finish_reason":"stop","message":{"content":null}}]}"#;
+        assert!(!announced_calls_but_sent_none(done));
+
+        // And the diagnosis now carries the evidence with it.
+        assert!(empty_turn_diagnosis(broken).contains("body: "));
     }
 }

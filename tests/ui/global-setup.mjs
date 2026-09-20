@@ -27,6 +27,20 @@ export default async function globalSetup() {
   if (!fs.existsSync(ui)) {
     throw new Error(`build it first: cd core && cargo build --bins  (missing ${ui})`);
   }
+
+  // The page is `include_str!`'d into ui.exe, so editing widget/index.html
+  // changes nothing until the binary is rebuilt. Without this check a run
+  // silently tests the previous page: every spec passes, the change is
+  // believed good, and the mistake is only found later. It cost one
+  // bogus "the specs do not catch it" conclusion already.
+  const page = path.join(repo, "widget", "index.html");
+  if (fs.existsSync(page) && fs.statSync(page).mtimeMs > fs.statSync(ui).mtimeMs) {
+    throw new Error(
+      "widget/index.html is newer than ui.exe, which has the page compiled into it.\n" +
+        "These specs would test the previous page. Rebuild first:\n" +
+        "  cd core && cargo build --bins",
+    );
+  }
   fs.rmSync(urlFile, { force: true });
   fs.rmSync(stateFile, { force: true });
 

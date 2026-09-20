@@ -243,6 +243,237 @@ scorer, and it must not be: re-grading a recorded run after changing the
 grader is the thing the honesty conditions exist to prevent. The fixes
 apply to the next run, which starts from a clean fixture.
 
+## The manual experiment (pre-registered 2026-09-20, before either run)
+
+Written before the runs it describes, for the same reason the honesty
+conditions exist: a hypothesis recorded after the result is not a
+hypothesis.
+
+**The claim being tested.** Every model pointed at this harness was trained
+as a coding agent. That training buys a loop -- read, change, run the tests,
+repeat -- in which the plan is one step deep and something outside the model
+says when it is done. This job is two hundred steps deep and nothing says
+when it is done. The control scores 90/90, so the harness can express the
+work; the schemas already say how to call each tool. What no part of the
+system has ever supplied is the *order*: what to build first, which idiom
+turns a phase into one call instead of a thousand, and when the job is over.
+
+**The intervention.**
+
+1. One worked example in every tool description. PRD section 6 asked for
+   "what + NOT + when + 1 good/bad example" in each tool; three of the four
+   shipped and the example never did. This lands in BOTH arms.
+2. A `manual` tool -- five playbooks (index, excel-analysis, word-report,
+   powerpoint-deck, cross-app) distilled from `load.txt`, which is the
+   worked 90/90 solution, rewritten in the tool vocabulary the model sees
+   rather than the CLI vocabulary the script is written in. Plus one system
+   prompt line telling the model to call it. Arm B only.
+
+The manual is a tool rather than a preamble because of cost: the surface is
+~2,240 tokens with it off and ~2,460 with it on, and the playbooks are 340
+to 1,205 tokens each, pulled only when asked for. A preamble big enough to
+teach the job would crowd out the job on a free-tier context.
+
+**The arms.** Same model (`task deep`, whatever `SYN_MODEL_ASTRA` names),
+same brief, same rubric, same `SYN_MAX_STEPS=120`, a clean fixture from
+`setup.ps1` before each.
+
+    A   SYN_MANUAL=0    tool examples, no playbooks, no manual on the surface
+    B   default         the same, plus the manual
+
+**What this can and cannot conclude.** It isolates the playbooks, and only
+those: the per-tool examples ship in both arms, so nothing here measures
+them. Neither arm is comparable to the four void results above -- those were
+scored through a broken instrument and are not a baseline. n=1 per arm, on a
+free tier, which means a large gap is worth following and a small one is
+noise.
+
+**What would falsify it.** If B scores about what A scores, the plan was not
+the binding constraint and the manuals are 3,400 tokens of decoration. That
+result gets recorded here with the same prominence as the other one.
+
+No check in the rubric above is added, removed or loosened for this. The
+scorer is `score-v3.ps1` at the same revision that graded the control.
+
+### Result: the manual lost, 19 to 34
+
+    A   SYN_MANUAL=0   34/100   110 executed, 9 refused, budget spent in Word
+    B   default        19/100   116 executed, 3 refused, budget spent in Excel
+
+Recorded as it came out. The prediction was that the plan was the binding
+constraint; at a 120-step budget that is not what happened.
+
+**What the manual demonstrably did.** It was called unprompted, first move,
+both times -- `index` then `excel-analysis` -- and the run then followed the
+playbook idiom for idiom:
+
+    A  scorecard built by 134 one-cell writes of hand-computed values
+       X4  0/4   formula cells 0, pasted 134
+       X5  0/5   12 of 66 metrics within 1%
+
+    B  four derived columns filled from four calls, 1,033,692 cells
+       X4  4/4   formula cells 143, pasted 0
+       X5  0/5   0 of 66 -- see the scorer defect below
+
+That is the intervention working on the thing it was aimed at. A
+hand-computed number pasted into a sheet is the failure the whole
+playbook exists to prevent, and it stopped.
+
+**What it cost.** Doing each phase properly is slower. Arm B spent all 120
+steps inside Excel and reached neither Word nor PowerPoint; arm A, working
+sloppily, got through Excel and 165 paragraphs into Word. Sixty of the
+hundred points live outside the workbook, so the careful run scored less.
+Both arms ended on `step budget spent`.
+
+**Therefore the experiment as designed cannot answer the question it
+asked.** With both arms truncated by the same budget, the comparison
+measures how far a run gets in 120 steps, not whether the manual helps it
+do the job. The budget, not the plan, is what bound both. That is a defect
+in the experiment, mine, recorded here rather than quietly re-run at a
+number that flatters the change.
+
+**A scorer defect this run exposed, recorded and NOT repaired.** X3 reports
+the scorecard was found on sheet `Monthly` in both arms. It was not the
+scorecard. The "candidate carrying the most numbers" heuristic -- itself a
+fix from an earlier run -- prefers an 11x12 monthly grid to an 11x7
+scorecard, so X4, X5 and X6 were graded against the wrong sheet in both
+arms. Arm B's real `Scorecard` sheet is correct, spot-checked against
+ground truth in live Excel:
+
+    Whitehorn Multi-Service Centre   2,558,803   truth 2,558,802
+    Southland Leisure Centre         1,147,494   truth 1,147,494
+    formulas =SUMIF / =MEDIAN(IF(...)) / =PERCENTILE.INC(IF(...),0.95)
+
+Ten points, sitting in a sheet the scorer never opened. The rule holds
+anyway: re-grading a recorded run after changing the grader is the move the
+honesty conditions exist to forbid, and it forbids it hardest when the
+change would help the result I hoped for. **19/100 and 34/100 both stand.**
+The heuristic goes in v4, with the run that exposed it.
+
+Two genuine model errors in arm B, neither the manual's doing: all twelve
+columns of its `Monthly` sheet carry `month=1`, so every month shows
+January's total; and it reached for `find` on the shell, which was refused
+before a human was asked.
+
+**What is actually established.** The manual changes behaviour in the
+direction it was written to, measurably and on the first try. Whether that
+is worth points is unknown, because neither arm was given enough budget to
+finish the job. The next experiment is the same pair at a budget that lets
+a run reach the end -- a new experiment, pre-registered like this one, not
+a re-run of this one with a friendlier setting.
+
+## Experiment 2 (pre-registered 2026-09-20, before either run)
+
+Experiment 1 could not answer its question: both arms ran out of budget, so
+it measured how far a run gets in 120 steps. Two things change, and both
+change what is being tested, so this is a new experiment rather than a
+re-run.
+
+**The recipes are gone.** Experiment 1's manual held phase-by-phase plans
+for this exact job, naming the sheets and columns the rubric looks for.
+That is a plan written by the person grading the run, and a model following
+it demonstrates nothing about its own planning -- it would score and mean
+nothing. The manual is now five reference pages describing what the verbs
+do to a live application: the fill-down idiom, range-anchored charts, the
+pivot's inability to group dates, slide-note addressing. Nothing in it says
+what to build or in what order, and a test asserts that: no page may
+mention the fixture, its subject, its sheets or a phase order.
+
+**The model keeps its own plan, and can see the clock.** The gap experiment
+1 exposed was not knowledge, it was state. Nothing in the loop held the
+shape of the job between turns, and the step budget -- enforced since the
+beginning -- was never shown to the model. Arm B polished the workbook
+until the budget was gone because nothing told it a clock was running.
+
+Added:
+
+- a `plan` tool: the model records its own steps, in its own words, and
+  ticks them off. Never written by the harness, and not counted as work, so
+  a run that plans and then narrates is still caught by the idle nudge.
+- a per-turn status note, one self-replacing system message: what is open,
+  which handles are still untouched, the model's plan with its ticks, and
+  `Step 74 of 300, 226 left`.
+
+`SYN_PLAN=0` takes both off, as `SYN_MANUAL=0` does the manual.
+
+**The budget goes to 300.** The scripted control does the whole job in 217
+operations. A model that also has to look at the data, think, and correct
+itself cannot do it in 120, and both arms of experiment 1 proved that by
+stopping mid-job. 300 is the control plus room to be wrong.
+
+**The arms.**
+
+    A   SYN_MANUAL=0 SYN_PLAN=0    the plain harness, tool examples only
+    B   default                    manual pages + the model's own plan
+
+Same model, same brief, same rubric, `SYN_MAX_STEPS=300`, a clean fixture
+from `setup.ps1` before each.
+
+**What would falsify it.** If A and B land in the same band, then neither
+the reference pages nor the plan-and-clock were the binding constraint, and
+the honest conclusion is that a free model cannot hold a job this size
+whatever scaffolding it is given. That goes in the table with the same
+prominence as any other result.
+
+**What this still cannot conclude.** n=1 per arm, one model, free tier. The
+intervention is two changes at once -- reference pages and plan state -- so
+a difference does not say which half earned it. Splitting them is a third
+experiment, and only worth running if there is a difference to split.
+
+No check in the rubric is added, removed or loosened. The known scorer
+defect from experiment 1 -- X3 picking the widest numeric sheet rather than
+the scorecard -- is NOT repaired for this run, so experiment 2 is graded by
+exactly the grader that produced 34 and 19.
+
+## Experiments 2 and 3, and why both are void
+
+Recorded rather than deleted. A rubric that quietly loses its wrong answers
+cannot be checked.
+
+    exp 2  120 -> 300 steps        A  9/100    quit at step 9 by narrating
+                                   B  aborted, harness changed under it
+    exp 3  after the layer split   A 39/100    142 steps, 63 refused, 413
+                                   B 13/100    101 steps,  7 refused, 413
+
+Arm A of experiment 3 is the best score this project has produced, and the
+whole gain from 8-19 came from repairing the instrument rather than from
+anything clever.
+
+**Both arms of experiment 3 are void, for two reasons found afterwards.**
+
+*They did not run the model they name.* Both switched off
+`nemotron-3-ultra` at step ~15 -- arm A at line 40 of 231, arm B at line 53
+of 130 -- and spent the rest of the run on `ling-3.0-flash-vl`. The trigger
+was one 220-byte non-completion. There was no backoff anywhere in the
+harness: `08-production-grade.md` lists opencode's exponential backoff as
+ported, and only the model-fallback half of it had landed, so a single blip
+permanently demoted the run to a weaker slot. A free-tier limit is per
+minute far more often than per day, and waiting two seconds would have kept
+the model.
+
+*They both died of their own transcript.* `413 Request too large` at steps
+142 and 101, with nothing anywhere pruning the message list. The scaffolding
+arm dies sooner because the manual pages and the per-turn status note eat
+the same context, so the comparison measured context budget rather than
+scaffolding.
+
+Four fixes followed, all before experiment 4 and all with tests:
+
+- transcript compaction: old tool results pruned to 300 chars, never
+  removed, the newest twelve messages untouched, and the model told its
+  history was shortened so it re-reads rather than trusting a stale number;
+- backoff: the same model is asked again after 2s, 6s and 15s before the
+  run falls through to another slot;
+- a non-completion reports its body, not just its length -- the diagnosis
+  had been discarding the only evidence of what those 220 bytes were;
+- tool-name recovery: providers glue a model's reasoning into
+  `function.name` (`"...</think><tool_call>read"`), and `struct` verbs
+  arrive as tool names. Twenty-nine of arm A's sixty-three refusals were
+  one of those two, every one a call the harness could have run.
+
+The last of those raises arm A's score on its own, so experiment 4 is not
+comparable with the table above. It is pre-registered separately.
+
 ## What the engine cannot do yet
 
 The gap between v1 and this, and therefore the build order. Struck rows are

@@ -255,6 +255,16 @@ namespace Syn.Sidecar
             if (selector == "") selector = JsonField(line, "selector");
             try
             {
+                // `open` comes before the per-app dispatch because it is the
+                // one method that must work when the document is NOT open:
+                // every other path starts by finding it and fails if it is
+                // missing. Until now a run could only drive documents a
+                // human had already opened by hand, which made the harness
+                // depend on someone sitting at the machine.
+                if (method == "open")
+                {
+                    return OpenDocument(app, JsonField(JsonField(line, "args"), "path"));
+                }
                 return _app switch
                 {
                     "word" => WordDispatch(app, method, handle, line, selector),
@@ -267,6 +277,64 @@ namespace Syn.Sidecar
             {
                 return Fail(e.Message);
             }
+        }
+
+        /// Open a file in this sidecar's application, and show it.
+        ///
+        /// Idempotent: a document already open is returned as it is rather
+        /// than opened twice, because Office answers a second Open of the
+        /// same path with a read-only copy and the run would then write
+        /// into the copy.
+        ///
+        /// It never closes anything and never saves anything. The sidecar's
+        /// rule is that it does not touch what it did not start, and an
+        /// `open` that could clobber the human's unsaved work would break
+        /// that in the worst possible way.
+        private static string OpenDocument(dynamic app, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return Fail("open needs a path");
+            if (!File.Exists(path)) return Fail($"no such file: {path}");
+            var full = Path.GetFullPath(path);
+            var name = Path.GetFileName(full);
+
+            return Guarded(() =>
+            {
+                switch (_app)
+                {
+                    case "word":
+                    {
+                        for (var i = 1; i <= (int)app.Documents.Count; i++)
+                            if ((string)app.Documents[i].Name == name)
+                                return Ok($"already open: {name}");
+                        app.Visible = true;
+                        app.Documents.Open(full);
+                        return Ok($"opened {name}, {(int)app.Documents.Count} document(s)");
+                    }
+                    case "excel":
+                    {
+                        for (var i = 1; i <= (int)app.Workbooks.Count; i++)
+                            if ((string)app.Workbooks[i].Name == name)
+                                return Ok($"already open: {name}");
+                        app.Visible = true;
+                        app.Workbooks.Open(full);
+                        return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s)");
+                    }
+                    case "powerpoint":
+                    {
+                        for (var i = 1; i <= (int)app.Presentations.Count; i++)
+                            if ((string)app.Presentations[i].Name == name)
+                                return Ok($"already open: {name}");
+                        // MsoTriState, not a boolean: PowerPoint differs
+                        // from the other two here and the boolean form
+                        // fails the cast rather than the call.
+                        app.Visible = -1;
+                        app.Presentations.Open(full);
+                        return Ok($"opened {name}, {(int)app.Presentations.Count} presentation(s)");
+                    }
+                    default:
+                        return Fail($"open: unknown app {_app}");
+                }
+            });
         }
 
         // ---- Word ----
@@ -562,6 +630,146 @@ namespace Syn.Sidecar
             return Ok($"exported {path}");
         }
 
+        /// Calls VBA has no business making on this project's behalf.
+        ///
+        /// A seatbelt, not a cage: string concatenation defeats any list
+        /// like this, and anyone enabling VBA should know that. What it
+        /// does buy is that careless code -- a model reaching for the
+        /// shell because that is what it would do in Python -- is stopped
+        /// before it compiles, and stopped with a message saying why.
+        private static readonly string[] VbaRefused =
+        {
+            "Shell", "CreateObject", "GetObject", "FileSystemObject", "WScript",
+            "Kill ", "RmDir", "SetAttr", "SendKeys", "URLDownloadToFile",
+            "Declare Function", "Declare PtrSafe", "Environ", "Registry",
+        };
+
+        /// Entry points Office runs by itself. A macro that can start
+        /// itself is not a macro the human approved running.
+        private static readonly string[] VbaAutoRun =
+        {
+            "Auto_Open", "Auto_Close", "Auto_Exec", "Workbook_Open",
+            "Document_Open", "AutoExec", "AutoOpen",
+        };
+
+        /// Write, run, read or list VBA in the workbook.
+        ///
+        /// Write-then-verify is not optional here. With "Trust access to
+        /// the VBA project object model" off, `VBComponents.Add` returns
+        /// **null and raises nothing at all** -- measured on a real
+        /// machine, where `VBProject` answered and `.Count` cheerfully
+        /// said 0. Trusting the add would report a module that does not
+        /// exist, which is the quietest possible failure and exactly the
+        /// class of bug this project has spent its time killing.
+        private static string Macro(dynamic wb, string action, string module, string name, string code)
+        {
+            if (string.IsNullOrWhiteSpace(module)) module = "SynMacros";
+
+            // Policy before capability. This used to sit inside the write
+            // case, below `wb.VBProject`, which meant a macro calling
+            // Shell was refused for the wrong reason on a machine where
+            // VBA access happened to be off, and only checked at all on
+            // machines where it was on. A refusal that depends on a
+            // Trust Center setting is not a policy.
+            if (!string.IsNullOrEmpty(code))
+            {
+                foreach (var bad in VbaRefused)
+                    if (code.IndexOf(bad, StringComparison.OrdinalIgnoreCase) >= 0)
+                        return Fail($"refused: the code uses {bad.Trim()}, which a generated macro may not call");
+                foreach (var bad in VbaAutoRun)
+                    if (code.IndexOf(bad, StringComparison.OrdinalIgnoreCase) >= 0)
+                        return Fail($"refused: {bad} runs by itself, so it would execute without anyone asking");
+            }
+
+            dynamic? proj;
+            try
+            {
+                proj = wb.VBProject;
+            }
+            catch (Exception e)
+            {
+                return Fail($"no VBA project: {e.Message}. Office needs Trust Center > Macro Settings > Trust access to the VBA project object model");
+            }
+            if (proj is null) return Fail("no VBA project on this workbook");
+
+            switch (action.ToLowerInvariant())
+            {
+                case "list":
+                {
+                    var names = new List<string>();
+                    for (var i = 1; i <= (int)proj.VBComponents.Count; i++)
+                        names.Add((string)proj.VBComponents.Item(i).Name);
+                    return Ok(names.Count == 0 ? "no modules" : $"modules: {string.Join(", ", names)}");
+                }
+                case "read":
+                {
+                    dynamic? c = FindComponent(proj, module);
+                    if (c is null) return Fail($"no module named {module}");
+                    int lines = c.CodeModule.CountOfLines;
+                    return Ok(lines == 0 ? $"{module} is empty" : $"{module}:\n{c.CodeModule.Lines(1, lines)}");
+                }
+                case "run":
+                {
+                    if (string.IsNullOrWhiteSpace(name)) return Fail("run needs the macro name in `title`");
+                    // Before the macro, never after: running VBA clears
+                    // Excel's undo stack, so this copy is the only way
+                    // back from a macro that does the wrong thing.
+                    var saved = BackupWorkbook(wb);
+                    var note = saved.Length > 0 ? $" (copy at {saved})" : " (NO BACKUP: the copy failed)";
+                    try
+                    {
+                        wb.Application.Run(name);
+                        return Ok($"ran {name}{note}");
+                    }
+                    catch (Exception e)
+                    {
+                        // The error IS the product: this is the half of
+                        // the write-run-fix loop that teaches the model
+                        // anything, so it comes back whole rather than as
+                        // "macro failed".
+                        return Fail($"{name} raised: {e.Message}{note}");
+                    }
+                }
+                case "write":
+                {
+                    if (string.IsNullOrWhiteSpace(code)) return Fail("write needs `code`");
+                    dynamic? c = FindComponent(proj, module);
+                    if (c is null)
+                    {
+                        c = proj.VBComponents.Add(1); // vbext_ct_StdModule
+                        if (c is null)
+                            return Fail("VBComponents.Add returned nothing: Trust Center > Macro Settings > Trust access to the VBA project object model is off");
+                        c.Name = module;
+                    }
+                    else if ((int)c.CodeModule.CountOfLines > 0)
+                    {
+                        // A write replaces the module, so iterating on a
+                        // macro does not stack four copies of it.
+                        c.CodeModule.DeleteLines(1, (int)c.CodeModule.CountOfLines);
+                    }
+                    c.CodeModule.AddFromString(code);
+
+                    // Read it back. Never report a module on the strength
+                    // of having asked for one.
+                    int now = c.CodeModule.CountOfLines;
+                    if (now == 0) return Fail($"{module} is still empty after the write: nothing was stored");
+                    return Ok($"wrote {module}, {now} line(s). Run it to find out whether it compiles");
+                }
+                default:
+                    return Fail($"macro: unknown action {action}, expected write, run, read or list");
+            }
+        }
+
+        private static dynamic? FindComponent(dynamic proj, string module)
+        {
+            for (var i = 1; i <= (int)proj.VBComponents.Count; i++)
+            {
+                dynamic c = proj.VBComponents.Item(i);
+                if ((string)c.Name == module) return c;
+            }
+            return null;
+        }
+
         // ---- Excel ----
         private static string ExcelDispatch(dynamic app, string method, string handle, string line, string selector) =>
             Guarded(() =>
@@ -574,6 +782,8 @@ namespace Syn.Sidecar
                     "write" => WriteRange(wb, handle, selector, JsonField(line, "payload")),
                     "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path")),
                     "format" => FormatRange(wb, handle, selector, JsonField(line, "payload")),
+                    "macro" => Macro(wb, JsonField(args, "action"), JsonField(args, "name"),
+                                     JsonField(args, "title"), JsonField(line, "payload")),
                     "addSheet" => AddSheet(wb, handle, JsonField(args, "name")),
                     "pivot" => Pivot(wb, handle, JsonField(args, "source"), JsonField(args, "rows"),
                                      JsonField(args, "cols"), JsonField(args, "values"), JsonField(args, "at")),
@@ -1480,6 +1690,37 @@ namespace Syn.Sidecar
                 File.WriteAllText(Path.Combine(dir, safe + "." + DateTime.UtcNow.Ticks + ".bak"), handle);
             }
             catch { /* snapshot is best-effort; the op still reports */ }
+        }
+
+        /// A real copy of the workbook, not a marker.
+        ///
+        /// `Snapshot` above writes the handle into a `.bak` file: enough to
+        /// trace that an op happened, and worth nothing if you need the
+        /// data back. That is a fair trade for a cell write, which the
+        /// application's own undo stack covers. It is not a fair trade
+        /// before running VBA, because a macro can do anything and,
+        /// worse, **running one clears Excel's undo stack** -- so the
+        /// cheap safety net that makes the marker acceptable everywhere
+        /// else is precisely what is gone here.
+        ///
+        /// Returns the path, or an empty string if the copy failed. The
+        /// caller reports it: a human deciding whether to run generated
+        /// code should know whether there is anything to go back to.
+        private static string BackupWorkbook(dynamic wb)
+        {
+            try
+            {
+                var dir = Path.Combine(Path.GetTempPath(), "syn-snaps");
+                Directory.CreateDirectory(dir);
+                var name = (string)wb.Name;
+                var to = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(name)}.{DateTime.UtcNow.Ticks}{Path.GetExtension(name)}");
+                wb.SaveCopyAs(to);
+                return to;
+            }
+            catch
+            {
+                return "";
+            }
         }
 
         private static string Trunc(string s, int n = 120) =>

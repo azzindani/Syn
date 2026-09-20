@@ -25,10 +25,22 @@ fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
 }
 
+/// Read a source file with its line endings normalised.
+///
+/// `core.autocrlf` is true in this repository, so a Windows checkout gets
+/// CRLF and a Linux one gets LF for the very same commit. The first
+/// version of this test looked for `"\n}\n"` and therefore passed on two
+/// operating systems and failed on the third — caught by CI, which is the
+/// only place the difference exists. Reading every source through here
+/// means no check below can depend on which machine cloned the repo.
+fn source(rel: &str) -> String {
+    fs::read_to_string(repo(rel)).unwrap_or_else(|e| panic!("{rel}: {e}")).replace('\r', "")
+}
+
 /// Every quoted identifier inside `envelope_for`, which is every method the
 /// Rust side can put on the wire.
 fn methods_rust_can_send() -> Vec<String> {
-    let src = fs::read_to_string(repo("core/src/hand.rs")).expect("hand.rs");
+    let src = source("core/src/hand.rs");
     let from = src.find("pub fn envelope_for").expect("envelope_for");
     let body = &src[from..];
     let to = body.find("\n}\n").expect("end of envelope_for");
@@ -54,7 +66,7 @@ fn methods_rust_can_send() -> Vec<String> {
 /// Every method name a sidecar dispatches on: `"name" when ...` or
 /// `"name" => ...` inside its `method switch`.
 fn methods_a_sidecar_handles(path: &str) -> Vec<String> {
-    let src = fs::read_to_string(repo(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let src = source(path);
     let mut out = Vec::new();
     for line in src.lines() {
         let t = line.trim_start();

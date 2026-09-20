@@ -41,7 +41,7 @@ namespace Syn.Uia
 {
     internal static class Program
     {
-        private static string _pipe = "synuia";
+        private static string _pipe = "hand-uia";
         private static bool _trace;
         private static volatile bool _stop;
 
@@ -60,7 +60,7 @@ namespace Syn.Uia
         private static int Main(string[] args)
         {
             _trace = Array.IndexOf(args, "--trace") >= 0
-                     || Environment.GetEnvironmentVariable("SYN_TRACE") == "1";
+                     || Environment.GetEnvironmentVariable("AGENT_TRACE") == "1";
             for (var i = 0; i + 1 < args.Length; i += 2)
             {
                 if (args[i] == "--pipe") _pipe = args[i + 1];
@@ -78,7 +78,7 @@ namespace Syn.Uia
 
         // One client at a time, but many clients over the process lifetime.
         // A single-shot server exits when the first CLI session ends, so the
-        // next `hand synuia` fails with a confusing "no hand" and the human
+        // next `hand hand-uia` fails with a confusing "no hand" and the human
         // has to remember to restart the sidecar. The attached application
         // outlives any one conversation; the hand should too.
         private static void Serve()

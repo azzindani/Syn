@@ -11,4 +11,4 @@ From second answer before the Office focus. No todo/e-commerce/chatbot/weather.
 7. Home LAN Linter: ARP/nmap scan, default pwds, firmware, rogue IoT score. Python+web UI.
 8. Protocol Time Capsule: SSH BBS/forum/files/games in pure terminal, federated. Go+SSH+SQLite+TUI.
 
-Syn (00-05) was picked from this set as the Office-agents direction.
+the agent (00-05) was picked from this set as the Office-agents direction.

@@ -1,4 +1,4 @@
-# Syn — one brain, many hands
+# Desktop Agent — one brain, many hands
 
 Single-user desktop orchestrator: a small movable widget drives many open
 software hands (Office first) in one live session, any model via OpenRouter.
@@ -35,7 +35,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
   that types it into a real `cli` process, so the page can only do what the
   CLI can do. Layout digested from t3code (`docs/DIGEST-05-t3code-ui.md`).
   (Tauri shell in `widget/src-tauri`, still unbuilt.)
-  - `chats` — saved conversations as JSON Lines under `.syn/chats`
+  - `chats` — saved conversations as JSON Lines under `.agent/chats`
     (gitignored). One file per thread, appended per turn.
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
   named-pipe office-rpc/1, timeout-guarded calls, .bak snapshots).
@@ -51,7 +51,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
   `live-cdp-smoke.ps1` (a real browser), `live-uia-smoke.ps1` (Calculator).
 - `testbed/` — gitignored run area for live Office tests (docs/out/logs).
 - `.env.example` — provider key, endpoint, and the four model slots
-  (`SYN_MODEL_LUNA|TERRA|SOL|ASTRA`); copy to `.env`, which is gitignored.
+  (`AGENT_MODEL_LUNA|TERRA|SOL|ASTRA`); copy to `.env`, which is gitignored.
 - `docs/` — 00→08, DIGEST-00→04, PRD, ideas, runbook-windows.
 - `.tmp/repos/` — 9 cloned sources this was ported from.
 
@@ -97,8 +97,8 @@ named claim beats a catch-all; one dead transport drops only its own hand.
 
 ```
 cli.exe
-  hand synhand-excel excel word ppt   # COM sidecar, Office apps
-  hand synuia ui                      # UI Automation: any native window
+  hand hand-excel excel word ppt   # COM sidecar, Office apps
+  hand hand-uia ui                      # UI Automation: any native window
   cdp 127.0.0.1:9222 web              # a browser or any Electron app
   hands                               # all three, in routing order
   page web testbed #report            # register a page as a handle
@@ -159,7 +159,7 @@ that makes a dozen of them still reads as a conversation rather than a log.
 An approval attaches to the composer with Approve / Deny, where your
 attention already is, instead of scrolling past as a message.
 
-Conversations are saved to `.syn/chats` after every turn and listed newest
+Conversations are saved to `.agent/chats` after every turn and listed newest
 first. Switching the model slot applies to the next turn of the conversation
 you are in, which is what makes a 429 on a free-tier model survivable.
 

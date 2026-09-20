@@ -88,7 +88,7 @@ becomes open. Every other method starts by finding the document and fails if
 it is missing.
 
     cli.exe
-      hand synhand-word word
+      hand hand-word word
       open word D:\path\to\report.docx
 
 It starts the application if it is not running, opens the file, makes it

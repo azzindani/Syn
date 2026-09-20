@@ -274,11 +274,11 @@ The manual is a tool rather than a preamble because of cost: the surface is
 to 1,205 tokens each, pulled only when asked for. A preamble big enough to
 teach the job would crowd out the job on a free-tier context.
 
-**The arms.** Same model (`task deep`, whatever `SYN_MODEL_ASTRA` names),
-same brief, same rubric, same `SYN_MAX_STEPS=120`, a clean fixture from
+**The arms.** Same model (`task deep`, whatever `AGENT_MODEL_ASTRA` names),
+same brief, same rubric, same `AGENT_MAX_STEPS=120`, a clean fixture from
 `setup.ps1` before each.
 
-    A   SYN_MANUAL=0    tool examples, no playbooks, no manual on the surface
+    A   AGENT_MANUAL=0    tool examples, no playbooks, no manual on the surface
     B   default         the same, plus the manual
 
 **What this can and cannot conclude.** It isolates the playbooks, and only
@@ -297,7 +297,7 @@ scorer is `score-v3.ps1` at the same revision that graded the control.
 
 ### Result: the manual lost, 19 to 34
 
-    A   SYN_MANUAL=0   34/100   110 executed, 9 refused, budget spent in Word
+    A   AGENT_MANUAL=0   34/100   110 executed, 9 refused, budget spent in Word
     B   default        19/100   116 executed, 3 refused, budget spent in Excel
 
 Recorded as it came out. The prediction was that the plan was the binding
@@ -394,7 +394,7 @@ Added:
   which handles are still untouched, the model's plan with its ticks, and
   `Step 74 of 300, 226 left`.
 
-`SYN_PLAN=0` takes both off, as `SYN_MANUAL=0` does the manual.
+`AGENT_PLAN=0` takes both off, as `AGENT_MANUAL=0` does the manual.
 
 **The budget goes to 300.** The scripted control does the whole job in 217
 operations. A model that also has to look at the data, think, and correct
@@ -403,10 +403,10 @@ stopping mid-job. 300 is the control plus room to be wrong.
 
 **The arms.**
 
-    A   SYN_MANUAL=0 SYN_PLAN=0    the plain harness, tool examples only
+    A   AGENT_MANUAL=0 AGENT_PLAN=0    the plain harness, tool examples only
     B   default                    manual pages + the model's own plan
 
-Same model, same brief, same rubric, `SYN_MAX_STEPS=300`, a clean fixture
+Same model, same brief, same rubric, `AGENT_MAX_STEPS=300`, a clean fixture
 from `setup.ps1` before each.
 
 **What would falsify it.** If A and B land in the same band, then neither

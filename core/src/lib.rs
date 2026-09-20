@@ -4,12 +4,15 @@
 
 pub mod acp;
 pub mod agent;
+pub mod auth;
+pub mod batch;
 pub mod bus;
 pub mod cdp;
 pub mod chats;
 pub mod config;
 pub mod guard;
 pub mod hand;
+pub mod labels;
 pub mod live;
 pub mod looptools;
 pub mod manual;
@@ -28,6 +31,7 @@ pub mod sessions;
 pub mod shell;
 pub mod snapshots;
 pub mod stream;
+pub mod summarise;
 pub mod surface;
 pub mod tools;
 pub mod vfs;

@@ -23,7 +23,10 @@ testbed/*
 # Rust build output (core has its own; the widget crate now builds too)
 target/
 
-# Saved conversations: the user's, not the project's.
+# Saved conversations: the user's, not the project's. `.agent` is the
+# default; `.syn` is what an AGENT_HOME set to the product's own name
+# gives, and this machine has run under both.
+.agent/
 .syn/
 
 # Playwright: installed browsers and node_modules are machine-local

@@ -1,5 +1,9 @@
 # 05 — t3code UI digest (what a chat client should look like)
 
+> **Superseded by `DIGEST-08-t3code-ui.md`** (2026-09-20), which was written
+> from a local clone read file by file. Everything below still holds; it is
+> just the shallow half. Kept as the record of what one API-only pass saw.
+
 Source: `pingdotgg/t3code` (TypeScript, React 19 + Tailwind v4). 376 MB repo, so
 read through the GitHub tree API rather than cloned. Nothing is ported: we have
 no build toolchain and `core` is zero-dependency. What follows is the *shape*.

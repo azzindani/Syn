@@ -7,8 +7,8 @@
   the way the Windows runbook's smoke tests are driven.
 
   Usage:
-    scripts\pipe-client.ps1 -Pipe synhand-excel -Json '{"method":"read",...}'
-    scripts\pipe-client.ps1 -Pipe synhand-excel -File testbed\rpc\reads.jsonl
+    scripts\pipe-client.ps1 -Pipe hand-excel -Json '{"method":"read",...}'
+    scripts\pipe-client.ps1 -Pipe hand-excel -File testbed\rpc\reads.jsonl
 
   Every request and reply is echoed and, with -Log, appended to a transcript.
 #>

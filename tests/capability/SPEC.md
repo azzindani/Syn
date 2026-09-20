@@ -6,7 +6,7 @@ claim survives contact with a real job rather than a toy one.
 It is deliberately a job nobody would call easy: a quarter of a million rows
 of real municipal data, four Excel capabilities that each need a different
 part of the COM surface, and a written deliverable in a second application.
-A pass means Syn drove two applications it did not write, through one model,
+A pass means the agent drove two applications it did not write, through one model,
 to an output a person would accept.
 
 ## The fixture

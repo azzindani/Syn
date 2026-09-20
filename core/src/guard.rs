@@ -82,7 +82,7 @@ impl Guard {
 /// **null with no exception** -- verified on this machine -- so the sidecar
 /// must read the module back rather than trust the add.
 pub fn vba_allowed() -> bool {
-    matches!(std::env::var("SYN_VBA").as_deref(), Ok("1"))
+    matches!(std::env::var("AGENT_VBA").as_deref(), Ok("1"))
 }
 
 /// Split "app:rest..." handles into the app prefix.

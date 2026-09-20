@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn pipe_path_is_the_windows_form() {
-        assert_eq!(pipe_path("synhand-excel"), r"\\.\pipe\synhand-excel");
+        assert_eq!(pipe_path("hand-excel"), r"\\.\pipe\hand-excel");
     }
 
     #[test]
@@ -708,8 +708,8 @@ mod tests {
         // Backslashes are the normal case here and an unescaped one makes
         // the line unparseable at the far end, which shows up as a sidecar
         // that silently ignores the request.
-        let e = open_envelope("excel", r"D:\Github\Syn\testbed\docs\solar.xlsx");
-        assert!(e.contains(r"D:\\Github\\Syn\\testbed\\docs\\solar.xlsx"), "{e}");
+        let e = open_envelope("excel", r"D:\Github\the agent\testbed\docs\solar.xlsx");
+        assert!(e.contains(r"D:\\Github\\the agent\\testbed\\docs\\solar.xlsx"), "{e}");
         assert!(e.contains(r#""method":"open""#), "{e}");
         // `envelope` builds the line; `Hand::send` adds the newline, so
         // the envelope itself must contain none.

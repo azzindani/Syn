@@ -1,7 +1,7 @@
 task deep
-hand synhand-excel excel
-hand synhand-word word
-hand synhand-ppt ppt
+hand hand-excel excel
+hand hand-word word
+hand hand-ppt ppt
 attach excel solar.xlsx data
 attach word solar-memo.docx
 attach ppt solar-deck.pptx

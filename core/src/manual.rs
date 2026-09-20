@@ -77,8 +77,17 @@ thousand calls into one. The cost of reading it is a single step."#,
         summary: "the budget, the plan, and the four ways a run ends early",
         body: r#"HOW A RUN WORKS HERE
 
-You are driving applications a human has open in front of them. One tool
-call at a time; you see each result before choosing the next.
+You are driving applications a human has open in front of them.
+
+ASK FOR SEVERAL TOOLS AT ONCE WHEN THEY ARE INDEPENDENT
+
+A turn can carry as many calls as you like, and four reads of four
+different ranges belong in one turn rather than four. They are run in the
+order you gave, one at a time, through the same gates -- so a later call in
+the same turn cannot see what an earlier one returned. Batch calls whose
+arguments you already know; keep a call that needs another's answer for the
+next turn. Asking for the identical call twice in one turn costs nothing
+for a read and is wasted for anything else.
 
 THE BUDGET IS REAL AND IT IS SHOWN TO YOU
 

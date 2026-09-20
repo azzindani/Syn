@@ -1,7 +1,7 @@
 // Syn office-host: live Word/Excel/PowerPoint hand over COM.
 // BUILD: Windows + .NET 8 SDK + installed Office:
 //   dotnet build -c Release   (net8.0-windows)
-// RUN:  office-host.exe --pipe synhand-excel --app excel [--trace]
+// RUN:  office-host.exe --pipe hand-excel --app excel [--trace]
 // PROTOCOL: one JSON object per line on the named pipe (office-rpc/1):
 //   in:  {"method":"read","handle":"excel:plan.xlsx:Sheet1","args":{"selector":"Sheet1!A1:B2"}}
 //   out: {"ok":true,"preview":"grid Sheet1: 2x2"}
@@ -32,7 +32,7 @@ namespace Syn.Sidecar
 {
     internal static class Program
     {
-        private static string _pipe = "synhand";
+        private static string _pipe = "hand";
         private static string _app = "excel";
         private static volatile bool _stop;
         private static bool _trace;
@@ -41,7 +41,7 @@ namespace Syn.Sidecar
         private static int Main(string[] args)
         {
             _trace = Array.IndexOf(args, "--trace") >= 0
-                     || Environment.GetEnvironmentVariable("SYN_TRACE") == "1";
+                     || Environment.GetEnvironmentVariable("AGENT_TRACE") == "1";
             for (var i = 0; i + 1 < args.Length; i += 2)
             {
                 if (args[i] == "--pipe") _pipe = args[i + 1];
@@ -817,7 +817,7 @@ namespace Syn.Sidecar
             return null;
         }
 
-        /// Unbuffered stderr trace, off unless --trace or SYN_TRACE=1.
+        /// Unbuffered stderr trace, off unless --trace or AGENT_TRACE=1.
         /// The pipe carries replies only, so when a call never comes back
         /// this is the only way to see how far it got. Every hang found on
         /// this machine was located with it, so it stays in the binary --
@@ -1685,7 +1685,7 @@ namespace Syn.Sidecar
             try
             {
                 var safe = string.Concat(handle.Split(Path.GetInvalidFileNameChars()));
-                var dir = Path.Combine(Path.GetTempPath(), "syn-snaps");
+                var dir = Path.Combine(Path.GetTempPath(), "agent-snaps");
                 Directory.CreateDirectory(dir);
                 File.WriteAllText(Path.Combine(dir, safe + "." + DateTime.UtcNow.Ticks + ".bak"), handle);
             }
@@ -1710,7 +1710,7 @@ namespace Syn.Sidecar
         {
             try
             {
-                var dir = Path.Combine(Path.GetTempPath(), "syn-snaps");
+                var dir = Path.Combine(Path.GetTempPath(), "agent-snaps");
                 Directory.CreateDirectory(dir);
                 var name = (string)wb.Name;
                 var to = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(name)}.{DateTime.UtcNow.Ticks}{Path.GetExtension(name)}");

@@ -8,9 +8,9 @@
 # and no scripting surface, and it is the app these demos are usually done on
 # with screenshots and mouse coordinates. Everything below is structural.
 #
-#   powershell -File scripts/live-uia-smoke.ps1 [-Pipe synuia]
+#   powershell -File scripts/live-uia-smoke.ps1 [-Pipe hand-uia]
 
-param([string]$Pipe = 'synuia')
+param([string]$Pipe = 'hand-uia')
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot

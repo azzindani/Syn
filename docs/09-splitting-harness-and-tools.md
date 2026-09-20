@@ -16,7 +16,7 @@ Three reasons, in the order they are likely to bite.
 Late-bound COM into a live Office instance, a UIA tree, a CDP session — that
 is a year of other people's debugging (see `runbook-windows.md` §0). The
 agent loop is the replaceable part: Claude Code, Claude Desktop, OpenCode and
-Cursor all ship one, and all of them speak MCP. As an MCP server, Syn's hands
+Cursor all ship one, and all of them speak MCP. As an MCP server, the agent's hands
 become usable from a brain nobody here has to build or pay for.
 
 **Two release trains.** The hands change when Office changes — rarely, and
@@ -81,7 +81,7 @@ expressible but is not what most clients render. Options, none free:
    view, and ours does not.
 2. Keep the relay as a second channel the console connects to directly. Two
    transports to keep alive.
-3. Accept that only Syn's own harness gets the live view, and other clients
+3. Accept that only the agent's own harness gets the live view, and other clients
    get plain tool results.
 
 Option 3 is honest and cheapest, and it should be stated as a limitation
@@ -129,8 +129,8 @@ Nothing here requires committing to the split.
   real schemas. Closes the divergence above. *Useful on its own.*
 - **Phase 2 — one road.** Every op reaches a document through the same
   gated dispatch, whoever called it. *Useful on its own.*
-- **Phase 3 — one workspace, several crates.** `syn-ops`, `syn-hands`,
-  `syn-mcp`, `syn-agent`, `syn-ui` in this repo. The compiler starts
+- **Phase 3 — one workspace, several crates.** `agent-ops`, `agent-hands`,
+  `agent-mcp`, `agent-loop`, `agent-ui` in this repo. The compiler starts
   enforcing the seam; no release or packaging changes. Cheap, and trivially
   undone.
 - **Phase 4 — two repos.** Only with a reason from §6. This is the step

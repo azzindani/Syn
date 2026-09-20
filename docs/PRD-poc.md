@@ -1,9 +1,9 @@
-# PRD — Syn POC (Windows + MS Office, Single-User Single-Device)
+# PRD — POC (Windows + MS Office, Single-User Single-Device)
 
-Date: 2026-09-10 | Status: draft | Owner: Syn
+Date: 2026-09-10 | Status: draft | Owner: the agent
 
 ## 1. Vision
-Syn is a small movable widget: one desktop brain orchestrating many open software hands in one live session, any model via OpenRouter — mimicking how humans really work (multi-file, copy-paste, interrupt).
+This is a small movable widget: one desktop brain orchestrating many open software hands in one live session, any model via OpenRouter — mimicking how humans really work (multi-file, copy-paste, interrupt).
 
 ## 2. Problem
 - Vendor sidebars are standalone per app with separate history and locked models.

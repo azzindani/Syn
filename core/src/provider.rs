@@ -1,6 +1,6 @@
 //! Provider client (OpenRouter-compatible): endpoint + request-body builder.
 //! No network in core: the widget performs transport with a user-supplied key
-//! (env `SYN_API_KEY`, never logged, never stored). Model IDs are defaults
+//! (env `AGENT_API_KEY`, never logged, never stored). Model IDs are defaults
 //! overridable per deployment. Mock transport lives in tests.
 
 use crate::router::{Effort, Model, Route};
@@ -8,10 +8,10 @@ use crate::router::{Effort, Model, Route};
 /// Default model IDs. Override via deployment config, not code edits.
 pub fn model_id(model: Model) -> &'static str {
     match model {
-        Model::Luna => "openai/gpt-5.6-luna",
-        Model::Terra => "openai/gpt-5.6-terra",
-        Model::Sol => "openai/gpt-5.6-sol",
-        Model::Astra => "openai/gpt-6-astra",
+        Model::Small => "openai/gpt-5.6-luna",
+        Model::Standard => "openai/gpt-5.6-terra",
+        Model::Coding => "openai/gpt-5.6-sol",
+        Model::Reasoning => "openai/gpt-6-astra",
     }
 }
 
@@ -91,6 +91,18 @@ pub enum Msg {
 }
 
 impl Msg {
+    /// Roughly how much of the request this message occupies, in
+    /// characters. Used by every budget in the loop -- pruning,
+    /// summarising, the context guard -- so they all measure the same
+    /// thing. Characters, not tokens: `core` has no tokeniser, and a
+    /// wrong guess in the safe direction costs nothing.
+    pub fn width(&self) -> usize {
+        match self {
+            Msg::System(c) | Msg::User(c) | Msg::Assistant(c) | Msg::AssistantCalls(c) => c.len(),
+            Msg::Tool { id, content } => id.len() + content.len(),
+        }
+    }
+
     fn render(&self) -> String {
         match self {
             Msg::System(c) => format!(r#"{{"role":"system","content":"{}"}}"#, escape_json(c)),
@@ -359,7 +371,7 @@ pub fn explain_error(status: u16, body: &str) -> String {
     let note = note.trim();
     match status {
         429 => format!("rate limited (429): {note}"),
-        401 | 403 => format!("rejected ({status}): {note}. Check SYN_API_KEY."),
+        401 | 403 => format!("rejected ({status}): {note}. Check AGENT_API_KEY."),
         _ => format!("provider error ({status}): {note}"),
     }
 }
@@ -391,20 +403,96 @@ pub fn worth_another_model(err: &str) -> bool {
 /// lists opencode's exponential backoff as ported; only the model-fallback
 /// half of it ever landed.
 pub fn worth_waiting(err: &str) -> bool {
-    let e = err.to_ascii_lowercase();
-    e.contains("429")
-        || e.contains("rate limit")
-        || e.contains("rate-limit")
-        || e.contains("overloaded")
-        || e.contains("temporarily")
-        || e.contains("no completion in it")
-        || e.contains("announced tool calls but sent none")
-        || e.contains("(502)")
-        || e.contains("(503)")
+    retryable_message(err)
 }
 
-/// How long to wait before each re-ask of the same model.
-pub const BACKOFF_SECS: &[u64] = &[2, 6, 15];
+// ---- retry, ported from opencode `session/retry.ts` --------------------
+//
+// See `docs/DIGEST-06-opencode-loop.md` §3. The previous version here was
+// a fixed `[2, 6, 15]` with no jitter and, worse, no reading of
+// `Retry-After`: the provider states how long to wait and we ignored it.
+
+pub const RETRY_INITIAL_MS: u64 = 2_000;
+pub const RETRY_BACKOFF_FACTOR: u64 = 2;
+/// Jitter as a percentage of the base delay, so a fleet of clients that
+/// were rate-limited together do not all come back in the same instant.
+pub const RETRY_JITTER_PCT: u64 = 25;
+pub const RETRY_MAX_DELAY_NO_HEADERS_MS: u64 = 30_000;
+pub const RETRY_MAX_RETRIES: u32 = 5;
+
+/// `2000 * 2^(attempt-1)`, plus up to 25% jitter, capped at 30s.
+///
+/// `attempt` is 1-based. `rand_pct` is 0..=99, taken from the caller so
+/// this stays a pure function -- `core` has no rng and a test that cannot
+/// pin the jitter cannot check the bounds.
+pub fn retry_delay_ms(attempt: u32, rand_pct: u64) -> u64 {
+    let base = RETRY_INITIAL_MS.saturating_mul(RETRY_BACKOFF_FACTOR.saturating_pow(attempt.saturating_sub(1)));
+    let jittered = base.saturating_add(base.saturating_mul(RETRY_JITTER_PCT).saturating_mul(rand_pct % 100) / 10_000);
+    jittered.min(RETRY_MAX_DELAY_NO_HEADERS_MS)
+}
+
+/// The wait a `Retry-After` header asks for, in milliseconds.
+///
+/// `retry-after-ms` first, then `retry-after` in seconds. The HTTP-date
+/// form of `Retry-After` is not parsed: it needs a clock and a date
+/// parser, `core` has neither, and no provider used here sends it. A
+/// header we cannot read falls back to the exponential delay rather than
+/// being treated as zero.
+pub fn retry_after_ms(headers: &str) -> Option<u64> {
+    let find = |name: &str| -> Option<&str> {
+        headers.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
+    };
+    if let Some(ms) = find("retry-after-ms")
+        && let Ok(n) = ms.parse::<f64>()
+        && n.is_finite()
+        && n >= 0.0
+    {
+        return Some(n.ceil() as u64);
+    }
+    let secs = find("retry-after")?.parse::<f64>().ok()?;
+    (secs.is_finite() && secs >= 0.0).then(|| (secs * 1000.0).ceil() as u64)
+}
+
+/// Whether this failure is transient, by opencode's seven patterns.
+///
+/// Ours caught roughly half of these. The ones that matter most in
+/// practice and were missing: every network-level failure (`econnreset`,
+/// `socket hang up`, `fetch failed`), every timeout phrasing, and
+/// "try again later" / "at capacity", which is how several providers
+/// phrase a soft limit.
+pub fn retryable_message(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    const CODES: &[&str] = &["429", "500", "502", "503", "504", "524"];
+    const PHRASES: &[&str] = &[
+        // rate limiting
+        "rate limit", "rate-limit", "rate_limit", "too many requests", "rate increased too quickly",
+        // provider capacity
+        "overloaded", "service unavailable", "service_unavailable", "service-unavailable",
+        "internal error", "internal_error", "internal server error", "server error", "server_error",
+        "provider returned error", "provider_returned_error",
+        // network
+        "terminated", "fetch failed", "failed to fetch", "network error", "network_error",
+        "upstream connect", "connection error", "connection refused", "connection lost",
+        "socket connection was closed", "socket hang up", "reset before headers",
+        "getaddrinfo", "enotfound", "eai_again", "econnrefused", "econnreset", "etimedout",
+        // timeouts
+        "timeout", "timed out", "time out",
+        // explicit invitations to retry
+        "try your request again", "retry your request", "resource exhausted", "resource_exhausted",
+        "try again later", "try again in", "currently at capacity", "temporarily at capacity",
+        // the two this project found for itself
+        "no completion in it", "announced tool calls but sent none",
+    ];
+    // A context overflow is never retried: asking the same question with
+    // the same oversized transcript gets the same answer, slower.
+    if m.contains("413") || m.contains("too large") || m.contains("context length") {
+        return false;
+    }
+    CODES.iter().any(|c| m.contains(c)) || PHRASES.iter().any(|p| m.contains(p))
+}
 
 /// A 200 that carries no completion at all.
 ///
@@ -472,7 +560,13 @@ fn digits_after(json: &str, key: &str) -> Option<String> {
 
 /// Returns (http_status, response_body).
 pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u16, String), String> {
-    let key = std::env::var(api_key_env).map_err(|_| format!("env {api_key_env} not set"))?;
+    // The stored credential for this endpoint first, then the env var.
+    // `auth.json` is keyed by provider, so adding a second provider is a
+    // row in a file rather than a new env var invented for it -- and an
+    // OAuth token that has expired is skipped rather than sent, because a
+    // stale token answers 401 and reads exactly like a bad key.
+    let key = crate::auth::resolve(base_url, api_key_env)
+        .ok_or_else(|| format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))?;
     let url = format!("{base_url}/chat/completions");
     let out = std::process::Command::new("curl")
         .args(["-sS", "-m", "60", "-X", "POST", &url])
@@ -547,13 +641,13 @@ mod tests {
         assert!(body.contains("\\\"hi\\\""));
         assert!(body.contains("\\n"));
         let m = Mock { seen_url: Default::default(), seen_body: Default::default() };
-        m.post(DEFAULT_BASE_URL, "SYN_API_KEY", &body).unwrap();
+        m.post(DEFAULT_BASE_URL, "AGENT_API_KEY", &body).unwrap();
         assert!(m.seen_url.borrow().contains("openrouter.ai"));
         assert!(m.seen_body.borrow().contains("gpt-5.6-sol"));
     }
 
     #[test]
-    fn astra_route_resolves_flagship() {
+    fn the_reasoning_slot_resolves_to_the_flagship() {
         let r = route(TaskKind::VisionFallback);
         assert!(request_body(r, "", "").contains("openai/gpt-6-astra"));
     }
@@ -582,16 +676,16 @@ mod tests {
     fn picker_override_and_budget() {
         use crate::router::TaskKind;
         let mut p = Picker::new();
-        assert_eq!(p.pick(TaskKind::Skim).model, Model::Luna);
-        p.override_model = Some(Model::Sol);
+        assert_eq!(p.pick(TaskKind::Skim).model, Model::Small);
+        p.override_model = Some(Model::Coding);
         let r = p.pick(TaskKind::Skim);
-        assert_eq!(r.model, Model::Sol);
+        assert_eq!(r.model, Model::Coding);
         p.note_spend(r);
         assert!(!p.over_budget(10));
         assert!(p.over_budget(1));
     }
 
-    /// The exact body OpenRouter returned when the free Terra slot was
+    /// The exact body OpenRouter returned when the free Standard slot was
     /// exhausted. Pasting this into a chat window is what the fix is for.
     const RATE_LIMIT_BODY: &str = r#"{"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"qwen/qwen3.8-27b:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations","provider_name":"ModelRun","is_byok":false}},"user_id":"user_3ByZ"}"#;
 
@@ -610,7 +704,7 @@ mod tests {
     fn a_bad_key_says_which_setting_to_check() {
         let m = explain_error(401, r#"{"error":{"message":"No auth credentials found"}}"#);
         assert!(m.contains("No auth credentials found"), "{m}");
-        assert!(m.contains("SYN_API_KEY"), "{m}");
+        assert!(m.contains("AGENT_API_KEY"), "{m}");
     }
 
     #[test]
@@ -782,5 +876,59 @@ mod cover_tests {
 
         // And the diagnosis now carries the evidence with it.
         assert!(empty_turn_diagnosis(broken).contains("body: "));
+    }
+
+    #[test]
+    fn retry_delay_follows_opencodes_curve() {
+        // 2000 * 2^(n-1), plus up to 25% jitter, capped at 30s.
+        assert_eq!(retry_delay_ms(1, 0), 2_000);
+        assert_eq!(retry_delay_ms(2, 0), 4_000);
+        assert_eq!(retry_delay_ms(3, 0), 8_000);
+        // Jitter only ever adds, and never more than a quarter.
+        for pct in [0u64, 1, 50, 99] {
+            let d = retry_delay_ms(3, pct);
+            assert!((8_000..=10_000).contains(&d), "attempt 3 with jitter {pct} gave {d}");
+        }
+        // The cap holds however far the ladder is climbed.
+        assert_eq!(retry_delay_ms(20, 99), RETRY_MAX_DELAY_NO_HEADERS_MS);
+    }
+
+    #[test]
+    fn a_retry_after_header_beats_the_ladder() {
+        // The provider states the wait and the old code ignored it.
+        assert_eq!(retry_after_ms("retry-after-ms: 1500"), Some(1_500));
+        assert_eq!(retry_after_ms("Retry-After: 12"), Some(12_000));
+        assert_eq!(retry_after_ms("retry-after: 0.5"), Some(500));
+        // A header we cannot read is not a zero wait.
+        assert_eq!(retry_after_ms("retry-after: Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        assert_eq!(retry_after_ms("content-type: application/json"), None);
+    }
+
+    #[test]
+    fn the_retryable_patterns_cover_what_ours_missed() {
+        // Every one of these is from opencode's list and none of them
+        // matched the predicate this replaced.
+        for e in [
+            "socket hang up",
+            "ECONNRESET",
+            "fetch failed",
+            "request timed out",
+            "resource exhausted",
+            "please try again later",
+            "the service is currently at capacity",
+            "upstream connect error",
+            "provider returned error",
+        ] {
+            assert!(retryable_message(e), "should be retryable: {e}");
+        }
+        // And the ones that must never be retried: the same oversized
+        // transcript gets the same answer, slower.
+        for e in [
+            "provider error (413): Request too large",
+            "context length exceeded",
+            "provider error (401): invalid api key",
+        ] {
+            assert!(!retryable_message(e), "must not be retried: {e}");
+        }
     }
 }

@@ -137,6 +137,19 @@ fn save_chat(id: &str, a: &Agent) {
 }
 
 /// Run the loop to its next stopping point and report why it stopped, so a
+/// What the run did, in one English sentence, once it is over.
+///
+/// A transcript already answers this and nobody reads one. `DID Read 12
+/// ranges, wrote into 2 documents, and drew 3 charts.` is the line that
+/// tells a human whether to look closer.
+fn report(a: &Agent) {
+    let did = a.summary();
+    if !did.is_empty() {
+        pr!("DID {did}");
+        pr!("RECEIPT did {{\"text\":{did:?}}}");
+    }
+}
+
 /// caller can decide whether the failure is worth another model.
 fn drive(
     a: &mut Agent,
@@ -146,15 +159,58 @@ fn drive(
     sp: &ShellPolicy,
 ) -> Option<String> {
     loop {
-        match a.step(brain, relay, runner, sp) {
-            Step::Ran { tool, detail } => pr!("STEP {tool}: {detail}"),
-            Step::Refused(why) => pr!("REFUSED {why}"),
+        let outcome = a.step(brain, relay, runner, sp);
+        // What the model is being told about its own budget, told to the
+        // human too. The console shows it as a meter beside the composer,
+        // and it says what will happen at the end rather than only where
+        // the run is now.
+        pr!("RECEIPT budget {{\"step\":{},\"max\":{}}}", a.steps(), a.max_steps);
+        // Two lines, on purpose. `STEP`/`REFUSED` are the sentence a person
+        // reads in the terminal; `RECEIPT step` is the same event as data,
+        // and it is the only thing the console parses. Scraping the prose
+        // line is what broke the live view the moment its wording changed,
+        // and a UI that breaks when a message is reworded is a UI nobody
+        // can safely improve.
+        let receipt = |a: &Agent, status: core::labels::Status, detail: &str| {
+            let (name, args) = a.calls().last()?;
+            Some(format!(
+                "RECEIPT step {{\"label\":{:?},\"tool\":{:?},\"app\":{:?},\"status\":{:?},\"detail\":{:?}}}",
+                core::labels::sentence(name, args, status),
+                name,
+                core::labels::app(args).unwrap_or_default(),
+                status_name(status),
+                detail
+            ))
+        };
+        match outcome {
+            Step::Ran { tool, detail } => {
+                match receipt(a, core::labels::Status::Done, &detail) {
+                    Some(r) => {
+                        let label = a
+                            .calls()
+                            .last()
+                            .map(|(n, args)| core::labels::sentence(n, args, core::labels::Status::Done))
+                            .unwrap_or_else(|| tool.clone());
+                        pr!("STEP {label}");
+                        pr!("{r}");
+                    }
+                    None => pr!("STEP {tool}: {detail}"),
+                }
+            }
+            Step::Refused(why) => {
+                pr!("REFUSED {why}");
+                if let Some(r) = receipt(a, core::labels::Status::Refused, &why) {
+                    pr!("{r}");
+                }
+            }
             Step::Answered(text) => {
                 pr!("ANSWER {}", text.replace('\n', " "));
+                report(a);
                 return None;
             }
             Step::Stopped(why) => {
                 pr!("STOPPED {why}");
+                report(a);
                 return Some(why);
             }
             Step::NeedsApproval(p) => {
@@ -167,6 +223,65 @@ fn drive(
     }
 }
 
+/// The wire name for a status, shared by the live receipts and the
+/// `LABEL` lines a reopened conversation is rebuilt from.
+fn status_name(s: core::labels::Status) -> &'static str {
+    match s {
+        core::labels::Status::Running => "running",
+        core::labels::Status::Done => "done",
+        core::labels::Status::Failed => "failed",
+        core::labels::Status::Refused => "refused",
+        core::labels::Status::Stopped => "stopped",
+    }
+}
+
+
+/// Ask the same model again, waiting the way opencode waits.
+///
+/// Ported from `session/retry.ts`; see `docs/DIGEST-06-opencode-loop.md`
+/// §3. Three things this does that the fixed `[2s, 6s, 15s]` before it did
+/// not:
+///
+/// - **five attempts, not three**, which is opencode's `RETRY_MAX_RETRIES`;
+/// - **exponential with jitter** rather than a fixed ladder, so a fleet of
+///   clients rate-limited together do not all return in the same instant;
+/// - and the delay is capped at 30s, their `RETRY_MAX_DELAY_NO_HEADERS`.
+///
+/// What it still cannot do is honour `Retry-After`, because `send_via_curl`
+/// throws the response headers away. `provider::retry_after_ms` is written
+/// and tested and has no caller yet — capturing headers means `curl -D` and
+/// a second output stream to parse, which is a change to the transport
+/// rather than to the retry policy. Noted here so the gap is visible at
+/// the place it matters instead of only in the digest.
+fn wait_and_retry(
+    model: &str,
+    mut stopped: Option<String>,
+    a: &mut Agent,
+    brain: &mut dyn Brain,
+    relay: &mut core::Relay,
+    runner: &mut Runner,
+    sp: &ShellPolicy,
+) -> Option<String> {
+    for attempt in 1..=provider::RETRY_MAX_RETRIES {
+        let Some(why) = stopped.as_deref() else { break };
+        if !provider::worth_waiting(why) {
+            break;
+        }
+        // Jitter needs a number that differs per attempt and per process.
+        // `core` has no rng and will not grow one for this: the clock's
+        // sub-second remainder is arbitrary enough to stop a fleet
+        // synchronising, which is all the jitter is for.
+        let pct = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_millis() as u64)
+            .unwrap_or(0);
+        let ms = provider::retry_delay_ms(attempt, pct);
+        pr!("RECEIPT waiting {ms}ms (attempt {attempt}/{}) then asking {model} again", provider::RETRY_MAX_RETRIES);
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        stopped = drive(a, brain, relay, runner, sp);
+    }
+    stopped
+}
 
 /// A Word style name as one CLI token: underscores stand in for spaces, and
 /// a bare `.` means body text. Keeps the prose last on the line.
@@ -656,7 +771,11 @@ fn main() {
                 }
                 let r = route(task);
                 let model = config::model_id(r.model);
-                let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                // The slot's own endpoint and key, not the global pair: a
+                // fallback chain whose links all point at one provider
+                // shares that provider's bad minute, and is one link.
+                let (url0, key0) = config::endpoint(r.model);
+                let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
@@ -704,7 +823,11 @@ fn main() {
                     .collect();
                 a.show_registry(&open);
                 pr!("RECEIPT say model={model} open={}", open.len());
-                let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                // The slot's own endpoint and key, not the global pair: a
+                // fallback chain whose links all point at one provider
+                // shares that provider's bad minute, and is one link.
+                let (url0, key0) = config::endpoint(r.model);
+                let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
 
                 // Wait and ask the SAME model again before giving up on
@@ -714,15 +837,7 @@ fn main() {
                 // were meant to be testing at step ~15 on a single blip
                 // and spent the rest of the run on a weaker slot, which
                 // is a worse outcome than pausing for six seconds.
-                for wait in provider::BACKOFF_SECS {
-                    let Some(why) = stopped.as_deref() else { break };
-                    if !provider::worth_waiting(why) {
-                        break;
-                    }
-                    pr!("RECEIPT waiting {wait}s then asking {model} again");
-                    std::thread::sleep(std::time::Duration::from_secs(*wait));
-                    stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
-                }
+                stopped = wait_and_retry(&model, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
 
                 // Only once the model has had its chances: free-tier slots
                 // rate-limit independently, so a 429 on one says nothing
@@ -738,15 +853,7 @@ fn main() {
                     a.retarget(&id, core::router::route_of(m));
                     stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                     // The new slot gets the same patience as the first.
-                    for wait in provider::BACKOFF_SECS {
-                        let Some(why) = stopped.as_deref() else { break };
-                        if !provider::worth_waiting(why) {
-                            break;
-                        }
-                        pr!("RECEIPT waiting {wait}s then asking {id} again");
-                        std::thread::sleep(std::time::Duration::from_secs(*wait));
-                        stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
-                    }
+                    stopped = wait_and_retry(&id, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 if let Some(why) = &stopped
                     && provider::worth_another_model(why)
@@ -813,6 +920,22 @@ fn main() {
                             for m in ag.transcript() {
                                 pr!("MSG {}", chats::msg_json(m));
                             }
+                            // One English sentence per call, built by the
+                            // same table the feed and the CLI use. The page
+                            // must not re-derive these: a second
+                            // implementation in JavaScript is a second
+                            // thing to keep in step with the surface, and
+                            // it would not be covered by the tests that
+                            // stop a new verb reaching a human as raw JSON.
+                            for (id, name, args, status) in core::chats::call_labels(ag.transcript()) {
+                                pr!(
+                                    "LABEL {{\"id\":{:?},\"text\":{:?},\"app\":{:?},\"status\":{:?}}}",
+                                    id,
+                                    core::labels::sentence(&name, &args, status),
+                                    core::labels::app(&args).unwrap_or_default(),
+                                    status_name(status)
+                                );
+                            }
                             if let Some(p) = ag.pending() {
                                 pr!(
                                     "PENDING {{\"program\":{:?},\"preview\":{:?},\"why\":{:?}}}",
@@ -841,7 +964,10 @@ fn main() {
                     other => pr!("RECEIPT {other:?}"),
                 }
                 if !matches!(outcome, Step::Stopped(_)) {
-                    let mut brain = CurlBrain { base_url: config::base_url(), api_key_env: config::API_KEY_ENV.into() };
+                    // The route the run is actually on, which a fallback
+                    // may have changed since the REPL's task slot was set.
+                    let (url0, key0) = config::endpoint(a.route().model);
+                    let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
                     let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 save_chat(&chat_id, a);
@@ -991,7 +1117,7 @@ fn main() {
                     pr!("ERROR send env {} not set: add it to .env (see .env.example)", config::API_KEY_ENV);
                     continue;
                 }
-                let body = provider::request_body_with(&model, r, "You are the Syn desk worker. Answer briefly.", a[1]);
+                let body = provider::request_body_with(&model, r, "You are the the agent desk worker. Answer briefly.", a[1]);
                 match provider::send_via_curl(&base, config::API_KEY_ENV, &body) {
                     Ok((status, resp)) => {
                         pr!("RECEIPT send status={status} bytes={} model={model}", resp.len());

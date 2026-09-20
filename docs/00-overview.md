@@ -6,7 +6,7 @@ Status: idea bucket
 ## Where this started
 - Asked for big anti-mainstream projects (see `ideas-00-big-bets.md` + `ideas-01-coding-projects.md`).
 - Narrowed to: MS Office family plugin for agents -> can we control Word/Excel/PPT from one desktop session with external models (OpenRouter/DeepSeek), not standalone sidebars?
-- Answer became Syn.
+- Answer became this project.
 
 ## Problem (from thread)
 - OpenAI: `ChatGPT desktop app` (new: Chat+Work+Codex, old renamed `ChatGPT Classic`). Anthropic: `Claude Desktop`. Both support in-app model change, but locked to first-party models by default.

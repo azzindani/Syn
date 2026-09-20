@@ -1,4 +1,4 @@
-hand synhand-excel excel
+hand hand-excel excel
 attach excel solar.xlsx data
 live excel:solar.xlsx:data
 sheet excel:solar.xlsx:data Layout

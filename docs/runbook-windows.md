@@ -44,9 +44,9 @@ in `testbed/logs/`). Fixtures come from `scripts\new-testbed-docs.ps1`.
 
 ## 1. COM sidecar (live hands)
 ```
-cd data\syn\sidecar-csharp\Host
+cd data\agent\sidecar-csharp\Host
 dotnet build -c Release
-.\bin\Release\net8.0-windows\office-host.exe --pipe synhand-excel --app excel
+.\bin\Release\net8.0-windows\office-host.exe --pipe hand-excel --app excel
 ```
 - Open `plan.xlsx` in Excel first: the sidecar attaches via GetActiveObject
   (live window), falling back to a headless instance.
@@ -59,8 +59,8 @@ dotnet build -c Release
 
 ## 2. Real model call
 ```
-set SYN_API_KEY=sk-or-v1-...
-set SYN_BASE_URL=https://openrouter.ai/api/v1
+set AGENT_API_KEY=sk-or-v1-...
+set AGENT_BASE_URL=https://openrouter.ai/api/v1
 cli.exe  ->  send routine "summarize the registry"
 ```
 - Watch the widget feed: `step.start` → streamed tokens → `step.done`.
@@ -69,7 +69,7 @@ cli.exe  ->  send routine "summarize the registry"
 
 ## 3. Widget bundle
 ```
-cd data\syn\widget\src-tauri && cargo tauri build
+cd data\agent\widget\src-tauri && cargo tauri build
 ```
 - Sign the bundle, install, drag it over Excel: it must stay on top,
   keep working while Excel has focus, and die with no orphan when closed.
@@ -96,7 +96,7 @@ registry check and event feed as an in-memory op:
 ```
 cli.exe
   attach excel plan.xlsx Sheet1
-  hand   synhand-excel
+  hand   hand-excel
   live   excel:plan.xlsx:Sheet1
   lread  excel:plan.xlsx:Sheet1 Sheet1!A1:C5
   write  excel:plan.xlsx:Sheet1 Sheet1!G1 queued,through,runner

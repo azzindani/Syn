@@ -30,6 +30,10 @@ pub fn packet(level: Level, summary: &str, content: Option<&str>, detail: Option
 }
 
 /// Strip Excel formula-injection prefixes + control chars; cap at 1024.
+///
+/// For text arriving from outside — a web page, a tool result, a file the
+/// user did not write — on its way into a document a human will later
+/// open. **Not** for the model's own `write`: see [`cell_value`].
 pub fn sanitise_formula(s: &str) -> String {
     let mut t = s.trim_start_matches(['=', '+', '-', '@', '\t', '\r', '\n', '\0']).replace('\0', "");
     // Strip any remaining leading control whitespace.
@@ -40,8 +44,64 @@ pub fn sanitise_formula(s: &str) -> String {
     t
 }
 
+/// One cell as the model asked for it, with the characters that are never
+/// a cell's contents removed and a length bound applied.
+///
+/// Deliberately keeps a leading `=`. Writing a formula and reading back its
+/// one-cell answer is the central capability claim of this project — it is
+/// in the system prompt, in the `write` tool's description and in the
+/// manual — and [`sanitise_formula`] was being applied to the model's own
+/// writes, which stripped the `=` and stored the formula as text.
+///
+/// The live path never did this: `hand.rs` puts the text on the wire and
+/// real Excel evaluates it. So the two tiers disagreed, and the one a
+/// cloud session can run was the one that silently could not do the thing.
+/// Every offline test of a formula was passing on a stored string.
+///
+/// This is not a hole. `sanitise_formula` exists for text arriving from
+/// somewhere else, and that is still where it is used. A `write` is the
+/// model deliberately authoring a cell, its text already goes verbatim to
+/// the application on the live path, and an observation coming back is
+/// fenced as untrusted either way.
+pub fn cell_value(s: &str) -> String {
+    let mut t: String = s.chars().filter(|c| *c == '\t' || !c.is_control()).collect();
+    t = t.trim_matches(['\t', ' ']).to_string();
+    if t.chars().count() > 1024 {
+        t = t.chars().take(1024).collect();
+    }
+    t
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_formula_the_model_wrote_keeps_its_equals_sign() {
+        // The capability this project is built on. The document model used
+        // to store "SUM(A1:A3)" while live Excel got "=SUM(A1:A3)", so the
+        // offline tier quietly could not do the one thing the prompt, the
+        // tool description and the manual all promise.
+        assert_eq!(cell_value("=SUM(A1:A3)"), "=SUM(A1:A3)");
+        assert_eq!(cell_value("=COUNTIF(A:A,7)"), "=COUNTIF(A:A,7)");
+        assert_eq!(cell_value("-5"), "-5");
+        assert_eq!(cell_value("+1"), "+1");
+    }
+
+    #[test]
+    fn a_cell_still_cannot_carry_control_characters_or_run_long() {
+        assert_eq!(cell_value("a\u{0}b"), "ab");
+        assert_eq!(cell_value("a\rb"), "ab");
+        assert_eq!(cell_value("  x  "), "x");
+        assert_eq!(cell_value(&"x".repeat(2000)).chars().count(), 1024);
+    }
+
+    #[test]
+    fn text_from_outside_is_still_defanged() {
+        // `sanitise_formula` keeps its job; it just no longer has the
+        // model's own writes as a caller.
+        assert_eq!(sanitise_formula("=cmd|' /c calc'!A1"), "cmd|' /c calc'!A1");
+        assert_eq!(sanitise_formula("@SUM(1)"), "SUM(1)");
+    }
+
     use super::*;
 
     #[test]

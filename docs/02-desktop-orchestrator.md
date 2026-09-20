@@ -13,7 +13,7 @@
 $w = New-Object -ComObject Word.Application
 $w.Visible = $false
 $d = $w.Documents.Add()
-$d.Content.Text = "Hello from Syn"
+$d.Content.Text = "Hello from the agent"
 $d.SaveAs("C:\tmp\out.docx")
 $w.Quit()
 ```
@@ -23,7 +23,7 @@ $w.Quit()
 - `New-Object` = hidden. `GetActiveObject` = live open app user watches:
 ```powershell
 $w = [Runtime.InteropServices.Marshal]::GetActiveObject("Word.Application")
-$w.ActiveDocument.Content.InsertAfter("added from Syn")
+$w.ActiveDocument.Content.InsertAfter("added from the agent")
 $e = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
 $e.ActiveSheet.Range("A1").Value2 = "live update"
 ```

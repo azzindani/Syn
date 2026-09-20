@@ -1,6 +1,6 @@
 //! Model router: task class -> (model, effort). Cost-aware by construction:
-//! Astra pixels are only routable to vision-fallback and deep-reasoning tasks.
-//! Everything else resolves to Luna/Terra/Sol. Mirrors the OpenRouter picker
+//! Reasoning pixels are only routable to vision-fallback and deep-reasoning tasks.
+//! Everything else resolves to Small/Standard/Coding. Mirrors the OpenRouter picker
 //! in the widget: user choice overrides, router is the default.
 
 /// Task classes the planner emits.
@@ -16,10 +16,10 @@ pub enum TaskKind {
 /// Routable models (OpenRouter IDs resolved widget-side).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
-    Luna,
-    Terra,
-    Sol,
-    Astra,
+    Small,
+    Standard,
+    Coding,
+    Reasoning,
 }
 
 impl Model {
@@ -29,16 +29,16 @@ impl Model {
     /// banner, the failover chain, the model picker -- reads it from here,
     /// so adding a slot is one edit in the module that owns the type rather
     /// than a literal array copied into three files that drift apart.
-    pub const ALL: [Model; 4] = [Model::Luna, Model::Terra, Model::Sol, Model::Astra];
+    pub const ALL: [Model; 4] = [Model::Small, Model::Standard, Model::Coding, Model::Reasoning];
 }
 
 /// The job class a slot is the default for: the inverse of `route`.
 pub fn task_of(model: Model) -> TaskKind {
     match model {
-        Model::Luna => TaskKind::Skim,
-        Model::Terra => TaskKind::Routine,
-        Model::Sol => TaskKind::Code,
-        Model::Astra => TaskKind::DeepReasoning,
+        Model::Small => TaskKind::Skim,
+        Model::Standard => TaskKind::Routine,
+        Model::Coding => TaskKind::Code,
+        Model::Reasoning => TaskKind::DeepReasoning,
     }
 }
 
@@ -70,7 +70,7 @@ pub fn task_named(name: &str) -> Option<TaskKind> {
     })
 }
 
-/// Reasoning effort ladder. Astra never routes below Low or above High
+/// Reasoning effort ladder. Reasoning never routes below Low or above High
 /// without explicit user override (widget enforces).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Effort {
@@ -90,11 +90,11 @@ pub struct Route {
 
 pub fn route(task: TaskKind) -> Route {
     match task {
-        TaskKind::Skim => Route { model: Model::Luna, effort: Effort::Low, cost_rank: 1 },
-        TaskKind::Routine => Route { model: Model::Terra, effort: Effort::Medium, cost_rank: 2 },
-        TaskKind::Code => Route { model: Model::Sol, effort: Effort::Medium, cost_rank: 3 },
-        TaskKind::DeepReasoning => Route { model: Model::Astra, effort: Effort::High, cost_rank: 4 },
-        TaskKind::VisionFallback => Route { model: Model::Astra, effort: Effort::Low, cost_rank: 4 },
+        TaskKind::Skim => Route { model: Model::Small, effort: Effort::Low, cost_rank: 1 },
+        TaskKind::Routine => Route { model: Model::Standard, effort: Effort::Medium, cost_rank: 2 },
+        TaskKind::Code => Route { model: Model::Coding, effort: Effort::Medium, cost_rank: 3 },
+        TaskKind::DeepReasoning => Route { model: Model::Reasoning, effort: Effort::High, cost_rank: 4 },
+        TaskKind::VisionFallback => Route { model: Model::Reasoning, effort: Effort::Low, cost_rank: 4 },
     }
 }
 
@@ -105,10 +105,10 @@ mod tests {
     #[test]
     fn astra_only_for_hard_tasks() {
         for t in [TaskKind::Skim, TaskKind::Routine, TaskKind::Code] {
-            assert_ne!(route(t).model, Model::Astra, "{t:?} must not route to Astra");
+            assert_ne!(route(t).model, Model::Reasoning, "{t:?} must not route to Reasoning");
         }
-        assert_eq!(route(TaskKind::VisionFallback).model, Model::Astra);
-        assert_eq!(route(TaskKind::DeepReasoning).model, Model::Astra);
+        assert_eq!(route(TaskKind::VisionFallback).model, Model::Reasoning);
+        assert_eq!(route(TaskKind::DeepReasoning).model, Model::Reasoning);
     }
 
     #[test]

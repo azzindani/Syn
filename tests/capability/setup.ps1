@@ -92,8 +92,8 @@ Copy-Item $dtpl $deck -Force
 $pres = $pp.Presentations.Open($deck)
 Write-Host "deck: $($pres.Name), slides: $($pres.Slides.Count)"
 
-Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-excel', '--app', 'excel' -WindowStyle Hidden
-Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-word', '--app', 'word' -WindowStyle Hidden
-Start-Process -FilePath $exe -ArgumentList '--pipe', 'synhand-ppt', '--app', 'powerpoint' -WindowStyle Hidden
+Start-Process -FilePath $exe -ArgumentList '--pipe', 'hand-excel', '--app', 'excel' -WindowStyle Hidden
+Start-Process -FilePath $exe -ArgumentList '--pipe', 'hand-word', '--app', 'word' -WindowStyle Hidden
+Start-Process -FilePath $exe -ArgumentList '--pipe', 'hand-ppt', '--app', 'powerpoint' -WindowStyle Hidden
 Start-Sleep -Seconds 5
 Write-Host "sidecars up. Ready for the brief."

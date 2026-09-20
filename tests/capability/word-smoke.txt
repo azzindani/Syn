@@ -1,5 +1,5 @@
-hand synhand-excel excel
-hand synhand-word word
+hand hand-excel excel
+hand hand-word word
 attach excel solar.xlsx data
 attach word solar-memo.docx
 live excel:solar.xlsx:data

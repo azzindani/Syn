@@ -30,6 +30,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const PAGE: &str = include_str!("../../../widget/index.html");
 
@@ -230,7 +231,7 @@ fn main() {
     {
         eprintln!("ERROR cannot write {p}: {e}");
     }
-    println!("Syn console: {url}");
+    println!("the agent console: {url}");
     println!("(loopback only; ctrl-c to stop)");
 
     // One thread per connection. The child still has one stdin, so /cmd
@@ -304,6 +305,121 @@ fn main() {
             // What the page polls while a turn is running. Deliberately
             // not behind the Origin-required guard that /cmd has: it changes
             // nothing, and a reader that cannot see progress is the bug.
+            // Server-sent events: the run, pushed, instead of the page
+            // asking every 700ms and being told "nothing yet" most of the
+            // time. Polling made a fast step look slow -- a read that took
+            // 40ms could sit invisible for the better part of a second,
+            // and a burst of eight calls in one turn arrived as one clump
+            // rather than eight rows appearing one after another.
+            //
+            // The server still watches the file, because that is how a run
+            // in another process makes itself visible at all. What changes
+            // is who waits: a 60ms loop here holding one open connection,
+            // rather than a request every 700ms and a page that cannot
+            // tell "quiet" from "not asked yet".
+            ("GET", "/stream") => {
+                let mut cursor = req
+                    .path
+                    .split_once("since=")
+                    .and_then(|(_, v)| v.split('&').next())
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let head = concat!(
+                    "HTTP/1.1 200 OK\r\n",
+                    "Content-Type: text/event-stream\r\n",
+                    "Cache-Control: no-store\r\n",
+                    "Connection: keep-alive\r\n",
+                    "X-Accel-Buffering: no\r\n\r\n",
+                );
+                if s.write_all(head.as_bytes()).is_err() {
+                    return;
+                }
+                let _ = s.flush();
+                // A write to a browser that has navigated away blocks until
+                // the socket notices; a timeout turns that into an error
+                // this loop can leave on.
+                let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+
+                // Seed the source from whatever is current, so the first
+                // pass through the loop is not mistaken for a change of run.
+                // It was: `source` started empty, the first iteration saw a
+                // difference, reset the cursor to 0 and replayed the whole
+                // log -- on top of everything the page had already drawn
+                // from its own first poll. The result was every step of a
+                // run rendered twice, which is what a person actually saw.
+                let mut source = pinned
+                    .clone()
+                    .or_else(core::live::newest)
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                {
+                    // Still say which run this is, so a page that has been
+                    // following a different one can reset itself. Naming it
+                    // is not the same as rewinding to the start of it.
+                    let ev = format!("event: source
+data: {{\"source\":\"{}\",\"since\":{}}}
+
+",
+                        json_escape(&source), cursor);
+                    if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
+                        return;
+                    }
+                }
+                let mut beat = Instant::now();
+                loop {
+                    let src = pinned.clone().or_else(core::live::newest);
+                    let name =
+                        src.as_ref().and_then(|p| p.file_name()).and_then(|f| f.to_str()).unwrap_or("").to_string();
+                    // A different run took over. Tell the page, so it starts
+                    // that one from the top rather than splicing it onto the
+                    // tail of the last.
+                    if name != source {
+                        source = name.clone();
+                        cursor = 0;
+                        let ev =
+                            format!("event: source\ndata: {{\"source\":\"{}\"}}\n\n", json_escape(&name));
+                        if s.write_all(ev.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                    let (n, lines) = match &src {
+                        Some(p) => core::live::read_from(p, cursor),
+                        None => (0, Vec::new()),
+                    };
+                    cursor = n;
+                    // One frame per line. An SSE `data:` field may not carry
+                    // a newline, and these lines never do.
+                    for line in &lines {
+                        let ev = format!("data: {{\"line\":\"{}\"}}\n\n", json_escape(line));
+                        if s.write_all(ev.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                    let busy = live.busy.load(Ordering::SeqCst);
+                    let running = src.as_deref().map(core::live::active).unwrap_or(false);
+                    if !lines.is_empty() {
+                        let ev =
+                            format!("event: state\ndata: {{\"busy\":{busy},\"running\":{running}}}\n\n");
+                        if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
+                            return;
+                        }
+                    }
+                    // A comment frame every 15s. Without it an idle stream
+                    // is indistinguishable from a dead one, to a proxy and
+                    // to the browser's own idle timer.
+                    if beat.elapsed() >= Duration::from_secs(15) {
+                        beat = Instant::now();
+                        let ev = format!(": beat busy={busy} running={running}\n\n");
+                        if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
+                            return;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+            }
             ("GET", "/events") => {
                 let since = req
                     .path
@@ -383,8 +499,8 @@ mod tests {
 
     #[test]
     fn the_served_page_carries_no_token_to_leak() {
-        assert!(!PAGE.contains("__SYN_TOKEN__"));
-        assert!(!PAGE.contains("X-Syn-Token"));
+        assert!(!PAGE.contains("__AGENT_TOKEN__"));
+        assert!(!PAGE.contains("X-the agent-Token"));
     }
 
     #[test]

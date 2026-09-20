@@ -5,7 +5,7 @@
 //! from a terminal, a pipe or a second window was invisible to it -- not
 //! because the information was missing but because it never left the
 //! process that had it. Every CLI now mirrors its output to
-//! `.syn/live/<pid>.log`, and anything that wants to watch tails the
+//! `.agent/live/<pid>.log`, and anything that wants to watch tails the
 //! newest one.
 //!
 //! Best-effort throughout: a run must not fail because its progress could
@@ -57,7 +57,16 @@ pub fn begin() {
 /// refusals, the answer, and the receipts of real operations.
 fn is_progress(line: &str) -> bool {
     // Bulk answers to the page's own queries, not work.
-    if line.starts_with("MSG ") || line.starts_with("CHAT ") || line.starts_with("SLOT ") || line.starts_with("WIRE ") {
+    // `LABEL ` is one per tool call in a reopened transcript -- the page's
+    // own query again, and on a long conversation it is hundreds of lines
+    // that would keep the log's mtime fresh and make a finished run look
+    // permanently in progress.
+    if line.starts_with("MSG ")
+        || line.starts_with("CHAT ")
+        || line.starts_with("SLOT ")
+        || line.starts_with("WIRE ")
+        || line.starts_with("LABEL ")
+    {
         return false;
     }
     // The console's own framing sentinel, one per request.
@@ -162,7 +171,7 @@ mod tests {
 
     #[test]
     fn reading_from_a_cursor_returns_only_what_is_new() {
-        let d = std::env::temp_dir().join(format!("syn-live-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("agent-live-{}", std::process::id()));
         let _ = fs::create_dir_all(&d);
         let p = d.join("t.log");
         fs::write(&p, "one\ntwo\nthree\n").unwrap();
@@ -181,7 +190,7 @@ mod tests {
 
     #[test]
     fn a_cursor_past_the_end_never_panics() {
-        let d = std::env::temp_dir().join(format!("syn-live-b-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("agent-live-b-{}", std::process::id()));
         let _ = fs::create_dir_all(&d);
         let p = d.join("t.log");
         fs::write(&p, "only\n").unwrap();
@@ -195,7 +204,7 @@ mod tests {
 
     #[test]
     fn a_console_that_has_only_just_started_does_not_outrank_a_working_run() {
-        let d = std::env::temp_dir().join(format!("syn-live-c-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("agent-live-c-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         // A run mid-job, silent for a moment while it waits on the provider.
@@ -239,8 +248,8 @@ RECEIPT mark=m1
         for noise in [
             r#"MSG {"role":"tool","id":"call-1","text":"..."}"#,
             r#"CHAT {"id":"c1789831309-7488"}"#,
-            r#"SLOT {"slot":"Luna","task":"skim"}"#,
-            r#"WIRE excel -> synhand-excel"#,
+            r#"SLOT {"slot":"Small","task":"skim"}"#,
+            r#"WIRE excel -> hand-excel"#,
             "RECEIPT mark=m23",
             "   ",
         ] {

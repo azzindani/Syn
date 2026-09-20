@@ -29,15 +29,15 @@
 
 use crate::tools::{ToolSpec, field};
 
-/// Whether the manual is offered. `SYN_MANUAL=0` takes it off.
+/// Whether the manual is offered. `AGENT_MANUAL=0` takes it off.
 pub fn manual_enabled() -> bool {
-    !matches!(std::env::var("SYN_MANUAL").as_deref(), Ok("0"))
+    !matches!(std::env::var("AGENT_MANUAL").as_deref(), Ok("0"))
 }
 
-/// Whether the model keeps a plan of its own. `SYN_PLAN=0` takes off both
+/// Whether the model keeps a plan of its own. `AGENT_PLAN=0` takes off both
 /// the tool and the per-turn status note.
 pub fn plan_enabled() -> bool {
-    !matches!(std::env::var("SYN_PLAN").as_deref(), Ok("0"))
+    !matches!(std::env::var("AGENT_PLAN").as_deref(), Ok("0"))
 }
 
 /// Every loop service, whether or not it is switched on.

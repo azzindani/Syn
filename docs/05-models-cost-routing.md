@@ -11,7 +11,7 @@
 ## External providers (OpenRouter/DeepSeek): yes via hack, no 1-click
 - Claude Desktop Gateway mode -> `https://openrouter.ai/api`, bearer `sk-or-v1...`, static key. Shows gateway models. Undocumented, fragile.
 - ChatGPT desktop Codex part -> `~/.codex/config.toml [model_providers.openrouter] base_url="https://openrouter.ai/api/v1" env_key="OPENROUTER_API_KEY" wire_api="responses"`, `model=<any ID>`; DeepSeek via `[model_providers.deepseek]`+models.json. Needs env visible to Dock app (launchctl/setx), restart; picker not provider-aware; chat stays OpenAI-only.
-- Clean multi-provider UX today = Opencode/LibreChat. Syn differentiator = native OpenRouter selector in desktop AND Office add-ins with shared history.
+- Clean multi-provider UX today = Opencode/LibreChat. the agent differentiator = native OpenRouter selector in desktop AND Office add-ins with shared history.
 
 ## Astra cost (verified Sep 2026)
 - `gpt-6-astra`, 1.05M ctx, 128K out. Short: $10 in / $1 cached / $12.50 write / $50 out. Long (>272K): $20/$2/$25/$75. Batch/Flex ~half, Fast ~double + computer-use per-call fee.

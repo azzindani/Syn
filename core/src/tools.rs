@@ -372,6 +372,24 @@ pub fn canonical_name(raw: &str) -> String {
     if known(raw) {
         return raw.to_string();
     }
+    // Case only. opencode does this first in `experimental_repairToolCall`
+    // and it is the cheapest repair there is: `AddSheet` and `addsheet` are
+    // unambiguously `addSheet`, because nothing on the surface differs from
+    // anything else by case alone -- a test holds that true. Folding case is
+    // not guessing, so it happens before the salvage below and independently
+    // of it.
+    let folded = raw.trim();
+    if !folded.is_empty() {
+        let hit = TOOLS
+            .iter()
+            .map(|t| t.name)
+            .chain(STRUCT_VERBS.iter().copied())
+            .chain(crate::looptools::SERVICES.iter().map(|s| s.name))
+            .find(|n| n.eq_ignore_ascii_case(folded));
+        if let Some(n) = hit {
+            return n.to_string();
+        }
+    }
     // The LAST identifier-shaped token that names something real. Last,
     // not first: the reasoning glued in front of it often mentions the
     // tools by name, and "I should read the sheet, then write" must not
@@ -580,6 +598,37 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nothing_on_the_surface_differs_by_case_alone() {
+        // `canonical_name` folds case, which is only safe while this holds.
+        let mut names: Vec<String> = TOOLS
+            .iter()
+            .map(|t| t.name.to_ascii_lowercase())
+            .chain(STRUCT_VERBS.iter().map(|v| v.to_ascii_lowercase()))
+            .chain(crate::looptools::SERVICES.iter().map(|s| s.name.to_ascii_lowercase()))
+            .collect();
+        let before = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(before, names.len(), "two names on the surface differ only by case: folding case would pick one at random");
+    }
+
+    #[test]
+    fn a_name_that_is_only_the_wrong_case_is_repaired() {
+        assert_eq!(canonical_name("AddSheet"), "addSheet");
+        assert_eq!(canonical_name("addsheet"), "addSheet");
+        assert_eq!(canonical_name("READ"), "read");
+        assert_eq!(canonical_name("InsertParagraph"), "insertParagraph");
+    }
+
+    #[test]
+    fn folding_case_does_not_invent_a_tool() {
+        // Still refused, and refused as itself so the message names what
+        // the model actually sent.
+        assert_eq!(canonical_name("frobnicate"), "frobnicate");
+        assert_eq!(canonical_name("add_sheet"), "add_sheet");
+    }
+
     use super::*;
 
     #[test]

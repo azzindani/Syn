@@ -16,7 +16,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Pipe = 'synhand-excel',
+    [string]$Pipe = 'hand-excel',
     [string]$Book = 'D:\Github\Syn\testbed\docs\plan.xlsx',
     [int]$ReplyTimeoutMs = 25000
 )

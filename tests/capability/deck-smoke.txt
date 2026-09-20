@@ -1,4 +1,4 @@
-hand synhand-ppt ppt
+hand hand-ppt ppt
 attach ppt solar-deck.pptx
 live ppt:solar-deck.pptx:deck
 slide ppt:solar-deck.pptx:deck title Calgary Solar Estate: Quarterly Review|Prepared for the Infrastructure Committee|2015-2023, 258,423 hourly readings

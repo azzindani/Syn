@@ -96,7 +96,7 @@ pub enum StructArgs {
     /// Running VBA is arbitrary code execution at full user privilege, so
     /// it is strictly more powerful than `shell`, which already stops for
     /// a human every time. `protocol/security_policy.json` denies it by
-    /// default; `SYN_VBA=1` is what a human sets to allow it for one
+    /// default; `AGENT_VBA=1` is what a human sets to allow it for one
     /// session, and the kill switch still ends it.
     Macro { action: String, module: String, code: String, name: String },
 }
@@ -135,7 +135,17 @@ fn parse_range(sel: &str) -> Result<ParsedSelector> {
         return Ok((sel.to_string(), None));
     };
     let rng = rng.to_uppercase();
-    let (start, end) = rng.split_once(':').ok_or_else(|| Error::BadSelector(sel.into()))?;
+    // A single cell is a 1x1 range. The tool schema advertises exactly this
+    // -- `write{"selector":"Sheet1!G1",...}` is the worked example on the
+    // `write` tool and in the runbook -- and live Excel takes it, because
+    // `Range("G1")` is a range. Only the in-memory model insisted on a
+    // colon, so the same call that worked at the desk was refused as a
+    // "bad selector" in every test that did not have Office, which is
+    // every test a cloud session can run.
+    let (start, end) = match rng.split_once(':') {
+        Some(pair) => pair,
+        None => (rng.as_str(), rng.as_str()),
+    };
     let split = |s: &str| -> Result<(usize, usize)> {
         let i = s.find(|c: char| c.is_ascii_digit()).ok_or_else(|| Error::BadSelector(sel.into()))?;
         Ok((s[i..].parse::<usize>().map_err(|_| Error::BadSelector(sel.into()))? - 1, col_to_idx(&s[..i])?))
@@ -351,10 +361,31 @@ fn do_write(relay: &mut Relay, session: &str, handle: &str, args: &WriteArgs) ->
             let (sheet, rng) = parse_range(&args.selector)?;
             let (r0, c0, _, _) = rng.ok_or_else(|| Error::BadSelector("write needs a range; use struct.addSheet for new sheets".into()))?;
             let grid = sheets.get_mut(&sheet).ok_or_else(|| Error::BadSelector(format!("sheet not open: {sheet}")))?;
+            // Grow the sheet to fit. A real worksheet has a million rows
+            // waiting; the document model starts at whatever the fixture
+            // made and used to index straight past the end -- writing
+            // `Sheet1!G1` into a four-column blank sheet panicked the
+            // whole CLI with "index out of bounds", taking the console's
+            // child with it. A write off the edge of a spreadsheet is
+            // ordinary, and extending is what a spreadsheet does.
+            let need_rows = r0 + args.values.len();
+            let need_cols = c0 + args.values.iter().map(Vec::len).max().unwrap_or(0);
+            if need_rows * need_cols > BULK_CAP_CELLS {
+                return Err(Error::OverBulkCap);
+            }
+            while grid.len() < need_rows {
+                grid.push(Vec::new());
+            }
+            let width = grid.iter().map(Vec::len).max().unwrap_or(0).max(need_cols);
+            for row in grid.iter_mut() {
+                row.resize(width, String::new());
+            }
             for (i, row) in args.values.iter().enumerate() {
                 for (j, v) in row.iter().enumerate() {
-                    // Formula-injection sanitiser on every cell write.
-                    grid[r0 + i][c0 + j] = acp::sanitise_formula(v);
+                    // The model's own authored cell. Control characters
+                    // and a length bound, but the leading `=` survives:
+                    // see `acp::cell_value`.
+                    grid[r0 + i][c0 + j] = acp::cell_value(v);
                 }
             }
             Ok(OpOut::Text { detail: format!("wrote {} rows", args.values.len()) })
@@ -560,6 +591,71 @@ fn do_transfer(relay: &mut Relay, session: &str, dst: &str, src: &str, selector:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_write_past_the_edge_grows_the_sheet_instead_of_panicking() {
+        // Found by a Playwright test driving the console: `write
+        // excel:f:Sheet1 Sheet1!G1 one` on a blank four-column sheet
+        // panicked with "index out of bounds: the len is 4 but the index
+        // is 6" and killed the CLI the console owns, so the page reported
+        // "the cli exited" and every later command failed.
+        let mut r = Relay::new();
+        r.handshake("s", "t");
+        let h = crate::protocol::new_handle("excel", "p.xlsx", "Sheet1");
+        r.attach("s", h.clone(), OpenFile {
+            kind: FileKind::Excel,
+            content: FileContent::Excel {
+                sheets: std::collections::HashMap::from([(
+                    "Sheet1".to_string(),
+                    vec![vec!["1".to_string(), "2".to_string()]],
+                )]),
+            },
+            styles: std::collections::HashMap::new(),
+        });
+
+        let far = WriteArgs { selector: "Sheet1!G3".into(), values: crate::tools::grid("one") };
+        execute(&mut r, "s", &h, Call::Write(far)).expect("a write past the edge should extend the sheet");
+
+        let back = execute(&mut r, "s", &h, Call::Read(ReadArgs { selector: "Sheet1!G3".into() }))
+            .expect("and read back");
+        assert!(format!("{back:?}").contains("one"), "{back:?}");
+
+        // The cells it grew past are empty, not missing.
+        let a1 = execute(&mut r, "s", &h, Call::Read(ReadArgs { selector: "Sheet1!A1:B1".into() })).unwrap();
+        assert!(format!("{a1:?}").contains('1'), "{a1:?}");
+    }
+
+    #[test]
+    fn growing_a_sheet_still_respects_the_bulk_cap() {
+        let mut r = Relay::new();
+        r.handshake("s", "t");
+        let h = crate::protocol::new_handle("excel", "p.xlsx", "Sheet1");
+        r.attach("s", h.clone(), OpenFile {
+            kind: FileKind::Excel,
+            content: FileContent::Excel {
+                sheets: std::collections::HashMap::from([("Sheet1".to_string(), vec![vec![String::new()]])]),
+            },
+            styles: std::collections::HashMap::new(),
+        });
+        // A selector far enough out that filling to it would be a denial
+        // of service on memory rather than a write.
+        let far = WriteArgs { selector: "Sheet1!ZZ100000".into(), values: crate::tools::grid("x") };
+        assert!(execute(&mut r, "s", &h, Call::Write(far)).is_err());
+    }
+
+    #[test]
+    fn a_single_cell_is_a_one_by_one_range() {
+        // The `write` tool's own example is `Sheet1!G1`. Refusing it in the
+        // document model meant the schema promised something only the live
+        // path delivered, so every offline test had to avoid the shape the
+        // model is most likely to send.
+        assert_eq!(parse_range("Sheet1!G1").unwrap(), ("Sheet1".to_string(), Some((0, 6, 0, 6))));
+        assert_eq!(parse_range("Sheet1!G1:G1").unwrap(), ("Sheet1".to_string(), Some((0, 6, 0, 6))));
+        assert_eq!(parse_range("Sheet1!A1:C5").unwrap(), ("Sheet1".to_string(), Some((0, 0, 4, 2))));
+        // Still a sheet on its own, and still nonsense when it is nonsense.
+        assert_eq!(parse_range("Sheet1").unwrap(), ("Sheet1".to_string(), None));
+        assert!(parse_range("Sheet1!nope").is_err());
+    }
+
     use super::*;
     use crate::bus::{FileKind, OpenFile};
     use std::collections::HashMap;

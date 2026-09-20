@@ -5,9 +5,9 @@
 //! the end, a half-written file loses one message instead of the whole
 //! conversation, and reading needs no array parser.
 //!
-//! Files live under `SYN_HOME`, defaulting to `.syn/chats` beside the repo.
+//! Files live under `AGENT_HOME`, defaulting to `.agent/chats` beside the repo.
 //! Conversations are the user's, not the project's, so nothing here is ever
-//! committed; `.syn/` is gitignored.
+//! committed; `.agent/` is gitignored.
 
 use crate::provider::Msg;
 use std::path::{Path, PathBuf};
@@ -85,6 +85,43 @@ fn num(line: &str, name: &str) -> Option<u64> {
 
 /// Serialise one message. The role names match what the UI renders, so the
 /// page never has to know about Rust enum shapes.
+/// One row per tool call in a saved transcript: `(id, tool, arguments,
+/// status)`, ready for [`crate::labels::sentence`].
+///
+/// The console needs a human sentence per call and must not build one
+/// itself. A second implementation of the label table in JavaScript would
+/// be a second thing to keep in step with the tool surface, and it would
+/// sit outside the tests that stop a newly added verb reaching a human as
+/// raw JSON.
+///
+/// The status is read back out of the observation the loop wrote, because
+/// that is the only record a reopened conversation has of how a call went.
+pub fn call_labels(msgs: &[Msg]) -> Vec<(String, String, String, crate::labels::Status)> {
+    use crate::labels::Status;
+    let mut out = Vec::new();
+    for (i, m) in msgs.iter().enumerate() {
+        let Msg::AssistantCalls(raw) = m else { continue };
+        // `parse_tool_calls` wants a whole reply body; the transcript keeps
+        // only the array. Wrapping it reuses the one parser rather than
+        // adding a second that could disagree with it.
+        for call in crate::tools::parse_tool_calls(&format!("\"tool_calls\":{raw}")) {
+            let answer = msgs[i + 1..].iter().find_map(|x| match x {
+                Msg::Tool { id, content } if *id == call.id => Some(content.as_str()),
+                _ => None,
+            });
+            let status = match answer {
+                None => Status::Running,
+                Some(a) if a.starts_with("refused:") || a.starts_with("denied by the human:") => Status::Refused,
+                Some(a) if a.starts_with("error:") => Status::Failed,
+                Some(a) if a.starts_with("not run:") => Status::Stopped,
+                Some(_) => Status::Done,
+            };
+            out.push((call.id, call.name, call.arguments, status));
+        }
+    }
+    out
+}
+
 pub fn msg_json(m: &Msg) -> String {
     match m {
         Msg::System(t) => format!("{{\"role\":\"system\",\"text\":\"{}\"}}", esc(t)),
@@ -120,10 +157,10 @@ pub fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Where conversations live: `$SYN_HOME`, else `.syn` beside the `.env` this
-/// build already knows how to find, else `.syn` under the working directory.
+/// Where conversations live: `$AGENT_HOME`, else `.agent` beside the `.env` this
+/// build already knows how to find, else `.agent` under the working directory.
 pub fn home() -> PathBuf {
-    if let Ok(h) = std::env::var("SYN_HOME")
+    if let Ok(h) = std::env::var("AGENT_HOME")
         && !h.is_empty()
     {
         return PathBuf::from(h);
@@ -132,7 +169,7 @@ pub fn home() -> PathBuf {
     let base = crate::config::find_env_file(&cwd)
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
-    base.join(".syn")
+    base.join(".agent")
 }
 
 fn dir() -> PathBuf {
@@ -241,6 +278,48 @@ pub fn meta_json(m: &ChatMeta) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_saved_transcript_yields_one_sentence_per_call() {
+        use crate::labels::{sentence, Status};
+        let raw = r#"[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"handle\":\"excel:p.xlsx:S1\",\"selector\":\"Sheet1!A1:B2\"}"}},{"id":"c2","type":"function","function":{"name":"struct","arguments":"{\"handle\":\"excel:p.xlsx:S1\",\"verb\":\"addSheet\",\"name\":\"Scorecard\"}"}}]"#;
+        let msgs = vec![
+            Msg::User("go".into()),
+            Msg::AssistantCalls(raw.into()),
+            Msg::Tool { id: "c1".into(), content: "grid Sheet1: 2x2".into() },
+            Msg::Tool { id: "c2".into(), content: "refused: a sheet named Scorecard exists".into() },
+        ];
+        let rows = call_labels(&msgs);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].3, Status::Done);
+        assert_eq!(rows[1].3, Status::Refused);
+        assert_eq!(sentence(&rows[0].1, &rows[0].2, rows[0].3), "Read Sheet1!A1:B2");
+        assert_eq!(sentence(&rows[1].1, &rows[1].2, rows[1].3), "Refused to add Scorecard");
+    }
+
+    #[test]
+    fn a_call_with_no_answer_yet_is_still_running() {
+        let raw = r#"[{"id":"c9","type":"function","function":{"name":"read","arguments":"{}"}}]"#;
+        let rows = call_labels(&[Msg::AssistantCalls(raw.into())]);
+        assert_eq!(rows[0].3, crate::labels::Status::Running);
+    }
+
+    #[test]
+    fn every_way_the_loop_answers_maps_to_a_status() {
+        use crate::labels::Status;
+        let raw = r#"[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]"#;
+        for (body, want) in [
+            ("grid Sheet1: 2x2", Status::Done),
+            ("refused: no such handle", Status::Refused),
+            ("denied by the human: not now", Status::Refused),
+            ("error: modal dialog or busy app", Status::Failed),
+            ("not run: an earlier call in this turn stopped the run", Status::Stopped),
+        ] {
+            let msgs =
+                vec![Msg::AssistantCalls(raw.into()), Msg::Tool { id: "c1".into(), content: body.into() }];
+            assert_eq!(call_labels(&msgs)[0].3, want, "{body:?}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -302,9 +381,9 @@ mod tests {
 
     #[test]
     fn save_then_load_keeps_the_conversation() {
-        let tmp = std::env::temp_dir().join(format!("syn-chats-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("agent-chats-{}", std::process::id()));
         // SAFETY: single-threaded test, and the value is restored below.
-        unsafe { std::env::set_var("SYN_HOME", &tmp) };
+        unsafe { std::env::set_var("AGENT_HOME", &tmp) };
         let chat = Chat {
             meta: ChatMeta { id: new_id(), title: "Quarterly".into(), updated: now(), turns: 1 },
             msgs: vec![Msg::System("rules".into()), Msg::User("hi".into()), Msg::Assistant("hello".into())],
@@ -317,7 +396,7 @@ mod tests {
         assert!(list().iter().any(|m| m.id == chat.meta.id));
         delete(&chat.meta.id).unwrap();
         assert!(load(&chat.meta.id).is_err());
-        unsafe { std::env::remove_var("SYN_HOME") };
+        unsafe { std::env::remove_var("AGENT_HOME") };
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

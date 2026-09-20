@@ -237,7 +237,7 @@ impl Runner {
         {
             return Err(Error::Denied(format!(
                 "macro {action:?} refused: VBA is off. It runs code at your full privilege, \
-                 so a human turns it on for a session with SYN_VBA=1 and it is denied by \
+                 so a human turns it on for a session with AGENT_VBA=1 and it is denied by \
                  default in protocol/security_policy.json"
             )));
         }
@@ -347,7 +347,7 @@ mod tests {
         match r.pump(&mut relay) {
             Err(Error::Denied(why)) => {
                 assert!(why.contains("VBA is off"), "{why}");
-                assert!(why.contains("SYN_VBA=1"), "a refusal must say how to allow it: {why}");
+                assert!(why.contains("AGENT_VBA=1"), "a refusal must say how to allow it: {why}");
             }
             other => panic!("VBA must be denied by default, got {other:?}"),
         }

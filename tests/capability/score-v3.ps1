@@ -7,7 +7,7 @@
 # writing is the point of them -- they are the only ones that do.
 #
 #   powershell -File tests/capability/score-v3.ps1
-#   powershell -File tests/capability/score-v3.ps1 -Chat .syn\chats\cXXX.jsonl
+#   powershell -File tests/capability/score-v3.ps1 -Chat .agent\chats\cXXX.jsonl
 #   powershell -File tests/capability/score-v3.ps1 -Control
 
 [CmdletBinding()]
@@ -513,7 +513,7 @@ if ($Control) {
     return
 }
 if (-not $Chat) {
-    $Chat = (Get-ChildItem (Join-Path $repo '.syn\chats') -Filter *.jsonl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+    $Chat = (Get-ChildItem (Join-Path $repo '.agent\chats') -Filter *.jsonl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 }
 $issued = 0; $executed = 0; $declined = 0; $shell = 0; $doom = $false; $answered = $false; $stopNote = ''
 foreach ($line in Get-Content $Chat) {

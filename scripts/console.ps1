@@ -16,7 +16,7 @@ param(
     [int]$Port = 7777,
     [switch]$WithUia,
     [switch]$NoOpen,
-    [string]$Pipe = 'synuia'
+    [string]$Pipe = 'hand-uia'
 )
 
 $ErrorActionPreference = 'Stop'

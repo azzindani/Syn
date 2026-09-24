@@ -468,6 +468,7 @@ fn main() {
                 let call = Call::Struct(StructArgs::InsertParagraph {
                     text: a[2].into(),
                     style: word_style(a[1]),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "para", call);
             }
@@ -481,6 +482,7 @@ fn main() {
                     rows: core::tools::grid(a[2]),
                     style: word_style(a[1]),
                     selector: String::new(),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "wtable", call);
             }
@@ -580,6 +582,7 @@ fn main() {
                     rows: core::tools::grid(a[3].trim()),
                     style: if a[2] == "." { String::new() } else { a[2].into() },
                     selector: a[1].into(),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "stable", call);
             }

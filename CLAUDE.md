@@ -104,12 +104,28 @@ live check on Word".
 ## Adding a `struct` verb
 
 This is almost always the right shape for a new capability. Don't add a
-seventh op. The steps are, in order: `ops.rs` (variant) → `tools.rs` (schema
-enum + `STRUCT_VERBS`) → `hand.rs` (`envelope_for`) →
-`sidecar-csharp/Host/Program.cs` (a case in the method switch) → `cli.rs`
+seventh op.
+
+Most verbs are just named fields sent to the application: find, replace,
+sort, sheet, textBox and the rest. One of those is a row in
+`tools::OFFICE_VERBS` (its required and optional fields, and which one is
+the long payload), the verb name in the `struct` schema's enum and
+`STRUCT_VERBS`, a case in the method switch in
+`sidecar-csharp/Host/Program.cs` (the implementation goes in `Verbs.cs`),
+and a line in `manual.rs`. The parser and the wire follow from the row, and
+`wire_contract.rs` fails until office-host handles it. Implement it in
+`sidecar-lo/lo_host.py` if UNO does it plainly, and let it be refused there
+otherwise.
+
+A verb that needs its own parsing gets the full recipe, in order: `ops.rs`
+(variant) → `tools.rs` (schema enum + `STRUCT_VERBS`) → `hand.rs`
+(`envelope_for`) → `Program.cs` (a case in the method switch) → `cli.rs`
 (an optional command) → `manual.rs` (reference only: it must never name the
 fixture or prescribe an order, and a test enforces this) → tests. The full
 recipe is in `docs/10`.
+
+Every Office verb gets a step in `scripts/live-office-peak.ps1`, which runs
+them all against real Office and is how a change is proved on Windows.
 
 ## Rules that are load-bearing
 

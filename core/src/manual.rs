@@ -133,7 +133,7 @@ not a list of the operations you performed. That ends the turn."#,
     },
     Page {
         topic: "excel",
-        summary: "fill-down, tables, pivots, charts, conditional formatting, slicers, names",
+        summary: "fill-down, rows and sheets, sort and filter, find and replace, tables, pivots, charts, validation, notes, page setup",
         body: r#"EXCEL VERBS
 
 ONE WRITE CAN FILL A WHOLE RANGE
@@ -190,7 +190,8 @@ Anchor it to a RANGE and it fills exactly those cells:
 
 Anchored to a single cell it keeps Excel's default size, which is how
 several charts end up overlapping. Lay out ranges that do not overlap.
-Kinds: line, bar, column, pie. Style keys: legend, gridlines, xTitle,
+Kinds: line, bar, column, pie, scatter, area, doughnut, stackedColumn,
+stackedBar, lineMarkers, radar. Style keys: legend, gridlines, xTitle,
 yTitle, dataLabels.
 
 CONDITIONAL, SLICER
@@ -205,6 +206,66 @@ FORMAT
 Cosmetic only, `k=v` joined by ";": bold, italic, size, font, color, fill
 (six-digit hex), numberFormat, width, autofit, autofitSheet, wrap, merge,
 border, align, freeze.
+
+ROWS, COLUMNS, CELLS
+
+The shape of the selector says which:
+
+  struct {verb:"insert", selector:"data!5:7"}     three rows, pushed down
+  struct {verb:"delete", selector:"data!C:D"}     two columns, closed up
+  struct {verb:"insert", selector:"data!B2:C3"}   a block, cells pushed down
+
+Everything below moves, so an address read before is stale after. There is
+no undo for a delete here beyond the application's own.
+
+SORT, FILTER, DEDUPE
+
+All three take a range whose FIRST ROW IS THE HEADER, and name a column by
+its header, not its letter:
+
+  struct {verb:"sort", selector:"data!A1:H500", name:"Units", rule:"desc"}
+  struct {verb:"filter", selector:"data!A1:H500", name:"Region", rule:"North"}
+  struct {verb:"dedupe", selector:"data!A1:H500", name:"Region|Month"}
+
+A filter hides rows and leaves them in place; rule ">100" or "<>0" work,
+and an empty rule clears it. Dedupe DELETES the later copies; with no
+`name` a row is a duplicate only when every column matches.
+
+FIND, REPLACE, COPY
+
+`find` lists the cells whose shown text contains `text` (twenty, then
+"and more"); `replace` changes every occurrence, `text` to `with`, in a
+sheet or a range. `copy` copies values, formulas and formatting:
+
+  struct {verb:"copy", source:"data!A1:D10", at:"Summary!A1"}
+
+SHEETS
+
+  struct {verb:"sheet", selector:"data", action:"rename", name:"Raw"}
+
+action is rename, delete, copy (name is the copy's name), hide or show.
+After a rename every selector says the new name.
+
+VALIDATION, NOTES, LINKS
+
+`validate` limits what a cell accepts: rule "list=Yes,No" makes a drop-down,
+"whole=1..10" and "decimal=0..1" limit numbers. `comment` puts a note on a
+cell, `link` a hyperlink (`text` is the address, `title` what the cell
+shows). `picture` with a range in `selector` fills that range with an
+image.
+
+PRINTING
+
+  struct {verb:"pageSetup", selector:"Report", style:"orientation=landscape;paper=A4;fitWide=1;fitTall=0"}
+
+fitWide=1;fitTall=0 is "one page wide, as many pages tall as it takes",
+which is what most reports want. margin is in inches.
+
+MORE FORMAT KEYS
+
+underline, strike, height (row height), valign (top, center, bottom),
+indent, rotate (degrees), hidden (1 hides the rows 5:7 or columns C:E the
+selector names).
 
 LIVE EXCEL IS SOMEONE'S SCREEN
 
@@ -227,7 +288,7 @@ or on a slide."#,
     },
     Page {
         topic: "word",
-        summary: "paragraphs and styles, contents, tables, pictures, page numbers",
+        summary: "paragraphs and styles, inserting and deleting, find and replace, headers, comments, links, tables, page setup",
         body: r#"WORD VERBS
 
 Paragraphs append in document order: you write top to bottom, one call per
@@ -237,8 +298,44 @@ paragraph, and the style rides in `name`.
   struct {verb:"insertParagraph", text:"body text with no style named"}
 
 Use REAL style names — "Title", "Subtitle", "Heading 1", "Heading 2",
-"Quote". Bold body text is not a heading: a contents field is built from
-heading styles and will not see it.
+"Quote", "List Bullet", "List Number". Bold body text is not a heading: a
+contents field is built from heading styles and will not see it. A list is
+paragraphs in a list style, one call per item. These built-in names work
+in Word in any language.
+
+INSERTING, DELETING, CORRECTING
+
+`at` puts a paragraph or a table BEFORE an existing paragraph, which it
+becomes; everything from there moves down one:
+
+  struct {verb:"insertParagraph", text:"...", at:"p3"}
+  struct {verb:"delete", selector:"p3"}        or "p3:p5" for several
+
+After either, paragraph numbers have shifted: read `body` again rather
+than reuse numbers from before.
+
+FIND AND REPLACE
+
+`find` lists the paragraphs containing `text`; `replace` changes every
+occurrence to `with` and says how many. Both work on up to 255 characters
+at a time.
+
+HEADERS, COMMENTS, LINKS
+
+  struct {verb:"header", name:"header", text:"Draft for review"}
+
+name "footer" writes the footer instead, replacing what is there, page
+numbers included: add `pageNumbers` after it, not before. `comment` puts a
+reviewer's comment on a paragraph; `link` turns a paragraph into a link
+(`text` is the address).
+
+PAGE SETUP AND MORE FORMAT KEYS
+
+`pageSetup` takes style orientation=landscape, paper=A4 or Letter, margin
+(inches). `format` on a paragraph also takes underline, color, highlight
+(yellow, green, cyan, pink, red, blue, gray, none), spaceBefore and
+spaceAfter (points), lineSpacing (1.5 is one and a half lines), indent
+(points).
 
 CONTENTS
 
@@ -283,7 +380,7 @@ is one call. Budget for that before promising a page count."#,
     },
     Page {
         topic: "powerpoint",
-        summary: "slides and layouts, bullets, speaker notes, pictures, tables, numbering",
+        summary: "slides and layouts, bullets, body text, text boxes, moving and duplicating, themes, notes, pictures, tables",
         body: r#"POWERPOINT VERBS
 
 A deck may start with no slides at all. Every slide you want has to be
@@ -311,6 +408,33 @@ full-width figure below a title is about 70,120,580,300.
 
   struct {verb:"picture", selector:"s4", name:"70,120,580,300", text:"C:\\...\\fig.png"}
   struct {verb:"insertTable", selector:"s6", name:"55,140,610,170", rows:"A|B;1|2"}
+
+THE BODY OF A SLIDE
+
+  write {handle:"ppt:deck.pptx:deck", selector:"s4.body", values:"first|second|>detail"}
+
+replaces the body's bullets, in createSlide's encoding. `format` with
+selector "s4" styles the title and "s4.body" the body (size, bold, italic,
+underline, font, color, align).
+
+TEXT BOXES
+
+`textBox` puts text anywhere: `name` is the box, left,top,width,height in
+points; `style` takes size, bold, italic, font, color, align.
+
+  struct {verb:"textBox", selector:"s2", name:"60,420,600,40", text:"Source: ...", style:"size=12"}
+
+ORDER
+
+`duplicateSlide` copies a slide to just after itself, `moveSlide` moves one
+(`at` is where it goes, s1 for first), `delete` removes one. Every slide
+after the change is renumbered: read `deck` again.
+
+FIND, REPLACE, THEMES
+
+`find` lists the slides (and notes) containing `text`; `replace` changes it
+everywhere, tables included. `theme` applies a .thmx theme or a .potx
+template file to every slide.
 
 SLIDE NUMBERS
 

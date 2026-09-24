@@ -434,7 +434,15 @@ namespace Syn.Uia
                 if (json[j] == '\\' && j + 1 < json.Length)
                 {
                     j++;
-                    sb.Append(json[j] switch { 'n' => '\n', 'r' => '\r', 't' => '\t', var c => c });
+                    if (json[j] == 'u' && j + 4 < json.Length
+                        && int.TryParse(json.AsSpan(j + 1, 4), System.Globalization.NumberStyles.HexNumber,
+                                        System.Globalization.CultureInfo.InvariantCulture, out var cp))
+                    {
+                        // Rust escapes control characters as \u00XX.
+                        sb.Append((char)cp);
+                        j += 4;
+                    }
+                    else sb.Append(json[j] switch { 'n' => '\n', 'r' => '\r', 't' => '\t', 'b' => '\b', 'f' => '\f', var c => c });
                 }
                 else if (json[j] == '"') return sb.ToString();
                 else sb.Append(json[j]);

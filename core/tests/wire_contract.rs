@@ -58,6 +58,9 @@ fn methods_rust_can_send() -> Vec<String> {
             found.push(rest[..j].to_string());
         }
     }
+    // The table-driven verbs are sent under their own names by one generic
+    // arm, so no literal names them in `envelope_for`: the table does.
+    found.extend(core::tools::OFFICE_VERBS.iter().map(|v| v.name.to_string()));
     found.sort();
     found.dedup();
     found

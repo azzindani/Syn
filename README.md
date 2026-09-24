@@ -62,7 +62,9 @@ software hands (Office first) in one live session, any model via OpenRouter.
 - `office-pane/` — Office.js task pane (Mac/Web hand), sideload to verify.
 - `scripts/` — Windows bring-up: `new-testbed-docs.ps1` (fixtures via COM),
   `live-excel-smoke.ps1` (M1/M2 acceptance vs real Excel), `pipe-client.ps1`,
-  `live-cdp-smoke.ps1` (a real browser), `live-uia-smoke.ps1` (Calculator).
+  `live-cdp-smoke.ps1` (a real browser), `live-uia-smoke.ps1` (Calculator),
+  `live-office-peak.ps1` (every Excel, Word and PowerPoint verb through the
+  real MCP server, one PASS or FAIL line each).
 - `testbed/` — gitignored run area for live Office tests (docs/out/logs).
 - `.env.example` — provider key, endpoint, and the four model slots
   (`AGENT_MODEL_SMALL|STANDARD|CODING|REASONING`); copy to `.env`, which is

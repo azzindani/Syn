@@ -40,7 +40,7 @@ Nine tools, in this order:
 |---|---|
 | `status` | What is open and the exact handle for each, what can be opened, the next step. The first call also carries the working rules. |
 | `open` | Opens a file in Excel, Word or PowerPoint — starting the helper, and through it the application, if they are not running — or finds one already open, or registers a browser page or a window. Returns the handle and what is inside (a workbook's sheet names). |
-| `read` `write` `format` `struct` `export` `undo` | The six document ops, generated from `tools::TOOLS`: the same names, descriptions, worked examples and JSON Schemas the loop uses. |
+| `read` `write` `format` `struct` `export` `undo` | The six document ops, generated from `tools::TOOLS`: the same names, descriptions, worked examples and JSON Schemas the loop uses. `struct` covers what a person does with the ribbon: in Excel insert and delete rows and columns, sort, filter, dedupe, copy, sheets, validation, notes, links, page setup, charts, pivots, tables; in Word paragraphs at any position, delete, headers and footers, comments, links, page setup; in PowerPoint slides, body text, text boxes, duplicating, moving, deleting, themes; and find and replace in all three. |
 | `manual` | The Excel, Word or PowerPoint reference page. |
 
 Not offered: `shell`, which always stops for a human, whose approval

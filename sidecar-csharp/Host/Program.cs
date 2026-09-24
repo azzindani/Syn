@@ -32,7 +32,7 @@ using System.Threading.Tasks;
 
 namespace Syn.Sidecar
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static string _pipe = "hand";
         private static string _app = "excel";
@@ -404,9 +404,16 @@ namespace Syn.Sidecar
                     // they are the long field, and `args` is for the
                     // short ones that describe them.
                     "insertParagraph" => InsertParagraph(doc, handle, JsonField(line, "payload"),
-                                                         JsonField(args, "name")),
+                                                         JsonField(args, "name"), JsonField(args, "at")),
                     "insertTable" => InsertTable(doc, handle, JsonField(line, "payload"),
-                                                 JsonField(args, "name")),
+                                                 JsonField(args, "name"), JsonField(args, "at")),
+                    "delete" => WordDelete(doc, handle, selector),
+                    "find" => WordFind(doc, JsonField(args, "text")),
+                    "replace" => WordReplace(doc, handle, JsonField(args, "text"), JsonField(args, "with")),
+                    "comment" => WordComment(doc, handle, selector, JsonField(line, "payload")),
+                    "link" => WordLink(doc, handle, selector, JsonField(args, "text"), JsonField(args, "title")),
+                    "header" => WordHeader(doc, handle, JsonField(args, "name"), JsonField(line, "payload")),
+                    "pageSetup" => WordPageSetup(doc, handle, JsonField(args, "style")),
                     "pageBreak" => PageBreak(doc, handle, JsonField(args, "name")),
                     "contents" => Contents(doc, handle, JsonField(args, "title")),
                     "pageNumbers" => PageNumbers(doc, handle, JsonField(args, "text")),
@@ -461,6 +468,11 @@ namespace Syn.Sidecar
         private static string ApplyStyle(dynamic target, string style)
         {
             if (string.IsNullOrWhiteSpace(style)) return "";
+            if (BuiltinStyles.TryGetValue(style.Trim(), out var builtin))
+            {
+                try { target.Style = builtin; return $" [{style}]"; }
+                catch { /* fall through to the name */ }
+            }
             try { target.Style = style; return $" [{style}]"; }
             catch { return $" [style {style} is not in this document, left as-is]"; }
         }
@@ -479,23 +491,56 @@ namespace Syn.Sidecar
             return p;
         }
 
-        private static string InsertParagraph(dynamic doc, string handle, string text, string style)
+        private static string InsertParagraph(dynamic doc, string handle, string text, string style, string at)
         {
             Snapshot(handle);
+            if (!string.IsNullOrWhiteSpace(at))
+            {
+                // Before paragraph `at`, which the new one becomes. It would
+                // otherwise inherit that paragraph's style -- a heading, often
+                // -- so an unstyled insert is set to Normal on purpose.
+                var n = ParaBefore((object)doc, at, "insertParagraph");
+                dynamic p0 = ParagraphBefore(doc, n);
+                if (!string.IsNullOrEmpty(text)) p0.Range.InsertBefore(text);
+                var note0 = ApplyStyle(p0, string.IsNullOrWhiteSpace(style) ? "Normal" : style);
+                doc.Saved = false;
+                return Ok($"paragraph inserted as p{n}, {(text ?? "").Length} chars{note0}; the ones from p{n} on moved down one");
+            }
             dynamic p = AppendParagraph(doc, text ?? "");
             var note = ApplyStyle(p, style);
             doc.Saved = false;
             return Ok($"paragraph {doc.Paragraphs.Count} added, {(text ?? "").Length} chars{note}");
         }
 
-        private static string InsertTable(dynamic doc, string handle, string grid, string style)
+        /// The zero-based paragraph index `at` names, for inserting before it.
+        private static int ParaBefore(object docObj, string at, string verb)
+        {
+            dynamic doc = docObj;
+            var t = at.Trim();
+            int count = doc.Paragraphs.Count;
+            if (!t.StartsWith("p", StringComparison.OrdinalIgnoreCase) || !int.TryParse(t[1..], out var n) || n < 0 || n >= count)
+                throw new InvalidOperationException($"{verb}: at is a paragraph from p0 to p{count - 1}, not {at}");
+            return n;
+        }
+
+        /// A new, empty paragraph in front of paragraph n, which it becomes.
+        private static dynamic ParagraphBefore(dynamic doc, int n)
+        {
+            doc.Paragraphs[n + 1].Range.InsertParagraphBefore();
+            return doc.Paragraphs[n + 1];
+        }
+
+        private static string InsertTable(dynamic doc, string handle, string grid, string style, string at)
         {
             Snapshot(handle);
             var rows = ParseGrid(grid);
             if (rows.Length == 0) throw new InvalidOperationException("insertTable needs rows: cells by |, rows by ;");
             int nc = 0;
             foreach (var r in rows) nc = Math.Max(nc, r.Length);
-            dynamic t = doc.Tables.Add(AppendParagraph(doc, "").Range, rows.Length, nc);
+            dynamic anchor = string.IsNullOrWhiteSpace(at)
+                ? AppendParagraph(doc, "")
+                : ParagraphBefore(doc, ParaBefore((object)doc, at, "insertTable"));
+            dynamic t = doc.Tables.Add(anchor.Range, rows.Length, nc);
             for (int r = 0; r < rows.Length; r++)
                 for (int c = 0; c < nc; c++)
                     t.Cell(r + 1, c + 1).Range.Text = c < rows[r].Length ? rows[r][c] : "";
@@ -659,9 +704,31 @@ namespace Syn.Sidecar
                             _ => throw new InvalidOperationException($"align does not know {val}"),
                         };
                         break;
+                    case "underline": range.Font.Underline = on ? 1 : 0; break; // wdUnderlineSingle
+                    case "color": range.Font.Color = OleColor(val); break;
+                    // WdColorIndex: the highlighter's own colours, by name.
+                    case "highlight":
+                        range.HighlightColorIndex = val.ToLowerInvariant() switch
+                        {
+                            "yellow" => 7, "green" => 4, "cyan" or "turquoise" => 3, "pink" => 5,
+                            "red" => 6, "blue" => 2, "gray" or "grey" => 16, "none" or "0" => 0,
+                            _ => throw new InvalidOperationException(
+                                $"highlight does not know {val}: yellow, green, cyan, pink, red, blue, gray or none"),
+                        };
+                        break;
+                    case "spacebefore": range.ParagraphFormat.SpaceBefore = double.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "spaceafter": range.ParagraphFormat.SpaceAfter = double.Parse(val, CultureInfo.InvariantCulture); break;
+                    // wdLineSpaceMultiple 5, in lines of 12 points: 1.5 is one
+                    // and a half lines whatever the font.
+                    case "linespacing":
+                        range.ParagraphFormat.LineSpacingRule = 5;
+                        range.ParagraphFormat.LineSpacing = 12.0 * double.Parse(val, CultureInfo.InvariantCulture);
+                        break;
+                    case "indent": range.ParagraphFormat.LeftIndent = double.Parse(val, CultureInfo.InvariantCulture); break;
                     default:
                         throw new InvalidOperationException(
-                            $"word format does not know {key}: it knows style, bold, italic, size, font, align");
+                            $"word format does not know {key}: it knows style, bold, italic, underline, size, font, color, "
+                            + "highlight, align, spaceBefore, spaceAfter, lineSpacing, indent");
                 }
                 did.Add(key);
             }
@@ -843,6 +910,20 @@ namespace Syn.Sidecar
                     "conditional" => Conditional(wb, handle, selector, JsonField(line, "payload")),
                     "slicer" => Slicer(wb, handle, JsonField(args, "name"), JsonField(args, "rows"),
                                        JsonField(args, "at")),
+                    "insert" => ExcelInsert(wb, handle, selector),
+                    "delete" => ExcelDelete(wb, handle, selector),
+                    "sort" => ExcelSort(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
+                    "filter" => ExcelFilter(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
+                    "dedupe" => ExcelDedupe(wb, handle, selector, JsonField(args, "name")),
+                    "copy" => ExcelCopy(wb, handle, JsonField(args, "source"), JsonField(args, "at")),
+                    "validate" => ExcelValidate(wb, handle, selector, JsonField(args, "rule")),
+                    "sheet" => ExcelSheet(wb, handle, selector, JsonField(args, "action"), JsonField(args, "name")),
+                    "comment" => ExcelComment(wb, handle, selector, JsonField(line, "payload")),
+                    "link" => ExcelLink(wb, handle, selector, JsonField(args, "text"), JsonField(args, "title")),
+                    "pageSetup" => ExcelPageSetup(wb, handle, selector, JsonField(args, "style")),
+                    "picture" => SheetPicture(wb, handle, selector, JsonField(args, "text")),
+                    "find" => ExcelFind(wb, selector, JsonField(args, "text")),
+                    "replace" => ExcelReplace(wb, handle, selector, JsonField(args, "text"), JsonField(args, "with")),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
             });
@@ -1067,9 +1148,34 @@ namespace Syn.Sidecar
                         ws.Cells.EntireColumn.AutoFit();
                         applied.Add("autofitSheet");
                         break;
+                    // xlUnderlineStyleSingle 2, xlUnderlineStyleNone -4142
+                    case "underline": rng.Font.Underline = Truthy(v) ? 2 : -4142; applied.Add("underline"); break;
+                    case "strike": rng.Font.Strikethrough = Truthy(v); applied.Add("strike"); break;
+                    case "height": rng.RowHeight = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("height"); break;
+                    case "indent": rng.IndentLevel = int.Parse(v, CultureInfo.InvariantCulture); applied.Add("indent"); break;
+                    case "rotate": rng.Orientation = int.Parse(v, CultureInfo.InvariantCulture); applied.Add("rotate"); break;
+                    // xlTop -4160, xlCenter -4108, xlBottom -4107
+                    case "valign":
+                        rng.VerticalAlignment = v.ToLowerInvariant() switch
+                        {
+                            "top" => -4160,
+                            "center" or "centre" or "middle" => -4108,
+                            "bottom" => -4107,
+                            _ => throw new InvalidOperationException($"valign does not know {v}: top, center or bottom"),
+                        };
+                        applied.Add("valign");
+                        break;
+                    // Rows or columns, by the shape of the selector: 5:7 hides
+                    // rows, C:E hides columns.
+                    case "hidden":
+                        if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?\d+(:\$?\d+)?$")) rng.EntireRow.Hidden = Truthy(v);
+                        else if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?[A-Za-z]{1,3}(:\$?[A-Za-z]{1,3})?$")) rng.EntireColumn.Hidden = Truthy(v);
+                        else throw new InvalidOperationException("hidden hides whole rows (Sheet!5:7) or columns (Sheet!C:E)");
+                        applied.Add("hidden");
+                        break;
                     default: throw new InvalidOperationException(
-                        $"format does not know {k}: it takes bold, italic, size, numberFormat, width, "
-                        + "autofit, autofitSheet, wrap, font, color, fill, merge, border, align, freeze");
+                        $"format does not know {k}: it takes bold, italic, underline, strike, size, numberFormat, width, height, "
+                        + "autofit, autofitSheet, wrap, font, color, fill, merge, border, align, valign, indent, rotate, hidden, freeze");
                 }
             }
             if (applied.Count == 0) throw new InvalidOperationException("format was given no style: try bold=1;numberFormat=#,##0");
@@ -1274,14 +1380,24 @@ namespace Syn.Sidecar
             if (string.IsNullOrEmpty(srcAddr)) throw new InvalidOperationException("chart needs a source like Summary!A1:B12");
             var (dstSheet, dstAddr) = SplitRange(at);
             if (string.IsNullOrEmpty(dstAddr)) throw new InvalidOperationException("chart needs a destination like Dashboard!A1");
-            // xlLine = 4, xlColumnClustered = 51, xlBarClustered = 57, xlPie = 5
+            // xlLine 4, xlColumnClustered 51, xlBarClustered 57, xlPie 5,
+            // xlXYScatter -4169, xlArea 1, xlDoughnut -4120, xlColumnStacked 52,
+            // xlBarStacked 58, xlLineMarkers 65, xlRadar -4151
             int type = kind.ToLowerInvariant() switch
             {
                 "line" => 4,
                 "column" => 51,
                 "bar" => 57,
                 "pie" => 5,
-                _ => throw new InvalidOperationException($"chart does not know {kind}: it draws line, bar, column or pie"),
+                "scatter" => -4169,
+                "area" => 1,
+                "doughnut" => -4120,
+                "stackedcolumn" => 52,
+                "stackedbar" => 58,
+                "linemarkers" => 65,
+                "radar" => -4151,
+                _ => throw new InvalidOperationException(
+                    $"chart does not know {kind}: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar"),
             };
             dynamic sws = Sheet(wb, srcSheet);
             dynamic dws = Sheet(wb, dstSheet);
@@ -1434,6 +1550,14 @@ namespace Syn.Sidecar
                     "pageNumbers" => SlideNumbers(pres, handle, JsonField(args, "text")),
                     "format" => FormatSlide(pres, handle, selector, JsonField(line, "payload")),
                     "export" => ExportPres(pres, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    "delete" => SlideDelete(pres, handle, selector),
+                    "duplicateSlide" => SlideDuplicate(pres, handle, selector),
+                    "moveSlide" => SlideMove(pres, handle, selector, JsonField(args, "at")),
+                    "textBox" => SlideTextBox(pres, handle, selector, JsonField(args, "name"),
+                                              JsonField(line, "payload"), JsonField(args, "style")),
+                    "theme" => DeckTheme(pres, handle, JsonField(args, "text")),
+                    "find" => DeckFind(pres, JsonField(args, "text")),
+                    "replace" => DeckReplace(pres, handle, JsonField(args, "text"), JsonField(args, "with")),
                     _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
                 };
             });
@@ -1573,42 +1697,74 @@ namespace Syn.Sidecar
                     // make somewhere rather than dropping the content.
                     body = slide.Shapes.AddTextbox(1, 60.0, 140.0, 600.0, 320.0);
                 }
-                // A leading ">" marks a sub-bullet, one per level. Leading
-                // spaces would be the obvious marker, but the grid splitter
-                // trims every cell -- correctly, for a spreadsheet -- so they
-                // never survive the trip.
-                var text = new StringBuilder();
-                var levels = new List<int>();
-                foreach (var b in rows[0])
-                {
-                    var depth = 0;
-                    var body2 = b;
-                    while (body2.StartsWith('>'))
-                    {
-                        depth++;
-                        body2 = body2[1..].TrimStart();
-                    }
-                    if (text.Length > 0) text.Append(CrChar);
-                    text.Append(body2);
-                    levels.Add(Math.Min(depth + 1, 5));
-                    added++;
-                }
-                body.TextFrame.TextRange.Text = text.ToString();
-                for (var i = 0; i < levels.Count; i++)
-                {
-                    if (levels[i] == 1) continue;
-                    // Paragraphs(start, length): without the length it runs to
-                    // the end of the range and indents everything after it too.
-                    try { body.TextFrame.TextRange.Paragraphs(i + 1, 1).IndentLevel = levels[i]; }
-                    catch { }
-                }
+                added = FillBullets(body, rows[0]);
             }
             return Ok($"slide {pres.Slides.Count} added, layout {layout}, {added} bullet(s)");
+        }
+
+        /// Bullets into a text shape, replacing what it held. Cells joined by
+        /// "|"; a leading ">" per level marks a sub-bullet. Leading spaces
+        /// would be the obvious marker, but the grid splitter trims every cell
+        /// -- correctly, for a spreadsheet -- so they never survive the trip.
+        private static int FillBullets(dynamic body, string[] bullets)
+        {
+            var text = new StringBuilder();
+            var levels = new List<int>();
+            foreach (var b in bullets)
+            {
+                var depth = 0;
+                var body2 = b.Trim();
+                while (body2.StartsWith('>'))
+                {
+                    depth++;
+                    body2 = body2[1..].TrimStart();
+                }
+                if (text.Length > 0) text.Append(CrChar);
+                text.Append(body2);
+                levels.Add(Math.Min(depth + 1, 5));
+            }
+            body.TextFrame.TextRange.Text = text.ToString();
+            for (var i = 0; i < levels.Count; i++)
+            {
+                if (levels[i] == 1) continue;
+                // Paragraphs(start, length): without the length it runs to
+                // the end of the range and indents everything after it too.
+                try { body.TextFrame.TextRange.Paragraphs(i + 1, 1).IndentLevel = levels[i]; }
+                catch { }
+            }
+            return levels.Count;
+        }
+
+        /// A slide's body: the first placeholder that is not the title and
+        /// takes text.
+        private static dynamic BodyOf(object slideObj, string selector)
+        {
+            dynamic slide = slideObj;
+            int np = slide.Shapes.Placeholders.Count;
+            for (var i = 1; i <= np; i++)
+            {
+                dynamic ph = slide.Shapes.Placeholders[i];
+                int t = ph.PlaceholderFormat.Type;
+                if (t == 1 || t == 3) continue; // ppPlaceholderTitle, CenterTitle
+                if ((int)ph.HasTextFrame == 0) continue;
+                return ph;
+            }
+            throw new InvalidOperationException($"{selector}: this slide's layout has no body; add text with textBox instead");
         }
 
         private static string WriteSlide(dynamic pres, string handle, string selector, string text)
         {
             Snapshot(handle);
+            if (selector.Trim().EndsWith(".body", StringComparison.OrdinalIgnoreCase))
+            {
+                // The body, as bullets: cells of the one row are bullets, and
+                // a leading > makes a sub-bullet, exactly as createSlide takes
+                // them. Replaces what the body held.
+                dynamic s0 = SlideOf((object)pres, selector.Trim()[..^5]).slide;
+                dynamic body = BodyOf((object)s0, selector);
+                var n = FillBullets(body, ParseGrid(text ?? "").SelectMany(r => r).ToArray());
+                return Ok($"body of {selector.Trim()[..^5]} written, {n} bullet(s)");
+            }
             var found = SlideOf((object)pres, selector);
             dynamic slide = found.slide;
             var notes = found.notes;
@@ -1699,8 +1855,12 @@ namespace Syn.Sidecar
         private static string FormatSlide(dynamic pres, string handle, string selector, string styles)
         {
             Snapshot(handle);
-            dynamic slide = SlideOf((object)pres, selector).slide;
-            dynamic range = slide.Shapes.Title.TextFrame.TextRange;
+            // "s3" is the title, "s3.body" the body: the two things on a slide
+            // a model means when it says "make that bigger".
+            var isBody = selector.Trim().EndsWith(".body", StringComparison.OrdinalIgnoreCase);
+            var slideSel = isBody ? selector.Trim()[..^5] : selector;
+            dynamic slide = SlideOf((object)pres, slideSel).slide;
+            dynamic range = isBody ? BodyOf((object)slide, selector).TextFrame.TextRange : slide.Shapes.Title.TextFrame.TextRange;
             var did = new List<string>();
             foreach (var pair in (styles ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -1716,14 +1876,23 @@ namespace Syn.Sidecar
                     case "size": range.Font.Size = double.Parse(val, CultureInfo.InvariantCulture); break;
                     case "font": range.Font.Name = val; break;
                     case "color": range.Font.Color.RGB = OleColor(val); break;
+                    case "underline": range.Font.Underline = on ? -1 : 0; break;
+                    case "align":
+                        // ppAlignLeft 1, ppAlignCenter 2, ppAlignRight 3
+                        range.ParagraphFormat.Alignment = val.ToLowerInvariant() switch
+                        {
+                            "left" => 1, "center" or "centre" => 2, "right" => 3,
+                            _ => throw new InvalidOperationException($"align does not know {val}"),
+                        };
+                        break;
                     default:
                         throw new InvalidOperationException(
-                            $"slide format does not know {key}: it knows bold, italic, size, font, color");
+                            $"slide format does not know {key}: it knows bold, italic, underline, size, font, color, align");
                 }
                 did.Add(key);
             }
             if (did.Count == 0) throw new InvalidOperationException("format was given no style: try size=32;bold=1");
-            return Ok($"formatted the title of {selector}: {string.Join(", ", did)}");
+            return Ok($"formatted the {(isBody ? "body" : "title")} of {slideSel}: {string.Join(", ", did)}");
         }
 
 
@@ -1868,7 +2037,31 @@ namespace Syn.Sidecar
             var sb = new StringBuilder();
             for (var k = 1; k < rest.Length; k++)
             {
-                if (rest[k] == '\\' && k + 1 < rest.Length) { sb.Append(rest[k + 1]); k++; }
+                if (rest[k] == '\\' && k + 1 < rest.Length)
+                {
+                    k++;
+                    // Decode the escape, not just the character after the
+                    // backslash: that turned every newline Rust sent as \n
+                    // into the letter n, so a VBA module arrived as one line
+                    // and a paragraph with a line break lost it. The
+                    // LibreOffice helper parses JSON properly, which is why
+                    // no test off Windows could see it.
+                    switch (rest[k])
+                    {
+                        case 'n': sb.Append('\n'); break;
+                        case 'r': sb.Append('\r'); break;
+                        case 't': sb.Append('\t'); break;
+                        case 'b': sb.Append('\b'); break;
+                        case 'f': sb.Append('\f'); break;
+                        case 'u' when k + 4 < rest.Length
+                                      && int.TryParse(rest.AsSpan(k + 1, 4), NumberStyles.HexNumber,
+                                                      CultureInfo.InvariantCulture, out var cp):
+                            sb.Append((char)cp);
+                            k += 4;
+                            break;
+                        default: sb.Append(rest[k]); break;
+                    }
+                }
                 else if (rest[k] == '"') break;
                 else sb.Append(rest[k]);
             }

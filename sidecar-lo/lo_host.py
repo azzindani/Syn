@@ -121,6 +121,14 @@ def split_range(selector):
     return sheet, addr
 
 
+# How many places `find` lists before it says "and more", as office-host.
+FIND_SHOWN = 20
+
+
+def refuse(msg):
+    raise Refused(msg)
+
+
 def col_name(c):
     s = ""
     c += 1
@@ -507,6 +515,167 @@ class Calc:
 
 # ---------------------------------------------------------------- Writer
 
+
+    # ---- the table-driven verbs ------------------------------------------
+
+    def target(self, selector, verb):
+        """A range and its shape: whole rows (5:7), whole columns (C:E), or
+        cells, as office-host tells them apart."""
+        sheet, addr = split_range(selector)
+        if not addr:
+            raise Refused("%s needs a range like Sheet!A1:D20, rows like Sheet!5:7 or columns like Sheet!C:E" % verb)
+        ws = self.sheet(sheet)
+        a = addr.replace("$", "")
+        if re.fullmatch(r"\d+(:\d+)?", a):
+            kind, a = "rows", a if ":" in a else "%s:%s" % (a, a)
+        elif re.fullmatch(r"[A-Za-z]{1,3}(:[A-Za-z]{1,3})?", a):
+            kind, a = "columns", a if ":" in a else "%s:%s" % (a, a)
+        else:
+            kind = "cells"
+        return ws, self.rng(ws, a), kind, sheet, a
+
+    def insert(self, selector):
+        ws, r, kind, sheet, a = self.target(selector, "insert")
+        ra = r.getRangeAddress()
+        if kind == "rows":
+            ws.Rows.insertByIndex(ra.StartRow, ra.EndRow - ra.StartRow + 1)
+        elif kind == "columns":
+            ws.Columns.insertByIndex(ra.StartColumn, ra.EndColumn - ra.StartColumn + 1)
+        else:
+            ws.insertCells(ra, uno.Enum("com.sun.star.sheet.CellInsertMode", "DOWN"))
+        return "inserted %s at %s!%s; what was there moved %s" % (kind, sheet, a, "right" if kind == "columns" else "down")
+
+    def delete(self, selector):
+        ws, r, kind, sheet, a = self.target(selector, "delete")
+        ra = r.getRangeAddress()
+        if kind == "rows":
+            ws.Rows.removeByIndex(ra.StartRow, ra.EndRow - ra.StartRow + 1)
+        elif kind == "columns":
+            ws.Columns.removeByIndex(ra.StartColumn, ra.EndColumn - ra.StartColumn + 1)
+        else:
+            ws.removeRange(ra, uno.Enum("com.sun.star.sheet.CellDeleteMode", "UP"))
+        return "deleted %s %s!%s; what was after them moved %s" % (kind, sheet, a, "left" if kind == "columns" else "up")
+
+    def header_column(self, r, header, verb):
+        a = r.getRangeAddress()
+        names = [r.getCellByPosition(j, 0).getString() for j in range(a.EndColumn - a.StartColumn + 1)]
+        for j, n in enumerate(names):
+            if n.strip().lower() == header.strip().lower():
+                return j
+        raise Refused("%s: no column headed %s in the first row of the range; its headers are %s"
+                      % (verb, header, ", ".join(names)))
+
+    def sort(self, selector, header, rule):
+        ws, r, kind, sheet, a = self.target(selector, "sort")
+        col = self.header_column(r, header, "sort")
+        rule = (rule or "").strip().lower()
+        if rule not in ("", "asc", "ascending", "desc", "descending"):
+            raise Refused("sort: rule is asc or desc, not %s" % rule)
+        asc = not rule.startswith("desc")
+        field = uno.createUnoStruct("com.sun.star.table.TableSortField")
+        field.Field = col
+        field.IsAscending = asc
+        desc = list(r.createSortDescriptor())
+        for p in desc:
+            if p.Name == "SortFields":
+                p.Value = uno.Any("[]com.sun.star.table.TableSortField", (field,))
+            elif p.Name == "ContainsHeader":
+                p.Value = True
+        uno.invoke(r, "sort", (tuple(desc),))
+        return "sorted %s!%s by %s, %s first" % (sheet, a, header, "smallest" if asc else "largest")
+
+    def copy(self, source, at):
+        ss, sa = split_range(source)
+        ds, da = split_range(at)
+        if not sa:
+            raise Refused("copy needs a source like data!A1:D20")
+        if not da:
+            raise Refused("copy needs a destination cell like Summary!A1")
+        src = self.rng(self.sheet(ss), sa)
+        dws = self.sheet(ds)
+        dst = self.rng(dws, da).getCellByPosition(0, 0)
+        dws.copyRange(dst.getCellAddress(), src.getRangeAddress())
+        a = src.getRangeAddress()
+        return "copied %s!%s to %s!%s (%dx%d: values, formulas and formats)" % (
+            ss, sa, ds, da, a.EndRow - a.StartRow + 1, a.EndColumn - a.StartColumn + 1)
+
+    def sheet_op(self, selector, action, name):
+        sheet, _ = split_range(selector)
+        ws = self.sheet(sheet)
+        sheets = self.doc.Sheets
+        if action == "rename":
+            ws.Name = name
+            return "sheet %s is now %s" % (sheet, name)
+        if action == "delete":
+            if sheets.getCount() == 1:
+                raise Refused("a workbook keeps at least one sheet: add another before deleting this one")
+            sheets.removeByName(sheet)
+            return "sheet %s deleted" % sheet
+        if action == "copy":
+            idx = list(sheets.ElementNames).index(sheet)
+            sheets.copyByName(sheet, name, idx + 1)
+            return "sheet %s copied as %s" % (sheet, name)
+        if action in ("hide", "show"):
+            ws.IsVisible = action == "show"
+            return "sheet %s %s" % (sheet, "shown" if action == "show" else "hidden")
+        raise Refused("sheet does not know %s: rename, delete, copy, hide or show" % action)
+
+    def comment(self, selector, text):
+        sheet, addr = split_range(selector)
+        if not addr:
+            raise Refused("comment needs a cell like data!B2")
+        ws = self.sheet(sheet)
+        cell = self.rng(ws, addr).getCellByPosition(0, 0)
+        ws.Annotations.insertNew(cell.getCellAddress(), text)
+        return "note on %s!%s" % (sheet, addr.split(":")[0])
+
+    def ranges(self, selector):
+        sheet, addr = split_range(selector or "")
+        names = [sheet] if sheet else list(self.doc.Sheets.ElementNames)
+        for n in names:
+            ws = self.sheet(n)
+            if addr:
+                yield n, self.rng(ws, addr)
+            else:
+                cur = ws.createCursor()
+                cur.gotoStartOfUsedArea(False)
+                cur.gotoEndOfUsedArea(True)
+                yield n, cur
+
+    def find(self, selector, text):
+        hits, more = [], False
+        want = text.lower()
+        for name, r in self.ranges(selector):
+            a = r.getRangeAddress()
+            for i in range(a.EndRow - a.StartRow + 1):
+                for j in range(a.EndColumn - a.StartColumn + 1):
+                    if want in r.getCellByPosition(j, i).getString().lower():
+                        if len(hits) == FIND_SHOWN:
+                            more = True
+                            break
+                        ref = ("'%s'" % name) if " " in name else name
+                        hits.append("%s!%s%d" % (ref, col_name(a.StartColumn + j), a.StartRow + i + 1))
+                if more:
+                    break
+            if more:
+                break
+        if not hits:
+            return "no cell shows %s" % text
+        return "%s is in %d%s cell(s): %s" % (text, len(hits), "+" if more else "", ", ".join(hits))
+
+    def replace(self, selector, text, with_):
+        count = 0
+        for _, r in self.ranges(selector):
+            rd = r.createReplaceDescriptor()
+            rd.SearchString = text
+            rd.ReplaceString = with_
+            rd.SearchCaseSensitive = False
+            count += r.replaceAll(rd)
+        if not count:
+            return "no cell contains %s; nothing changed" % text
+        return "replaced %s with %s in %d cell(s)" % (text, with_, count)
+
+
 class Writer:
     def __init__(self, doc):
         self.doc = doc
@@ -572,6 +741,85 @@ class Writer:
         cur = self._new_para("")
         cur.BreakType = uno.Enum("com.sun.star.style.BreakType", "PAGE_BEFORE")
         return "%s break added" % (kind or "page")
+
+
+    def para_span(self, selector, verb):
+        m = re.fullmatch(r"p(\d+)(?::p?(\d+))?", (selector or "").strip(), re.I)
+        if not m:
+            raise Refused("%s needs a paragraph like p3, or p3:p5 for several" % verb)
+        a = int(m.group(1))
+        b = int(m.group(2)) if m.group(2) else a
+        n = len(self.paras())
+        if b < a or b >= n:
+            raise Refused("%s: the document has paragraphs p0 to p%d" % (verb, n - 1))
+        return a, b
+
+    def insert_paragraph_at(self, text, style, at):
+        n, _ = self.para_span(at, "insertParagraph")
+        t = self.doc.Text
+        from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+        cur = t.createTextCursorByRange(self.paras()[n].getStart())
+        t.insertString(cur, text or "", False)
+        t.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+        note = self.style_note(self.paras()[n], style or "Normal")
+        return "paragraph inserted as p%d, %d chars%s; the ones from p%d on moved down one" % (n, len(text or ""), note, n)
+
+    def delete(self, selector):
+        a, b = self.para_span(selector, "delete")
+        ps = self.paras()
+        t = self.doc.Text
+        cur = t.createTextCursorByRange(ps[a].getStart())
+        cur.gotoRange(ps[b].getEnd(), True)
+        if b + 1 < len(ps):
+            cur.goRight(1, True)  # and the break after, so no empty paragraph is left
+        elif a > 0:
+            cur.gotoRange(ps[a - 1].getEnd(), False)
+            cur.gotoRange(ps[b].getEnd(), True)
+        cur.setString("")
+        return "deleted %s; the paragraphs after moved up, so p%d is now what followed" % (
+            "p%d" % a if a == b else "p%d to p%d" % (a, b), a)
+
+    def find(self, text):
+        want = text.lower()
+        hits = ["p%d" % i for i, p in enumerate(self.paras()) if want in p.getString().lower()]
+        more = len(hits) > FIND_SHOWN
+        hits = hits[:FIND_SHOWN]
+        if not hits:
+            return "%s does not appear in the document" % text
+        return "%s appears in %d%s paragraph(s): %s" % (text, len(hits), "+" if more else "", ", ".join(hits))
+
+    def replace(self, text, with_):
+        rd = self.doc.createReplaceDescriptor()
+        rd.SearchString = text
+        rd.ReplaceString = with_
+        rd.SearchCaseSensitive = False
+        n = self.doc.replaceAll(rd)
+        if not n:
+            return "%s does not appear in the document; nothing changed" % text
+        return "replaced %s with %s, %d time(s)" % (text, with_, n)
+
+    def comment(self, selector, text):
+        a, _ = self.para_span(selector, "comment")
+        note = self.doc.createInstance("com.sun.star.text.textfield.Annotation")
+        note.Content = text
+        note.Author = "Syn"
+        t = self.doc.Text
+        t.insertTextContent(t.createTextCursorByRange(self.paras()[a].getStart()), note, False)
+        return "comment on p%d" % a
+
+    def header(self, which, text):
+        which = (which or "header").strip().lower()
+        if which not in ("header", "footer"):
+            raise Refused("header takes name header or footer, not %s" % which)
+        name = self.paras()[0].PageStyleName or "Standard"
+        style = self.doc.StyleFamilies.getByName("PageStyles").getByName(name)
+        if which == "header":
+            style.HeaderIsOn = True
+            style.HeaderText.setString(text)
+        else:
+            style.FooterIsOn = True
+            style.FooterText.setString(text)
+        return "%s set" % which
 
 
 # ---------------------------------------------------------------- Impress
@@ -707,6 +955,77 @@ class Impress:
         t.setString(text or "")
         return "title on %s written (%d chars)" % (selector, len(text or ""))
 
+    def number(self, selector, verb):
+        m = re.fullmatch(r"s(\d+)", (selector or "").strip(), re.I)
+        if not m:
+            raise Refused("%s needs a slide like s3" % verb)
+        n = int(m.group(1))
+        count = self.pages().getCount()
+        if n < 1 or n > count:
+            raise Refused("slide %d does not exist: the deck has %d" % (n, count))
+        return n
+
+    def delete(self, selector):
+        n = self.number(selector, "delete")
+        self.pages().remove(self.pages().getByIndex(n - 1))
+        return "slide %d deleted; the slides after it moved up one, and the deck has %d" % (n, self.pages().getCount())
+
+    def duplicate(self, selector):
+        n = self.number(selector, "duplicateSlide")
+        self.doc.duplicate(self.pages().getByIndex(n - 1))
+        return "slide %d duplicated as s%d; the slides after it moved down one" % (n, n + 1)
+
+    def text_box(self, selector, box, text, style):
+        n = self.number(selector, "textBox")
+        page = self.pages().getByIndex(n - 1)
+        vals = [60.0, 140.0, 600.0, 60.0]
+        for i, part in enumerate((box or "").split(",")[:4]):
+            try:
+                vals[i] = float(part.strip())
+            except ValueError:
+                pass
+        hmm = lambda pt: int(pt * 2540 / 72)  # points to 1/100 mm
+        shape = self.doc.createInstance("com.sun.star.drawing.TextShape")
+        page.add(shape)
+        shape.Position = uno.createUnoStruct("com.sun.star.awt.Point", hmm(vals[0]), hmm(vals[1]))
+        shape.Size = uno.createUnoStruct("com.sun.star.awt.Size", hmm(vals[2]), hmm(vals[3]))
+        shape.setString(text)
+        for pair in (style or "").split(";"):
+            if "=" not in pair:
+                continue
+            k, v = [x.strip() for x in pair.split("=", 1)]
+            if k.lower() == "size":
+                shape.CharHeight = float(v)
+            elif k.lower() == "bold":
+                shape.CharWeight = 150.0 if truthy(v) else 100.0
+            else:
+                raise Refused("textBox style %s is not implemented on the LibreOffice helper" % k)
+        return "text box on s%d at %d,%d (%dx%d), %d chars" % (n, vals[0], vals[1], vals[2], vals[3], len(text))
+
+    def find(self, text):
+        want, hits = text.lower(), []
+        for i in range(self.pages().getCount()):
+            page = self.pages().getByIndex(i)
+            for j in range(page.getCount()):
+                sh = page.getByIndex(j)
+                if hasattr(sh, "getString") and want in sh.getString().lower():
+                    hits.append("s%d" % (i + 1))
+                    break
+        return "%s is on %s" % (text, ", ".join(hits)) if hits else "%s is on no slide" % text
+
+    def replace(self, text, with_):
+        count = 0
+        for i in range(self.pages().getCount()):
+            page = self.pages().getByIndex(i)
+            rd = page.createReplaceDescriptor()
+            rd.SearchString = text
+            rd.ReplaceString = with_
+            rd.SearchCaseSensitive = False
+            count += page.replaceAll(rd)
+        if not count:
+            return "%s is on no slide; nothing changed" % text
+        return "replaced %s with %s, %d time(s)" % (text, with_, count)
+
 
 # ---------------------------------------------------------------- dispatch
 
@@ -716,6 +1035,7 @@ FILTERS = {
     "powerpoint": {"pdf": "impress_pdf_Export", "pptx": "Impress MS PowerPoint 2007 XML"},
 }
 DEFAULT_FORMAT = {"excel": "xlsx", "word": "docx", "powerpoint": "pptx"}
+
 
 
 def export(app, doc, fmt, path):
@@ -761,6 +1081,14 @@ def handle_line(office, line):
                 "addSheet": lambda: c.add_sheet(args.get("name", "")),
                 "chart": lambda: c.chart(args.get("kind", ""), args.get("source", ""), args.get("title", ""),
                                          args.get("at", ""), payload),
+                "insert": lambda: c.insert(selector),
+                "delete": lambda: c.delete(selector),
+                "sort": lambda: c.sort(selector, args.get("name", ""), args.get("rule", "")),
+                "copy": lambda: c.copy(args.get("source", ""), args.get("at", "")),
+                "sheet": lambda: c.sheet_op(selector, args.get("action", ""), args.get("name", "")),
+                "comment": lambda: c.comment(selector, payload),
+                "find": lambda: c.find(selector, args.get("text", "")),
+                "replace": lambda: c.replace(selector, args.get("text", ""), args.get("with", "")),
             }.get(method)
         elif app == "word":
             w = Writer(doc)
@@ -783,8 +1111,15 @@ def handle_line(office, line):
             out = {
                 "read": word_read,
                 "write": word_write,
-                "insertParagraph": lambda: w.insert_paragraph(payload, args.get("name", "")),
-                "insertTable": lambda: w.insert_table(payload, args.get("name", "")),
+                "insertParagraph": lambda: (w.insert_paragraph_at(payload, args.get("name", ""), args["at"])
+                                            if args.get("at") else w.insert_paragraph(payload, args.get("name", ""))),
+                "insertTable": lambda: (refuse("insertTable at a position is not implemented on the LibreOffice helper")
+                                        if args.get("at") else w.insert_table(payload, args.get("name", ""))),
+                "delete": lambda: w.delete(selector),
+                "find": lambda: w.find(args.get("text", "")),
+                "replace": lambda: w.replace(args.get("text", ""), args.get("with", "")),
+                "comment": lambda: w.comment(selector, payload),
+                "header": lambda: w.header(args.get("name", ""), payload),
                 "pageBreak": lambda: w.page_break(args.get("name", "")),
             }.get(method)
         else:
@@ -793,6 +1128,11 @@ def handle_line(office, line):
                 "read": lambda: p.read_deck() if selector in ("deck", "") else p.read_slide(selector),
                 "write": lambda: p.write(selector, payload),
                 "createSlide": lambda: p.create_slide(args.get("title", ""), payload, args.get("name", "")),
+                "delete": lambda: p.delete(selector),
+                "duplicateSlide": lambda: p.duplicate(selector),
+                "textBox": lambda: p.text_box(selector, args.get("name", ""), payload, args.get("style", "")),
+                "find": lambda: p.find(args.get("text", "")),
+                "replace": lambda: p.replace(args.get("text", ""), args.get("with", "")),
             }.get(method)
         if out is None:
             raise Refused("unsupported %s.%s on the LibreOffice helper" % (app, method))

@@ -147,6 +147,23 @@ pub const RULES: &[Rule] = &[
         mcp: None,
     },
     Rule {
+        // "Unable to set the Orientation property of the PageSetup class":
+        // Excel asks the printer driver for every page setting, and a
+        // machine with no printer installed refuses them all.
+        needle: "PageSetup class",
+        from: "com",
+        apps: &["excel"],
+        advice: "Excel could not change the page setup. It asks the printer for every page setting, so this usually means no printer is installed; ask the user to add one (Microsoft Print to PDF is enough), then repeat the call.",
+        mcp: None,
+    },
+    Rule {
+        needle: "Sort method of Range class failed",
+        from: "com",
+        apps: &["excel"],
+        advice: "Excel could not sort that range. The usual causes: merged cells in it (unmerge them first), or a range that is only part of a table; sort the whole block, header row first.",
+        mcp: None,
+    },
+    Rule {
         // NAME_NOT_FOUND, which Excel uses for most refusals it does not
         // explain. Last among the Excel rules because it is the vaguest.
         needle: "0x800A03EC",

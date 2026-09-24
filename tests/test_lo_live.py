@@ -339,5 +339,103 @@ class TwoSessionsAtOnce(unittest.TestCase):
         self.assertIn("Region", self.ok(self.b, "read", handle=h, selector="data!A1"))
 
 
+@unittest.skipIf(REASON, REASON or "")
+class TheFullToolSet(unittest.TestCase):
+    """The table-driven verbs, through the real MCP server, checked by
+    reading the documents back. The LibreOffice helper does the ones UNO
+    does plainly; the rest are refused by name, and that is checked too."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="syn-lo-peak-")
+        cls.docs = os.path.join(cls.dir, "docs")
+        subprocess.run([PYTHON, os.path.join(REPO, "sidecar-lo", "make_fixtures.py"), cls.docs],
+                       check=True, capture_output=True, timeout=180)
+        pipe = "peak%d" % os.getpid()
+        env = dict(os.environ, AGENT_ENV_FILE=os.path.join(cls.dir, "no.env"),
+                   AGENT_HOME=os.path.join(cls.dir, "home"), AGENT_PYTHON=PYTHON,
+                   AGENT_PIPE_EXCEL=pipe + "-excel", AGENT_PIPE_WORD=pipe + "-word",
+                   AGENT_PIPE_PPT=pipe + "-ppt", AGENT_MCP_ROOTS=cls.docs)
+        for k in ("AGENT_MCP_APPS", "AGENT_MCP_LAUNCH", "AGENT_OFFICE_HOST"):
+            env.pop(k, None)
+        cls.g = Gate(env, "peak")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.g.close()
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def ok(self, tool, **args):
+        err, text = self.g.call(tool, **args)
+        self.assertFalse(err, "%s %s failed: %s" % (tool, args, text))
+        return text
+
+    def verb(self, **args):
+        return self.ok("struct", **args)
+
+    def cell(self, h, sel):
+        return re.search(r"= (.*)\n</user_content>", self.ok("read", handle=h, selector=sel)).group(1)
+
+    def test_excel_rows_sort_copy_sheets_notes_find_replace(self):
+        self.ok("open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
+        h = "excel:sales.xlsx:workbook"
+        self.assertIn("data!A2", self.verb(handle=h, verb="find", text="North", selector="data"))
+        self.verb(handle=h, verb="insert", selector="data!2:3")
+        self.assertEqual(self.cell(h, "data!A2:B3"), "|;|")
+        self.assertEqual(self.cell(h, "data!A4"), "North")
+        self.verb(handle=h, verb="delete", selector="data!2:3")
+        self.assertEqual(self.cell(h, "data!A2"), "North")
+        self.verb(handle=h, verb="sort", selector="data!A1:D25", name="Units", rule="desc")
+        top, second = (float(x) for x in self.cell(h, "data!C2:C3").split(";"))
+        self.assertGreaterEqual(top, second)
+        self.assertEqual(self.cell(h, "data!C1"), "Units", "the header row stays put")
+        self.verb(handle=h, verb="addSheet", name="Copy")
+        self.verb(handle=h, verb="copy", source="data!A1:D3", at="Copy!B2")
+        self.assertEqual(self.cell(h, "Copy!B2:E2"), "Region|Month|Units|Price")
+        self.verb(handle=h, verb="sheet", selector="Copy", action="rename", name="Copied")
+        self.assertEqual(self.cell(h, "Copied!B2"), "Region", "the renamed sheet answers to its new name")
+        self.verb(handle=h, verb="sheet", selector="Copied", action="copy", name="Again")
+        self.assertEqual(self.cell(h, "Again!B2"), "Region")
+        self.verb(handle=h, verb="sheet", selector="Again", action="delete")
+        err, text = self.g.call("read", handle=h, selector="Again!A1")
+        self.assertTrue(err, "a deleted sheet is gone: " + text)
+        self.verb(handle=h, verb="comment", selector="data!A1", text="checked by Syn")
+        n = self.verb(handle=h, verb="replace", selector="data", text="North", **{"with": "Nord"})
+        self.assertIn("in 6 cell(s)", n)
+        self.assertIn("Nord", self.verb(handle=h, verb="find", selector="data", text="Nord"))
+
+    def test_word_insert_at_delete_find_replace_comment_header(self):
+        self.ok("open", app="word", path=os.path.join(self.docs, "memo.docx"))
+        w = "word:memo.docx:body"
+        self.verb(handle=w, verb="insertParagraph", text="Inserted line", at="p1")
+        self.assertIn("Inserted line", self.ok("read", handle=w, selector="p1"))
+        self.assertIn("Prepared for the energy team", self.ok("read", handle=w, selector="p2"))
+        self.verb(handle=w, verb="delete", selector="p1")
+        self.assertIn("Prepared for the energy team", self.ok("read", handle=w, selector="p1"))
+        self.assertIn("p0, p3", self.verb(handle=w, verb="find", text="memo"))
+        self.assertIn("2 time(s)", self.verb(handle=w, verb="replace", text="memo", **{"with": "note"}))
+        self.assertIn("Site visit note", self.ok("read", handle=w, selector="p0"))
+        self.verb(handle=w, verb="comment", selector="p0", text="looks right")
+        self.verb(handle=w, verb="header", name="header", text="Energy team")
+
+    def test_powerpoint_duplicate_delete_text_box_find_replace_and_a_refusal(self):
+        self.ok("open", app="powerpoint", path=os.path.join(self.docs, "deck.pptx"))
+        p = "ppt:deck.pptx:deck"
+        self.verb(handle=p, verb="createSlide", title="First", bullets=["one", "two"])
+        self.verb(handle=p, verb="duplicateSlide", selector="s1")
+        self.assertIn("slides=2", self.ok("read", handle=p, selector="deck"))
+        self.verb(handle=p, verb="textBox", selector="s2", name="60,300,500,40", text="A note on slide two",
+                  style="size=20")
+        self.assertIn("s2", self.verb(handle=p, verb="find", text="note on slide"))
+        self.assertIn("time(s)", self.verb(handle=p, verb="replace", text="First", **{"with": "Opening"}))
+        self.verb(handle=p, verb="delete", selector="s2")
+        self.assertIn("slides=1", self.ok("read", handle=p, selector="deck"))
+        # What the LibreOffice helper does not do is refused by name, never
+        # reported as done.
+        err, text = self.g.call("struct", handle=p, verb="moveSlide", selector="s1", at="s1")
+        self.assertTrue(err)
+        self.assertIn("unsupported", text)
+
+
 if __name__ == "__main__":
     unittest.main()

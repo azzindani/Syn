@@ -254,18 +254,29 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             // it. A module of VBA would not survive being an arg.
             Some(code),
         )),
-        Call::Struct(StructArgs::InsertParagraph { text, style }) => Some(envelope(
+        Call::Struct(StructArgs::InsertParagraph { text, style, at }) => Some(envelope(
             "insertParagraph",
             handle,
-            &format!("{{\"name\":\"{}\"}}", esc(style)),
+            &format!("{{\"name\":\"{}\",\"at\":\"{}\"}}", esc(style), esc(at)),
             Some(text),
         )),
-        Call::Struct(StructArgs::InsertTable { rows, style, selector }) => Some(envelope(
+        Call::Struct(StructArgs::InsertTable { rows, style, selector, at }) => Some(envelope(
             "insertTable",
             handle,
-            &format!("{{\"name\":\"{}\",\"selector\":\"{}\"}}", esc(style), esc(selector)),
+            &format!(
+                "{{\"name\":\"{}\",\"selector\":\"{}\",\"at\":\"{}\"}}",
+                esc(style),
+                esc(selector),
+                esc(at)
+            ),
             Some(&grid_payload(rows)),
         )),
+        // The table-driven verbs go out as what they are: their short
+        // fields as args, their one long field as the payload.
+        Call::Struct(StructArgs::Office { verb, args, payload }) => {
+            let fields = args.iter().map(|(k, v)| format!("\"{}\":\"{}\"", esc(k), esc(v))).collect::<Vec<_>>().join(",");
+            Some(envelope(verb, handle, &format!("{{{fields}}}"), (!payload.is_empty()).then_some(payload.as_str())))
+        }
         // The deck was the one app the hand never learned to drive: a slide
         // could be added with a title on it and nothing else.
         Call::Struct(StructArgs::CreateSlide { title, bullets, layout }) => Some(envelope(
@@ -473,6 +484,27 @@ mod tests {
     }
 
     #[test]
+    fn a_table_verb_goes_out_as_its_fields_and_payload() {
+        let call = Call::Struct(StructArgs::Office {
+            verb: "replace".into(),
+            args: vec![("text".into(), "Q3 \"draft\"".into()), ("with".into(), "Q3".into())],
+            payload: String::new(),
+        });
+        let e = envelope_for(&call, "word:m.docx:body").unwrap();
+        let v = crate::json::parse(&e).unwrap();
+        assert_eq!(v.get("method").and_then(|m| m.as_str()), Some("replace"));
+        assert_eq!(v.at(&["args", "text"]).and_then(|m| m.as_str()), Some("Q3 \"draft\""));
+        assert!(v.get("payload").is_none(), "no long field, no payload: {e}");
+        let call = Call::Struct(StructArgs::Office {
+            verb: "comment".into(),
+            args: vec![("selector".into(), "p3".into())],
+            payload: "line one\nline two".into(),
+        });
+        let v = crate::json::parse(&envelope_for(&call, "word:m.docx:body").unwrap()).unwrap();
+        assert_eq!(v.get("payload").and_then(|m| m.as_str()), Some("line one\nline two"));
+    }
+
+    #[test]
     fn read_round_trip_matches_the_live_wire_format() {
         // Exactly the bytes real Excel answered with in the smoke run.
         let (mut h, w) = hand("{\"ok\":true,\"preview\":\"grid Sheet1: 2x2\"}\n");
@@ -550,11 +582,13 @@ mod tests {
             Call::Struct(StructArgs::InsertParagraph {
                 text: "Estate performance".into(),
                 style: "Heading 1".into(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::InsertTable {
                 rows: vec![vec!["Site".into(), "kWh".into()], vec!["Bearspaw".into(), "3082638".into()]],
                 style: String::new(),
                 selector: String::new(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::PageBreak { kind: "page".into() }),
             Call::Struct(StructArgs::Contents { title: "Contents".into() }),
@@ -596,6 +630,7 @@ mod tests {
                 rows: vec![vec!["Site".into(), "kWh".into()]],
                 style: String::new(),
                 selector: "s2".into(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::Picture {
                 path: "out\\by-site.png".into(),

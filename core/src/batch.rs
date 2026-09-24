@@ -90,7 +90,10 @@ impl Plan {
 /// what anyone thinks it says.
 pub fn is_pure(name: &str, args: &str) -> bool {
     match name {
-        "read" | "manual" => true,
+        "read" | "manual" | "find" => true,
+        // A search changes nothing, so three identical ones in a turn are
+        // one question.
+        "struct" => field(args, "verb").as_deref() == Some("find"),
         "export" => {
             field(args, "path").is_none()
                 && matches!(field(args, "format").as_deref(), Some("summary") | Some("preview"))

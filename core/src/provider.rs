@@ -5,13 +5,20 @@
 
 use crate::router::{Effort, Model, Route};
 
-/// Default model IDs. Override via deployment config, not code edits.
+/// The compiled default for every slot: OpenRouter's own router, which
+/// picks a model per request. Neutral on purpose -- no vendor is baked into
+/// the binary, and a deployment names its models in `.env`
+/// (`AGENT_MODEL_SMALL|STANDARD|CODING|REASONING`), not by code edits.
+///
+/// Every slot shares it, so an unconfigured install has no failover chain:
+/// `fallbacks` skips slots that resolve to the same id.
+pub const DEFAULT_MODEL: &str = "openrouter/auto";
+
+/// Default model ID for one slot. Override via deployment config. The match
+/// is exhaustive so a new slot has to choose its default here.
 pub fn model_id(model: Model) -> &'static str {
     match model {
-        Model::Small => "openai/gpt-5.6-luna",
-        Model::Standard => "openai/gpt-5.6-terra",
-        Model::Coding => "openai/gpt-5.6-sol",
-        Model::Reasoning => "openai/gpt-6-astra",
+        Model::Small | Model::Standard | Model::Coding | Model::Reasoning => DEFAULT_MODEL,
     }
 }
 
@@ -399,16 +406,16 @@ pub fn worth_another_model(err: &str) -> bool {
 /// overloaded provider recovers. Walking straight to the next slot on one
 /// blip cost two capability runs the model they were meant to be testing:
 /// both switched off the model named in the experiment at step ~15 and
-/// spent the rest of the run on a weaker one. `08-production-grade.md`
-/// lists opencode's exponential backoff as ported; only the model-fallback
-/// half of it ever landed.
+/// spent the rest of the run on a weaker one. An early plan listed
+/// opencode's exponential backoff as ported; only the model-fallback half
+/// of it ever landed.
 pub fn worth_waiting(err: &str) -> bool {
     retryable_message(err)
 }
 
 // ---- retry, ported from opencode `session/retry.ts` --------------------
 //
-// See `docs/DIGEST-06-opencode-loop.md` §3. The previous version here was
+// See `docs/design/DIGEST-06-opencode-loop.md` §3. The previous version here was
 // a fixed `[2, 6, 15]` with no jitter and, worse, no reading of
 // `Retry-After`: the provider states how long to wait and we ignored it.
 
@@ -569,7 +576,10 @@ pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u
         .ok_or_else(|| format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))?;
     let url = format!("{base_url}/chat/completions");
     let out = std::process::Command::new("curl")
-        .args(["-sS", "-m", "60", "-X", "POST", &url])
+        // Five minutes: a reply that is not streamed arrives all at once, and a
+        // model that thinks first used to be cut off at sixty seconds and
+        // reported as "no HTTP response".
+        .args(["-sS", "-m", "300", "-X", "POST", &url])
         .args(["-H", "Content-Type: application/json"])
         .args(["-H", &format!("Authorization: Bearer {key}")])
         .args(["--data-binary", "@-"])
@@ -615,6 +625,114 @@ pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u
     Ok((code, payload.to_string()))
 }
 
+/// How long a streamed reply may go quiet before it is given up on.
+/// Silence, not length: a model reasoning for ten minutes is working, and
+/// the providers that make it wait send keep-alive comments meanwhile. A
+/// connection with nothing at all on it for this long is dead.
+pub fn stream_idle_secs() -> u64 {
+    std::env::var("AGENT_STREAM_IDLE_SECS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(180).clamp(10, 3600)
+}
+
+/// Whether model replies are streamed. On unless `AGENT_STREAM=0`, for a
+/// gateway that mishandles `"stream":true`.
+pub fn streaming_on() -> bool {
+    !matches!(std::env::var("AGENT_STREAM").ok().as_deref().map(str::trim), Some("0" | "false" | "off" | "no"))
+}
+
+/// The most a streamed reply may hold. Well past any real completion; a
+/// connection that keeps sending past it is refused, not truncated.
+const MAX_REPLY: usize = 32 << 20;
+
+/// Like [`send_via_curl`], but the reply is streamed: `on` sees the text and
+/// the reasoning as they arrive (batched a few times a second), and the
+/// result is folded back into the shape a non-streamed reply has, so every
+/// check downstream reads it unchanged. The only time limit is on silence
+/// ([`stream_idle_secs`]) plus a generous ceiling for the whole reply.
+pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dyn FnMut(crate::sse::Kind, &str)) -> Result<(u16, String), String> {
+    use std::io::{BufRead, Write};
+    let key = crate::auth::resolve(base_url, api_key_env)
+        .ok_or_else(|| format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))?;
+    let url = format!("{base_url}/chat/completions");
+    let body = crate::sse::with_stream_flag(body);
+    let idle = stream_idle_secs().to_string();
+    let mut child = std::process::Command::new("curl")
+        // -N: hand each chunk over as it arrives instead of filling a buffer
+        // first. --speed-limit/--speed-time: fewer than 1 byte a second for
+        // `idle` seconds is a dead connection.
+        .args(["-sS", "-N", "--max-time", "1800", "--speed-limit", "1", "--speed-time", &idle, "-X", "POST", &url])
+        .args(["-H", "Content-Type: application/json"])
+        .args(["-H", "Accept: text/event-stream"])
+        .args(["-H", &format!("Authorization: Bearer {key}")])
+        .args(["--data-binary", "@-"])
+        .arg("-w")
+        .arg("\n%{http_code}")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl spawn failed: {e}"))?;
+    // curl reads all of `@-` before it sends anything, so the body is
+    // written and closed before the first byte of the reply is read. A
+    // BrokenPipe means curl died early; its reason is on stderr.
+    if let Some(mut sink) = child.stdin.take()
+        && let Err(e) = sink.write_all(body.as_bytes())
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("stdin: {e}"));
+    }
+    let mut fold = crate::sse::Fold::new();
+    let mut code = String::new();
+    let mut total = 0usize;
+    let mut oversized = false;
+    if let Some(out) = child.stdout.take() {
+        let mut out = std::io::BufReader::new(out);
+        let mut th = crate::sse::Throttle::new(on);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match out.read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => total += n,
+            }
+            if total > MAX_REPLY {
+                oversized = true;
+                let _ = child.kill();
+                break;
+            }
+            // `-w` puts the status after a newline and ends without one,
+            // so the one unterminated line is the status, never the body.
+            if buf.last() != Some(&b'\n') {
+                code = String::from_utf8_lossy(&buf).into_owned();
+                break;
+            }
+            fold.line(&String::from_utf8_lossy(&buf), &mut |k, t| th.push(k, t));
+            th.tick();
+        }
+        th.flush();
+    }
+    let res = child.wait_with_output().map_err(|e| format!("curl wait: {e}"))?;
+    if oversized {
+        return Err(format!("the reply passed {} MB and was refused", MAX_REPLY >> 20));
+    }
+    let stderr = String::from_utf8_lossy(&res.stderr).trim().to_string();
+    let code: u16 = code.trim().parse().unwrap_or(0);
+    // As in `send_via_curl`: 000 is no HTTP response at all, and the reason
+    // only exists on stderr. A stream that went quiet past the idle limit
+    // lands here too, as curl's "Operation too slow".
+    if code == 0 {
+        return Err(if stderr.is_empty() {
+            format!("curl produced no HTTP response ({})", res.status)
+        } else if stderr.contains("too slow") {
+            format!("the model sent nothing for {idle}s and was given up on (AGENT_STREAM_IDLE_SECS): {stderr}")
+        } else {
+            format!("curl transport failed: {stderr}")
+        });
+    }
+    Ok((code, fold.finish()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,26 +755,29 @@ mod tests {
     fn body_carries_model_effort_and_escaped_prompt() {
         let r = route(TaskKind::Code);
         let body = request_body(r, "sys", "say \"hi\"\nnewline");
-        assert!(body.contains("openai/gpt-5.6-sol"));
+        assert!(body.contains(r#""model":"openrouter/auto""#));
         assert!(body.contains("\\\"hi\\\""));
         assert!(body.contains("\\n"));
         let m = Mock { seen_url: Default::default(), seen_body: Default::default() };
         m.post(DEFAULT_BASE_URL, "AGENT_API_KEY", &body).unwrap();
         assert!(m.seen_url.borrow().contains("openrouter.ai"));
-        assert!(m.seen_body.borrow().contains("gpt-5.6-sol"));
+        assert!(m.seen_body.borrow().contains(DEFAULT_MODEL));
     }
 
     #[test]
-    fn the_reasoning_slot_resolves_to_the_flagship() {
+    fn every_slot_defaults_to_the_neutral_router() {
+        for m in crate::router::Model::ALL {
+            assert_eq!(model_id(m), DEFAULT_MODEL, "{m:?}");
+        }
         let r = route(TaskKind::VisionFallback);
-        assert!(request_body(r, "", "").contains("openai/gpt-6-astra"));
+        assert!(request_body(r, "", "").contains(DEFAULT_MODEL));
     }
 
     #[test]
     fn stream_body_flags_sse() {
         let b = stream_body(route(TaskKind::Routine), "s", "u");
         assert!(b.contains(r#""stream":true"#));
-        assert!(b.contains("gpt-5.6-terra"));
+        assert!(b.contains(DEFAULT_MODEL));
     }
 
     #[test]

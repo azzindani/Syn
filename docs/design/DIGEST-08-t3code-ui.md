@@ -348,7 +348,7 @@ Three details worth the copy:
 
 Items 1–4 are pure logic and testable with no renderer at all — they could be
 written in Rust in `core` and exposed over the existing event feed, which is
-where they belong given `docs/09`: labels describe *world tools*, and a label
+where they belong given `split-plan.md`: labels describe *world tools*, and a label
 table is documentation of the surface as much as it is presentation.
 
 ---

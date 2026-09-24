@@ -13,11 +13,13 @@
 // - write paths copy a .bak snapshot before save (mirrors core undo).
 // - late binding (dynamic) only: no PIAs, no NuGet, compiles anywhere.
 // - untrusted opens set AutomationSecurity=ForceDisable (3).
-// STATUS: compiles on .NET 8 and verified against live Excel on Windows 11
-// (read/write/error paths, attach-to-open-workbook, detach without closing
-// the user's app, no orphans). Word and PowerPoint paths are written but
-// NOT yet exercised live -- see docs/runbook-windows.md.
+// STATUS: compiles on .NET 8. Verified against live Office on Windows 11:
+// Excel read/write/error paths, attach-to-open-workbook, detach without
+// closing the user's app, no orphans; Word and PowerPoint through the
+// capability test's scripted run. scripts/live-office-peak.ps1 covers every
+// verb. The lessons behind this design: docs/troubleshooting.md.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using Microsoft.CSharp.RuntimeBinder;
@@ -27,15 +29,31 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Syn.Sidecar
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static string _pipe = "hand";
         private static string _app = "excel";
         private static volatile bool _stop;
         private static bool _trace;
+
+        /// <summary>How many clients may be connected at once: the console,
+        /// a few MCP clients, a terminal.</summary>
+        private const int MaxClients = 8;
+
+        /// <summary>One request line and the reply the STA thread gives it.</summary>
+        private sealed record Job(string Line)
+        {
+            public TaskCompletionSource<string> Reply { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        /// <summary>Requests from every connected client, in arrival order,
+        /// for the one thread that owns COM.</summary>
+        private static readonly BlockingCollection<Job> Jobs = new();
 
         [STAThread]
         private static int Main(string[] args)
@@ -58,6 +76,9 @@ namespace Syn.Sidecar
             {
                 e.Cancel = true;
                 _stop = true;
+                // Ends the STA thread's loop once the request in hand is
+                // answered; the listeners are background threads.
+                Jobs.CompleteAdding();
                 Console.WriteLine("stop requested: draining");
             };
             var sta = new Thread(Run) { IsBackground = true };
@@ -95,59 +116,90 @@ namespace Syn.Sidecar
                 var ppt = _app == "powerpoint";
                 Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
                 Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
-                // Byte mode, not Message: the client is an ordinary
-                // StreamReader/StreamWriter pair, and a message-mode server
-                // framed against a byte-mode client never completes a read.
                 // Serve clients one after another. The first version served
                 // exactly one and exited on its disconnect, so the sidecar
                 // died the moment anything reconnected -- which is precisely
                 // when it should be settling down to wait for the next one.
                 // The UIA sidecar learned this already; this one had not.
-                while (!_stop)
+                //
+                // And several at once. One client at a time meant a desktop
+                // MCP client that held Excel all day locked the Syn console
+                // (and every other client) out of it: the second connection
+                // waited for a pipe instance that never came free. Now up to
+                // MaxClients listeners each own a pipe instance and hand each
+                // request line to this thread, which is still the only one
+                // that touches COM. Requests interleave a line at a time,
+                // exactly as two people clicking in one Excel would.
+                for (var i = 0; i < MaxClients; i++)
+                    new Thread(Listen) { IsBackground = true, Name = $"pipe-{i}" }.Start();
+                foreach (var job in Jobs.GetConsumingEnumerable())
                 {
-                    NamedPipeServerStream? server = null;
-                    try
-                    {
-                        server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
-                            PipeTransmissionMode.Byte, PipeOptions.None);
-                        Trace($"pipe {_pipe}: waiting for client");
-                        server.WaitForConnection();
-                        Trace("pipe: client connected");
-                        // UTF8Encoding(false): the default Encoding.UTF8 carries
-                        // a byte-order-mark preamble, and StreamWriter emits it
-                        // on the first flush -- three stray bytes in front of the
-                        // first JSON reply, which every client then fails to parse.
-                        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-                        using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
-                        using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
-                        Trace("pipe: reader and writer ready");
-                        while (!_stop)
-                        {
-                            var line = reader.ReadLine();
-                            if (line == null) { Trace("pipe: EOF, client gone"); break; }
-                            Trace($"pipe: got {line.Length} chars");
-                            writer.WriteLine(Dispatch(app, line));
-                            Trace("pipe: reply sent");
-                        }
-                    }
-                    catch (IOException e)
-                    {
-                        // A client that vanishes mid-write breaks the pipe. That
-                        // ends the connection, not the sidecar.
-                        Trace($"pipe: {e.Message}");
-                    }
-                    finally
-                    {
-                        // Disposing over a dead pipe throws from the final
-                        // flush, and an escape here kills the process for the
-                        // one thing it is supposed to shrug off.
-                        try { server?.Dispose(); } catch (IOException) { }
-                    }
+                    string reply;
+                    try { reply = Dispatch(app, job.Line); }
+                    catch (Exception e) { reply = Fail($"{e.GetType().Name}: {e.Message}"); }
+                    job.Reply.TrySetResult(reply);
                 }
             }
             finally
             {
+                // The scratch workbook and the deck copies are this helper's
+                // own; the user's documents are left exactly as they are.
+                try { DropAllUndo(); } catch { }
                 try { Marshal.FinalReleaseComObject(app); } catch { /* detach only, never kill user app */ }
+            }
+        }
+
+        /// <summary>One pipe instance: accept a client, pass each line it
+        /// sends to the STA thread, write back the reply, repeat.</summary>
+        private static void Listen()
+        {
+            // UTF8Encoding(false): the default Encoding.UTF8 carries a
+            // byte-order-mark preamble, and StreamWriter emits it on the first
+            // flush -- three stray bytes in front of the first JSON reply,
+            // which every client then fails to parse.
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            while (!_stop)
+            {
+                NamedPipeServerStream? server = null;
+                try
+                {
+                    // Byte mode, not Message: the client is an ordinary
+                    // StreamReader/StreamWriter pair, and a message-mode
+                    // server framed against a byte-mode client never
+                    // completes a read. Every instance must name the same
+                    // MaxClients, or the second one fails to create.
+                    server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, MaxClients,
+                        PipeTransmissionMode.Byte, PipeOptions.None);
+                    Trace($"pipe {_pipe}: waiting for client");
+                    server.WaitForConnection();
+                    Trace("pipe: client connected");
+                    using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
+                    using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
+                    while (!_stop)
+                    {
+                        var line = reader.ReadLine();
+                        if (line == null) { Trace("pipe: EOF, client gone"); break; }
+                        Trace($"pipe: got {line.Length} chars");
+                        var job = new Job(line);
+                        try { Jobs.Add(job); }
+                        catch (InvalidOperationException) { break; } // stopping
+                        writer.WriteLine(job.Reply.Task.Result);
+                        Trace("pipe: reply sent");
+                    }
+                }
+                catch (IOException e)
+                {
+                    // A client that vanishes mid-write breaks the pipe. That
+                    // ends the connection, not the sidecar.
+                    Trace($"pipe: {e.Message}");
+                }
+                finally
+                {
+                    // Disposing over a dead pipe throws from the final
+                    // flush, and an escape here kills the process for the
+                    // one thing it is supposed to shrug off.
+                    try { server?.Dispose(); } catch (IOException) { }
+                }
             }
         }
 
@@ -265,13 +317,18 @@ namespace Syn.Sidecar
                 {
                     return OpenDocument(app, JsonField(JsonField(line, "args"), "path"));
                 }
-                return _app switch
+                // Undo answers from this helper's own record of what it
+                // changed (Undo.cs); every other call that changes a
+                // document is recorded on its way through.
+                if (method == "undo") return UndoLast((object)app, handle);
+                object appO = app;
+                return WithUndo(appO, method, handle, line, selector, () => _app switch
                 {
-                    "word" => WordDispatch(app, method, handle, line, selector),
-                    "excel" => ExcelDispatch(app, method, handle, line, selector),
-                    "powerpoint" => PptDispatch(app, method, handle, line, selector),
+                    "word" => WordDispatch(appO, method, handle, line, selector),
+                    "excel" => ExcelDispatch(appO, method, handle, line, selector),
+                    "powerpoint" => PptDispatch(appO, method, handle, line, selector),
                     _ => Fail("unknown app"),
-                };
+                });
             }
             catch (Exception e)
             {
@@ -345,10 +402,7 @@ namespace Syn.Sidecar
                 var args = JsonField(line, "args");
                 return method switch
                 {
-                    "read" when selector is "body" or "" =>
-                        Ok($"paras={doc.Paragraphs.Count}"),
-                    "read" when selector.StartsWith("p") && int.TryParse(selector[1..], out var n) =>
-                        Ok($"para {n}: {Trunc((string)doc.Paragraphs[n + 1].Range.Text)}"),
+                    "read" => Ok(WordRead((object)doc, selector)),
                     "write" when selector.StartsWith("p") && int.TryParse(selector[1..], out var m) =>
                         WriteWordPara(doc, handle, m, JsonField(line, "payload")),
                     "export" => ExportWord(doc, handle, JsonField(line, "format"), JsonField(line, "path")),
@@ -356,9 +410,16 @@ namespace Syn.Sidecar
                     // they are the long field, and `args` is for the
                     // short ones that describe them.
                     "insertParagraph" => InsertParagraph(doc, handle, JsonField(line, "payload"),
-                                                         JsonField(args, "name")),
+                                                         JsonField(args, "name"), JsonField(args, "at")),
                     "insertTable" => InsertTable(doc, handle, JsonField(line, "payload"),
-                                                 JsonField(args, "name")),
+                                                 JsonField(args, "name"), JsonField(args, "at")),
+                    "delete" => WordDelete(doc, handle, selector),
+                    "find" => WordFind(doc, JsonField(args, "text")),
+                    "replace" => WordReplace(doc, handle, JsonField(args, "text"), JsonField(args, "with")),
+                    "comment" => WordComment(doc, handle, selector, JsonField(line, "payload")),
+                    "link" => WordLink(doc, handle, selector, JsonField(args, "text"), JsonField(args, "title")),
+                    "header" => WordHeader(doc, handle, JsonField(args, "name"), JsonField(line, "payload")),
+                    "pageSetup" => WordPageSetup(doc, handle, JsonField(args, "style")),
                     "pageBreak" => PageBreak(doc, handle, JsonField(args, "name")),
                     "contents" => Contents(doc, handle, JsonField(args, "title")),
                     "pageNumbers" => PageNumbers(doc, handle, JsonField(args, "text")),
@@ -367,6 +428,58 @@ namespace Syn.Sidecar
                     _ => throw new InvalidOperationException($"unsupported word.{method} sel={selector}"),
                 };
             });
+
+        /// <summary>Paragraphs a read may return before it stops and says
+        /// where to carry on.</summary>
+        private const int ReadParaCap = 60, ReadCharCap = 6000;
+
+        // `body` used to answer with a count and nothing else, and a
+        // paragraph at a time was the only way to see the words: a memo of
+        // thirty paragraphs was thirty calls. Now body (or p3:p9) is the
+        // text itself, numbered the way every other Word selector counts,
+        // up to a cap past which it names the range to read next.
+        private static string WordRead(object docO, string selector)
+        {
+            dynamic doc = docO;
+            int total = doc.Paragraphs.Count;
+            var sel = selector.Trim();
+            int from = 0, to = total - 1;
+            if (sel is not ("" or "body"))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(sel, @"^p(\d+)(?::p?(\d+))?$");
+                if (!m.Success)
+                    throw new InvalidOperationException($"word selector {selector}: use body, p3 for one paragraph or p3:p9 for several; p0 is the first");
+                from = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                to = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) : from;
+                if (from > to) (from, to) = (to, from);
+                if (from >= total)
+                    throw new InvalidOperationException($"p{from} does not exist: the document has {total} paragraph(s), p0 to p{total - 1}");
+                to = Math.Min(to, total - 1);
+                if (from == to)
+                    return $"para {from}: {Trunc((string)doc.Paragraphs[from + 1].Range.Text, 4000)}";
+            }
+            var sb = new StringBuilder($"paras={total}");
+            var chars = 0;
+            for (var i = from; i <= to; i++)
+            {
+                if (i - from >= ReadParaCap || chars >= ReadCharCap)
+                {
+                    sb.Append($" | ... p{i} to p{to} not shown: read p{i}:p{Math.Min(to, i + ReadParaCap - 1)} next");
+                    break;
+                }
+                dynamic p = doc.Paragraphs[i + 1];
+                var text = ((string)p.Range.Text).TrimEnd('\r', '\a', '\n');
+                string style = "";
+                try { style = (string)p.Style.NameLocal; } catch { }
+                var tag = style is "" or "Normal" ? "" : $" [{style}]";
+                // Whole paragraphs where they fit: 120 characters cut most
+                // of a real paragraph off, which is not reading it.
+                var shown = Trunc(text, 1500);
+                chars += shown.Length;
+                sb.Append($" | p{i}{tag}: {shown}");
+            }
+            return sb.ToString();
+        }
 
         private static dynamic? FindWordDoc(dynamic app, string handle)
         {
@@ -413,6 +526,11 @@ namespace Syn.Sidecar
         private static string ApplyStyle(dynamic target, string style)
         {
             if (string.IsNullOrWhiteSpace(style)) return "";
+            if (BuiltinStyles.TryGetValue(style.Trim(), out var builtin))
+            {
+                try { target.Style = builtin; return $" [{style}]"; }
+                catch { /* fall through to the name */ }
+            }
             try { target.Style = style; return $" [{style}]"; }
             catch { return $" [style {style} is not in this document, left as-is]"; }
         }
@@ -431,23 +549,56 @@ namespace Syn.Sidecar
             return p;
         }
 
-        private static string InsertParagraph(dynamic doc, string handle, string text, string style)
+        private static string InsertParagraph(dynamic doc, string handle, string text, string style, string at)
         {
             Snapshot(handle);
+            if (!string.IsNullOrWhiteSpace(at))
+            {
+                // Before paragraph `at`, which the new one becomes. It would
+                // otherwise inherit that paragraph's style -- a heading, often
+                // -- so an unstyled insert is set to Normal on purpose.
+                var n = ParaBefore((object)doc, at, "insertParagraph");
+                dynamic p0 = ParagraphBefore(doc, n);
+                if (!string.IsNullOrEmpty(text)) p0.Range.InsertBefore(text);
+                var note0 = ApplyStyle(p0, string.IsNullOrWhiteSpace(style) ? "Normal" : style);
+                doc.Saved = false;
+                return Ok($"paragraph inserted as p{n}, {(text ?? "").Length} chars{note0}; the ones from p{n} on moved down one");
+            }
             dynamic p = AppendParagraph(doc, text ?? "");
             var note = ApplyStyle(p, style);
             doc.Saved = false;
             return Ok($"paragraph {doc.Paragraphs.Count} added, {(text ?? "").Length} chars{note}");
         }
 
-        private static string InsertTable(dynamic doc, string handle, string grid, string style)
+        /// The zero-based paragraph index `at` names, for inserting before it.
+        private static int ParaBefore(object docObj, string at, string verb)
+        {
+            dynamic doc = docObj;
+            var t = at.Trim();
+            int count = doc.Paragraphs.Count;
+            if (!t.StartsWith("p", StringComparison.OrdinalIgnoreCase) || !int.TryParse(t[1..], out var n) || n < 0 || n >= count)
+                throw new InvalidOperationException($"{verb}: at is a paragraph from p0 to p{count - 1}, not {at}");
+            return n;
+        }
+
+        /// A new, empty paragraph in front of paragraph n, which it becomes.
+        private static dynamic ParagraphBefore(dynamic doc, int n)
+        {
+            doc.Paragraphs[n + 1].Range.InsertParagraphBefore();
+            return doc.Paragraphs[n + 1];
+        }
+
+        private static string InsertTable(dynamic doc, string handle, string grid, string style, string at)
         {
             Snapshot(handle);
             var rows = ParseGrid(grid);
             if (rows.Length == 0) throw new InvalidOperationException("insertTable needs rows: cells by |, rows by ;");
             int nc = 0;
             foreach (var r in rows) nc = Math.Max(nc, r.Length);
-            dynamic t = doc.Tables.Add(AppendParagraph(doc, "").Range, rows.Length, nc);
+            dynamic anchor = string.IsNullOrWhiteSpace(at)
+                ? AppendParagraph(doc, "")
+                : ParagraphBefore(doc, ParaBefore((object)doc, at, "insertTable"));
+            dynamic t = doc.Tables.Add(anchor.Range, rows.Length, nc);
             for (int r = 0; r < rows.Length; r++)
                 for (int c = 0; c < nc; c++)
                     t.Cell(r + 1, c + 1).Range.Text = c < rows[r].Length ? rows[r][c] : "";
@@ -611,9 +762,31 @@ namespace Syn.Sidecar
                             _ => throw new InvalidOperationException($"align does not know {val}"),
                         };
                         break;
+                    case "underline": range.Font.Underline = on ? 1 : 0; break; // wdUnderlineSingle
+                    case "color": range.Font.Color = OleColor(val); break;
+                    // WdColorIndex: the highlighter's own colours, by name.
+                    case "highlight":
+                        range.HighlightColorIndex = val.ToLowerInvariant() switch
+                        {
+                            "yellow" => 7, "green" => 4, "cyan" or "turquoise" => 3, "pink" => 5,
+                            "red" => 6, "blue" => 2, "gray" or "grey" => 16, "none" or "0" => 0,
+                            _ => throw new InvalidOperationException(
+                                $"highlight does not know {val}: yellow, green, cyan, pink, red, blue, gray or none"),
+                        };
+                        break;
+                    case "spacebefore": range.ParagraphFormat.SpaceBefore = double.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "spaceafter": range.ParagraphFormat.SpaceAfter = double.Parse(val, CultureInfo.InvariantCulture); break;
+                    // wdLineSpaceMultiple 5, in lines of 12 points: 1.5 is one
+                    // and a half lines whatever the font.
+                    case "linespacing":
+                        range.ParagraphFormat.LineSpacingRule = 5;
+                        range.ParagraphFormat.LineSpacing = 12.0 * double.Parse(val, CultureInfo.InvariantCulture);
+                        break;
+                    case "indent": range.ParagraphFormat.LeftIndent = double.Parse(val, CultureInfo.InvariantCulture); break;
                     default:
                         throw new InvalidOperationException(
-                            $"word format does not know {key}: it knows style, bold, italic, size, font, align");
+                            $"word format does not know {key}: it knows style, bold, italic, underline, size, font, color, "
+                            + "highlight, align, spaceBefore, spaceAfter, lineSpacing, indent");
                 }
                 did.Add(key);
             }
@@ -621,13 +794,65 @@ namespace Syn.Sidecar
             return Ok($"formatted {selector}: {string.Join(", ", did)}");
         }
 
+        // A copy, never SaveAs2: that moves the open document to the export's
+        // path, so the user's own file stops being the one on screen and the
+        // handle stops finding it.
         private static string ExportWord(dynamic doc, string handle, string format, string path)
         {
-            Snapshot(handle);
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(WordSummary((object)doc));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
+            var full = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
             RefreshFields(doc);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
-            doc.SaveAs2(path, format.ToLowerInvariant() == "pdf" ? 17 : 16); // wdFormatPDF/docx
-            return Ok($"exported {path}");
+            switch (f)
+            {
+                case "pdf":
+                    doc.ExportAsFixedFormat(full, 17); // wdExportFormatPDF
+                    return Ok($"exported {full}");
+                case "docx":
+                {
+                    // Word has no SaveCopyAs. A document with nothing unsaved
+                    // is its file, so the file is copied as it is; otherwise
+                    // the whole document (styles, sections, headers) goes into
+                    // a hidden new one this helper makes, saves and closes.
+                    string on = "";
+                    try { on = doc.FullName; } catch { }
+                    if ((bool)doc.Saved && File.Exists(on) && Path.GetExtension(on).Equals(".docx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Copy(on, full, overwrite: true);
+                        return Ok($"exported {full}");
+                    }
+                    dynamic app = doc.Application;
+                    dynamic copy = app.Documents.Add(Visible: false);
+                    try
+                    {
+                        copy.Content.InsertXML((string)doc.WordOpenXML);
+                        copy.SaveAs2(full, 16); // wdFormatDocumentDefault
+                    }
+                    finally { try { copy.Close(0); } catch { } }
+                    return Ok($"exported {full}");
+                }
+                default:
+                    throw new InvalidOperationException($"Word exports docx, pdf or summary, not {format}");
+            }
+        }
+
+        private static string WordSummary(object docO)
+        {
+            dynamic doc = docO;
+            int n = doc.Paragraphs.Count;
+            var heads = new List<string>();
+            for (var i = 1; i <= n && heads.Count < 30; i++)
+            {
+                dynamic p = doc.Paragraphs[i];
+                int level = 10;
+                try { level = (int)p.OutlineLevel; } catch { }
+                if (level <= 3) heads.Add($"p{i - 1} {Trunc(((string)p.Range.Text).Trim())}");
+            }
+            int tables = 0;
+            try { tables = doc.Tables.Count; } catch { }
+            return $"{(string)doc.Name}: paras={n}, tables={tables}" + (heads.Count > 0 ? "; headings: " + string.Join(" | ", heads) : "");
         }
 
         /// Calls VBA has no business making on this project's behalf.
@@ -780,7 +1005,7 @@ namespace Syn.Sidecar
                 {
                     "read" => Ok(ReadRange(wb, selector)),
                     "write" => WriteRange(wb, handle, selector, JsonField(line, "payload")),
-                    "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path"), JsonField(line, "sheet")),
                     "format" => FormatRange(wb, handle, selector, JsonField(line, "payload")),
                     "macro" => Macro(wb, JsonField(args, "action"), JsonField(args, "name"),
                                      JsonField(args, "title"), JsonField(line, "payload")),
@@ -795,6 +1020,22 @@ namespace Syn.Sidecar
                     "conditional" => Conditional(wb, handle, selector, JsonField(line, "payload")),
                     "slicer" => Slicer(wb, handle, JsonField(args, "name"), JsonField(args, "rows"),
                                        JsonField(args, "at")),
+                    "insert" => ExcelInsert(wb, handle, selector),
+                    "delete" => ExcelDelete(wb, handle, selector),
+                    "sort" => ExcelSort(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
+                    "filter" => ExcelFilter(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
+                    "dedupe" => ExcelDedupe(wb, handle, selector, JsonField(args, "name")),
+                    "copy" => ExcelCopy(wb, handle, JsonField(args, "source"), JsonField(args, "at")),
+                    "validate" => ExcelValidate(wb, handle, selector, JsonField(args, "rule")),
+                    "sheet" => ExcelSheet(wb, handle, selector, JsonField(args, "action"), JsonField(args, "name")),
+                    "comment" => ExcelComment(wb, handle, selector, JsonField(line, "payload")),
+                    "link" => ExcelLink(wb, handle, selector, JsonField(args, "text"), JsonField(args, "title")),
+                    "pageSetup" => ExcelPageSetup(wb, handle, selector, JsonField(args, "style")),
+                    "header" => ExcelHeader(wb, handle, selector, JsonField(args, "name"), JsonField(line, "payload")),
+                    "pageNumbers" => ExcelPageNumbers(wb, handle, selector, JsonField(args, "text")),
+                    "picture" => SheetPicture(wb, handle, selector, JsonField(args, "text")),
+                    "find" => ExcelFind(wb, selector, JsonField(args, "text")),
+                    "replace" => ExcelReplace(wb, handle, selector, JsonField(args, "text"), JsonField(args, "with")),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
             });
@@ -812,6 +1053,9 @@ namespace Syn.Sidecar
                 dynamic w = app.Workbooks[i];
                 string name = w.Name;
                 Trace($"FindWorkbook: [{i}] {name}");
+                // The hidden workbook undo keeps its copies in is nobody's
+                // document, whatever a handle happens to contain.
+                if (IsScratch(name)) continue;
                 if (handle.Contains(name)) return w;
             }
             return null;
@@ -1019,9 +1263,34 @@ namespace Syn.Sidecar
                         ws.Cells.EntireColumn.AutoFit();
                         applied.Add("autofitSheet");
                         break;
+                    // xlUnderlineStyleSingle 2, xlUnderlineStyleNone -4142
+                    case "underline": rng.Font.Underline = Truthy(v) ? 2 : -4142; applied.Add("underline"); break;
+                    case "strike": rng.Font.Strikethrough = Truthy(v); applied.Add("strike"); break;
+                    case "height": rng.RowHeight = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("height"); break;
+                    case "indent": rng.IndentLevel = int.Parse(v, CultureInfo.InvariantCulture); applied.Add("indent"); break;
+                    case "rotate": rng.Orientation = int.Parse(v, CultureInfo.InvariantCulture); applied.Add("rotate"); break;
+                    // xlTop -4160, xlCenter -4108, xlBottom -4107
+                    case "valign":
+                        rng.VerticalAlignment = v.ToLowerInvariant() switch
+                        {
+                            "top" => -4160,
+                            "center" or "centre" or "middle" => -4108,
+                            "bottom" => -4107,
+                            _ => throw new InvalidOperationException($"valign does not know {v}: top, center or bottom"),
+                        };
+                        applied.Add("valign");
+                        break;
+                    // Rows or columns, by the shape of the selector: 5:7 hides
+                    // rows, C:E hides columns.
+                    case "hidden":
+                        if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?\d+(:\$?\d+)?$")) rng.EntireRow.Hidden = Truthy(v);
+                        else if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?[A-Za-z]{1,3}(:\$?[A-Za-z]{1,3})?$")) rng.EntireColumn.Hidden = Truthy(v);
+                        else throw new InvalidOperationException("hidden hides whole rows (Sheet!5:7) or columns (Sheet!C:E)");
+                        applied.Add("hidden");
+                        break;
                     default: throw new InvalidOperationException(
-                        $"format does not know {k}: it takes bold, italic, size, numberFormat, width, "
-                        + "autofit, autofitSheet, wrap, font, color, fill, merge, border, align, freeze");
+                        $"format does not know {k}: it takes bold, italic, underline, strike, size, numberFormat, width, height, "
+                        + "autofit, autofitSheet, wrap, font, color, fill, merge, border, align, valign, indent, rotate, hidden, freeze");
                 }
             }
             if (applied.Count == 0) throw new InvalidOperationException("format was given no style: try bold=1;numberFormat=#,##0");
@@ -1226,14 +1495,24 @@ namespace Syn.Sidecar
             if (string.IsNullOrEmpty(srcAddr)) throw new InvalidOperationException("chart needs a source like Summary!A1:B12");
             var (dstSheet, dstAddr) = SplitRange(at);
             if (string.IsNullOrEmpty(dstAddr)) throw new InvalidOperationException("chart needs a destination like Dashboard!A1");
-            // xlLine = 4, xlColumnClustered = 51, xlBarClustered = 57, xlPie = 5
+            // xlLine 4, xlColumnClustered 51, xlBarClustered 57, xlPie 5,
+            // xlXYScatter -4169, xlArea 1, xlDoughnut -4120, xlColumnStacked 52,
+            // xlBarStacked 58, xlLineMarkers 65, xlRadar -4151
             int type = kind.ToLowerInvariant() switch
             {
                 "line" => 4,
                 "column" => 51,
                 "bar" => 57,
                 "pie" => 5,
-                _ => throw new InvalidOperationException($"chart does not know {kind}: it draws line, bar, column or pie"),
+                "scatter" => -4169,
+                "area" => 1,
+                "doughnut" => -4120,
+                "stackedcolumn" => 52,
+                "stackedbar" => 58,
+                "linemarkers" => 65,
+                "radar" => -4151,
+                _ => throw new InvalidOperationException(
+                    $"chart does not know {kind}: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar"),
             };
             dynamic sws = Sheet(wb, srcSheet);
             dynamic dws = Sheet(wb, dstSheet);
@@ -1303,22 +1582,89 @@ namespace Syn.Sidecar
             }
         }
 
-        private static string ExportWb(dynamic wb, string handle, string format, string path)
+        // Every export writes a COPY. Workbook.SaveAs was used for xlsx, and
+        // SaveAs moves the open workbook to the new path: the user's own
+        // file stopped being the one on screen, and every later call on the
+        // handle failed with "workbook not open", because its name had
+        // changed to the export's.
+        private static string ExportWb(dynamic wb, string handle, string format, string path, string sheet)
         {
-            Snapshot(handle);
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(WorkbookSummary((object)wb));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
             var full = Path.GetFullPath(path);
             Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
-            switch (format.ToLowerInvariant())
+            switch (f)
             {
                 case "pdf":
                     wb.ExportAsFixedFormat(0, full);
                     return Ok($"exported {full}");
                 case "png":
                     return ExportCharts(wb, full);
-                default:
-                    wb.SaveAs(full, 51); // xlOpenXMLWorkbook
+                case "csv":
+                {
+                    // One sheet: CSV has no others. Copy() with no target
+                    // makes a new workbook holding just that sheet; this
+                    // helper made it, so this helper closes it.
+                    dynamic ws = sheet == "" ? wb.Worksheets[1] : Sheet(wb, SplitRange(sheet).sheet);
+                    dynamic app = wb.Application;
+                    ws.Copy();
+                    dynamic tmp = app.ActiveWorkbook;
+                    bool alerts = app.DisplayAlerts;
+                    app.DisplayAlerts = false;
+                    try { tmp.SaveAs(full, 6); } // xlCSV
+                    finally
+                    {
+                        try { tmp.Close(false); } catch { }
+                        app.DisplayAlerts = alerts;
+                    }
+                    return Ok($"exported sheet {(string)ws.Name} to {full}");
+                }
+                case "xlsx":
+                {
+                    if ((int)wb.FileFormat == 51)
+                    {
+                        wb.SaveCopyAs(full);
+                        return Ok($"exported {full}");
+                    }
+                    // SaveCopyAs keeps the workbook's own format (xlsm, xls),
+                    // which a .xlsx name would misdescribe. Copy, open the
+                    // copy, save that as xlsx, close it: all three are ours.
+                    var tmpPath = Path.Combine(Path.GetTempPath(), $"syn-{Guid.NewGuid():N}{Path.GetExtension((string)wb.Name)}");
+                    wb.SaveCopyAs(tmpPath);
+                    dynamic app = wb.Application;
+                    bool alerts = app.DisplayAlerts;
+                    app.DisplayAlerts = false;
+                    dynamic tmp = app.Workbooks.Open(tmpPath);
+                    try { tmp.SaveAs(full, 51); }
+                    finally
+                    {
+                        try { tmp.Close(false); } catch { }
+                        app.DisplayAlerts = alerts;
+                        try { File.Delete(tmpPath); } catch { }
+                    }
                     return Ok($"exported {full}");
+                }
+                default:
+                    throw new InvalidOperationException($"Excel exports xlsx, csv, pdf, png (its charts) or summary, not {format}");
             }
+        }
+
+        private static string WorkbookSummary(object wbO)
+        {
+            dynamic wb = wbO;
+            var parts = new List<string>();
+            int n = wb.Worksheets.Count;
+            for (var i = 1; i <= n; i++)
+            {
+                dynamic ws = wb.Worksheets[i];
+                string used = "empty";
+                try { used = ws.UsedRange.Address(false, false); } catch { }
+                int charts = 0;
+                try { charts = ws.ChartObjects().Count; } catch { }
+                parts.Add($"{SheetRef((string)ws.Name)} {used}" + (charts > 0 ? $" ({charts} chart(s))" : "") + ((int)ws.Visible != -1 ? " (hidden)" : ""));
+            }
+            return $"{(string)wb.Name}: {n} sheet(s): {string.Join("; ", parts)}";
         }
 
         // A chart only becomes a picture a report can carry once it is a file
@@ -1350,10 +1696,19 @@ namespace Syn.Sidecar
             return Ok($"exported {made.Count} chart(s) to {dir}: {string.Join(", ", made)}");
         }
 
+        // A sheet name with a space is written the way Excel writes it,
+        // 'Q3 sales'!A1, and the MCP guidance tells models to write it so.
+        // The quotes are syntax, not part of the name: left on, the lookup
+        // asked for a sheet called 'Q3 sales' with the quotes and found none.
+        // Found by the LibreOffice helper's live test (sidecar-lo), which
+        // handles it the same way; a doubled quote inside is one quote.
         private static (string sheet, string addr) SplitRange(string selector)
         {
             var i = selector.IndexOf('!');
-            return i < 0 ? (selector, "") : (selector[..i], selector[(i + 1)..]);
+            var (sheet, addr) = i < 0 ? (selector, "") : (selector[..i], selector[(i + 1)..]);
+            if (sheet.Length >= 2 && sheet[0] == '\'' && sheet[^1] == '\'')
+                sheet = sheet[1..^1].Replace("''", "'");
+            return (sheet, addr);
         }
 
         // ---- PowerPoint ----
@@ -1377,6 +1732,15 @@ namespace Syn.Sidecar
                     "pageNumbers" => SlideNumbers(pres, handle, JsonField(args, "text")),
                     "format" => FormatSlide(pres, handle, selector, JsonField(line, "payload")),
                     "export" => ExportPres(pres, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    "delete" => SlideDelete(pres, handle, selector),
+                    "duplicateSlide" => SlideDuplicate(pres, handle, selector),
+                    "moveSlide" => SlideMove(pres, handle, selector, JsonField(args, "at")),
+                    "textBox" => SlideTextBox(pres, handle, selector, JsonField(args, "name"),
+                                              JsonField(line, "payload"), JsonField(args, "style")),
+                    "theme" => DeckTheme(pres, handle, JsonField(args, "text")),
+                    "pageSetup" => SlidePageSetup(pres, handle, JsonField(args, "style")),
+                    "find" => DeckFind(pres, JsonField(args, "text")),
+                    "replace" => DeckReplace(pres, handle, JsonField(args, "text"), JsonField(args, "with")),
                     _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
                 };
             });
@@ -1516,42 +1880,74 @@ namespace Syn.Sidecar
                     // make somewhere rather than dropping the content.
                     body = slide.Shapes.AddTextbox(1, 60.0, 140.0, 600.0, 320.0);
                 }
-                // A leading ">" marks a sub-bullet, one per level. Leading
-                // spaces would be the obvious marker, but the grid splitter
-                // trims every cell -- correctly, for a spreadsheet -- so they
-                // never survive the trip.
-                var text = new StringBuilder();
-                var levels = new List<int>();
-                foreach (var b in rows[0])
-                {
-                    var depth = 0;
-                    var body2 = b;
-                    while (body2.StartsWith('>'))
-                    {
-                        depth++;
-                        body2 = body2[1..].TrimStart();
-                    }
-                    if (text.Length > 0) text.Append(CrChar);
-                    text.Append(body2);
-                    levels.Add(Math.Min(depth + 1, 5));
-                    added++;
-                }
-                body.TextFrame.TextRange.Text = text.ToString();
-                for (var i = 0; i < levels.Count; i++)
-                {
-                    if (levels[i] == 1) continue;
-                    // Paragraphs(start, length): without the length it runs to
-                    // the end of the range and indents everything after it too.
-                    try { body.TextFrame.TextRange.Paragraphs(i + 1, 1).IndentLevel = levels[i]; }
-                    catch { }
-                }
+                added = FillBullets(body, rows[0]);
             }
             return Ok($"slide {pres.Slides.Count} added, layout {layout}, {added} bullet(s)");
+        }
+
+        /// Bullets into a text shape, replacing what it held. Cells joined by
+        /// "|"; a leading ">" per level marks a sub-bullet. Leading spaces
+        /// would be the obvious marker, but the grid splitter trims every cell
+        /// -- correctly, for a spreadsheet -- so they never survive the trip.
+        private static int FillBullets(dynamic body, string[] bullets)
+        {
+            var text = new StringBuilder();
+            var levels = new List<int>();
+            foreach (var b in bullets)
+            {
+                var depth = 0;
+                var body2 = b.Trim();
+                while (body2.StartsWith('>'))
+                {
+                    depth++;
+                    body2 = body2[1..].TrimStart();
+                }
+                if (text.Length > 0) text.Append(CrChar);
+                text.Append(body2);
+                levels.Add(Math.Min(depth + 1, 5));
+            }
+            body.TextFrame.TextRange.Text = text.ToString();
+            for (var i = 0; i < levels.Count; i++)
+            {
+                if (levels[i] == 1) continue;
+                // Paragraphs(start, length): without the length it runs to
+                // the end of the range and indents everything after it too.
+                try { body.TextFrame.TextRange.Paragraphs(i + 1, 1).IndentLevel = levels[i]; }
+                catch { }
+            }
+            return levels.Count;
+        }
+
+        /// A slide's body: the first placeholder that is not the title and
+        /// takes text.
+        private static dynamic BodyOf(object slideObj, string selector)
+        {
+            dynamic slide = slideObj;
+            int np = slide.Shapes.Placeholders.Count;
+            for (var i = 1; i <= np; i++)
+            {
+                dynamic ph = slide.Shapes.Placeholders[i];
+                int t = ph.PlaceholderFormat.Type;
+                if (t == 1 || t == 3) continue; // ppPlaceholderTitle, CenterTitle
+                if ((int)ph.HasTextFrame == 0) continue;
+                return ph;
+            }
+            throw new InvalidOperationException($"{selector}: this slide's layout has no body; add text with textBox instead");
         }
 
         private static string WriteSlide(dynamic pres, string handle, string selector, string text)
         {
             Snapshot(handle);
+            if (selector.Trim().EndsWith(".body", StringComparison.OrdinalIgnoreCase))
+            {
+                // The body, as bullets: cells of the one row are bullets, and
+                // a leading > makes a sub-bullet, exactly as createSlide takes
+                // them. Replaces what the body held.
+                dynamic s0 = SlideOf((object)pres, selector.Trim()[..^5]).slide;
+                dynamic body = BodyOf((object)s0, selector);
+                var n = FillBullets(body, ParseGrid(text ?? "").SelectMany(r => r).ToArray());
+                return Ok($"body of {selector.Trim()[..^5]} written, {n} bullet(s)");
+            }
             var found = SlideOf((object)pres, selector);
             dynamic slide = found.slide;
             var notes = found.notes;
@@ -1615,10 +2011,11 @@ namespace Syn.Sidecar
         {
             Snapshot(handle);
             dynamic hf = pres.SlideMaster.HeadersFooters;
-            hf.SlideNumber.Visible = true;
+            // MsoTriState: msoTrue is -1, not a boolean (see CLAUDE.md).
+            hf.SlideNumber.Visible = -1;
             if (!string.IsNullOrWhiteSpace(text))
             {
-                hf.Footer.Visible = true;
+                hf.Footer.Visible = -1;
                 hf.Footer.Text = text;
             }
             // The master governs new slides; the ones already placed each
@@ -1630,8 +2027,8 @@ namespace Syn.Sidecar
                 try
                 {
                     dynamic sf = pres.Slides[i].HeadersFooters;
-                    sf.SlideNumber.Visible = true;
-                    if (!string.IsNullOrWhiteSpace(text)) { sf.Footer.Visible = true; sf.Footer.Text = text; }
+                    sf.SlideNumber.Visible = -1;
+                    if (!string.IsNullOrWhiteSpace(text)) { sf.Footer.Visible = -1; sf.Footer.Text = text; }
                     done++;
                 }
                 catch { }
@@ -1642,8 +2039,12 @@ namespace Syn.Sidecar
         private static string FormatSlide(dynamic pres, string handle, string selector, string styles)
         {
             Snapshot(handle);
-            dynamic slide = SlideOf((object)pres, selector).slide;
-            dynamic range = slide.Shapes.Title.TextFrame.TextRange;
+            // "s3" is the title, "s3.body" the body: the two things on a slide
+            // a model means when it says "make that bigger".
+            var isBody = selector.Trim().EndsWith(".body", StringComparison.OrdinalIgnoreCase);
+            var slideSel = isBody ? selector.Trim()[..^5] : selector;
+            dynamic slide = SlideOf((object)pres, slideSel).slide;
+            dynamic range = isBody ? BodyOf((object)slide, selector).TextFrame.TextRange : slide.Shapes.Title.TextFrame.TextRange;
             var did = new List<string>();
             foreach (var pair in (styles ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -1659,24 +2060,54 @@ namespace Syn.Sidecar
                     case "size": range.Font.Size = double.Parse(val, CultureInfo.InvariantCulture); break;
                     case "font": range.Font.Name = val; break;
                     case "color": range.Font.Color.RGB = OleColor(val); break;
+                    case "underline": range.Font.Underline = on ? -1 : 0; break;
+                    case "align":
+                        // ppAlignLeft 1, ppAlignCenter 2, ppAlignRight 3
+                        range.ParagraphFormat.Alignment = val.ToLowerInvariant() switch
+                        {
+                            "left" => 1, "center" or "centre" => 2, "right" => 3,
+                            _ => throw new InvalidOperationException($"align does not know {val}"),
+                        };
+                        break;
                     default:
                         throw new InvalidOperationException(
-                            $"slide format does not know {key}: it knows bold, italic, size, font, color");
+                            $"slide format does not know {key}: it knows bold, italic, underline, size, font, color, align");
                 }
                 did.Add(key);
             }
             if (did.Count == 0) throw new InvalidOperationException("format was given no style: try size=32;bold=1");
-            return Ok($"formatted the title of {selector}: {string.Join(", ", did)}");
+            return Ok($"formatted the {(isBody ? "body" : "title")} of {slideSel}: {string.Join(", ", did)}");
         }
 
 
+        // A copy, never SaveAs, which moves the open deck to the new path.
         private static string ExportPres(dynamic pres, string handle, string format, string path)
         {
-            Snapshot(handle);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
-            if (format.ToLowerInvariant() == "pdf") pres.ExportAsFixedFormat(path, 2);
-            else pres.SaveAs(path);
-            return Ok($"exported {path}");
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(ReadDeck(pres));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
+            var full = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
+            switch (f)
+            {
+                case "pdf":
+                    pres.ExportAsFixedFormat(full, 2); // ppFixedFormatTypePDF
+                    return Ok($"exported {full}");
+                case "pptx":
+                    pres.SaveCopyAs(full);
+                    return Ok($"exported {full}");
+                case "png":
+                {
+                    // Every slide, as a picture a document or a page can carry.
+                    var dir = Path.GetDirectoryName(full) ?? ".";
+                    var stem = Path.GetFileNameWithoutExtension(full);
+                    int n = pres.Slides.Count;
+                    for (var i = 1; i <= n; i++) pres.Slides[i].Export(Path.Combine(dir, $"{stem}-s{i}.png"), "PNG");
+                    return Ok($"exported {n} slide(s) to {dir}: {stem}-s1.png ... {stem}-s{n}.png");
+                }
+                default:
+                    throw new InvalidOperationException($"PowerPoint exports pptx, pdf, png (every slide) or summary, not {format}");
+            }
         }
 
         // ---- helpers ----
@@ -1811,7 +2242,31 @@ namespace Syn.Sidecar
             var sb = new StringBuilder();
             for (var k = 1; k < rest.Length; k++)
             {
-                if (rest[k] == '\\' && k + 1 < rest.Length) { sb.Append(rest[k + 1]); k++; }
+                if (rest[k] == '\\' && k + 1 < rest.Length)
+                {
+                    k++;
+                    // Decode the escape, not just the character after the
+                    // backslash: that turned every newline Rust sent as \n
+                    // into the letter n, so a VBA module arrived as one line
+                    // and a paragraph with a line break lost it. The
+                    // LibreOffice helper parses JSON properly, which is why
+                    // no test off Windows could see it.
+                    switch (rest[k])
+                    {
+                        case 'n': sb.Append('\n'); break;
+                        case 'r': sb.Append('\r'); break;
+                        case 't': sb.Append('\t'); break;
+                        case 'b': sb.Append('\b'); break;
+                        case 'f': sb.Append('\f'); break;
+                        case 'u' when k + 4 < rest.Length
+                                      && int.TryParse(rest.AsSpan(k + 1, 4), NumberStyles.HexNumber,
+                                                      CultureInfo.InvariantCulture, out var cp):
+                            sb.Append((char)cp);
+                            k += 4;
+                            break;
+                        default: sb.Append(rest[k]); break;
+                    }
+                }
                 else if (rest[k] == '"') break;
                 else sb.Append(rest[k]);
             }

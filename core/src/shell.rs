@@ -137,7 +137,7 @@ pub fn run(policy: &ShellPolicy, program: &str, args: &[String]) -> Result<Outco
     // reader instead of inheriting the hang; the thread is left to finish on
     // its own and its output is reported as incomplete. Reaping the tree
     // needs Job Objects on Windows / process groups on Unix — the supervisor
-    // work `docs/08-production-grade.md` calls for and that is not built yet.
+    // work that is not built yet.
     let mut out = child.stdout.take();
     let mut err = child.stderr.take();
     let (tx_out, rx_out) = std::sync::mpsc::channel();

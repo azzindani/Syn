@@ -93,6 +93,19 @@ impl Runner {
         !self.hands.is_empty()
     }
 
+    /// Whether an attached hand would take this app's handles.
+    pub fn serves(&self, app: &str) -> bool {
+        self.route(app).is_some()
+    }
+
+    /// Would the gates let an op on this app through right now? Asked
+    /// before anything expensive -- connecting a pipe, launching a helper,
+    /// starting Excel -- so a refused app costs nothing to refuse.
+    pub fn permits(&self, app: &str) -> Result<()> {
+        self.guard.armed()?;
+        self.guard.check(app)
+    }
+
     /// Attached hands in routing order, as (name, claimed apps).
     pub fn hands(&self) -> Vec<(&str, &[String])> {
         self.hands.iter().map(|a| (a.name.as_str(), a.apps.as_slice())).collect()
@@ -140,6 +153,11 @@ impl Runner {
             Ok(reply) => reply.into_result().map_err(Error::Live),
             Err(e) => Err(Error::Transport(e.to_string())),
         }
+    }
+
+    /// The name of the hand that would serve `app`, if any.
+    pub fn hand_serving(&self, app: &str) -> Option<String> {
+        self.route(app).map(str::to_string)
     }
 
     pub fn is_live(&self, handle: &str) -> bool {
@@ -217,6 +235,42 @@ impl Runner {
         Ok(missing)
     }
 
+    /// Run one op now, through every gate. The one road to a document.
+    ///
+    /// The agent loop, the REPL and the MCP server all call this, so there
+    /// is no caller -- ours or someone else's model -- that reaches a
+    /// document without meeting the kill switch, the app allowlist, the VBA
+    /// gate, the doom-loop gate, the registry check and the event feed.
+    /// `mcpgate` used to be the exception: its writes built an envelope
+    /// and never met any of them (docs/design/split-plan.md section 4).
+    ///
+    /// `Ok(None)` means the queue is not running: paused, cancelled or
+    /// frozen by the doom-loop gate.
+    pub fn run(&mut self, relay: &mut Relay, handle: &str, summary: &str, call: Call) -> Result<Option<OpOut>> {
+        // A paused run takes nothing new. This used to queue the job anyway
+        // behind the pause; the first call after `resume` then ran it and
+        // was handed its answer, and every read from there on came back one
+        // behind -- asked for A1:D4, given the A1:C3 refused before. The
+        // kill switch still answers as itself.
+        if matches!(self.queue.state(), QueueState::Paused | QueueState::Cancelled) {
+            self.guard.armed()?;
+            return Ok(None);
+        }
+        self.submit(Job { handle: handle.into(), summary: summary.into(), call });
+        self.pump(relay)
+    }
+
+    /// Thaw a run the gates froze, when the thing that froze it is dealt
+    /// with: a human sent the next message after a repeated call, or a
+    /// fresh hand replaced one whose pipe died. Nothing queued is carried
+    /// over. A latched kill is not a pause and stays latched.
+    pub fn thaw(&mut self, relay: &mut Relay) {
+        if self.queue.state() == &QueueState::Paused {
+            let _ = self.resume(relay);
+            relay.forget_calls(&self.session);
+        }
+    }
+
     /// Execute the next queued job. DoomLoop auto-pauses the run.
     pub fn pump(&mut self, relay: &mut Relay) -> Result<Option<OpOut>> {
         self.guard.armed()?;
@@ -264,7 +318,19 @@ impl Runner {
     fn pump_live(&mut self, relay: &mut Relay, job: Job) -> Result<OpOut> {
         let op = job.call.op();
         relay.emit(&self.session, "step.start", &job.handle, format!("{op:?} live"))?;
-        if let Err(e) = relay.gate(&self.session, &format!("{op:?}"), &job.call.args_key()) {
+        // A verb this app does not have, refused here with the verbs it
+        // does, rather than sent to the helper to come back "unsupported".
+        if let Some(why) = crate::hand::envelope_for(&job.call, &job.handle)
+            .and_then(|line| crate::json::parse(&line).ok())
+            .and_then(|v| v.get("method").and_then(crate::json::Value::as_str).map(str::to_string))
+            .and_then(|m| crate::tools::app_refuses(app_of(&job.handle), &m))
+        {
+            relay.emit(&self.session, "step.error", &job.handle, why.clone())?;
+            return Err(Error::ClosedSchema(why));
+        }
+        if !job.call.gated() {
+            relay.forget_calls(&self.session);
+        } else if let Err(e) = relay.gate(&self.session, &format!("{op:?}"), &job.call.args_key(&job.handle)) {
             self.queue.freeze();
             return Err(e);
         }
@@ -403,6 +469,33 @@ mod tests {
     }
 
     #[test]
+    fn a_verb_the_app_does_not_have_is_refused_before_the_helper_with_the_ones_it_does() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.attach_hand(Box::new(FakeHand::ok(&["the helper was asked"])));
+        run.mark_live(&h).unwrap();
+        run.submit(Job {
+            handle: h.clone(),
+            summary: "move".into(),
+            call: Call::Struct(crate::ops::StructArgs::Office {
+                verb: "moveSlide".into(),
+                args: vec![("selector".into(), "s2".into()), ("at".into(), "s1".into())],
+                payload: String::new(),
+            }),
+        });
+        match run.pump(&mut r) {
+            Err(Error::ClosedSchema(why)) => {
+                assert!(why.contains("PowerPoint only"), "{why}");
+                assert!(why.contains("Excel's struct verbs are:") && why.contains("sort"), "{why}");
+            }
+            other => panic!("moveSlide on a workbook must be refused before the helper, got {other:?}"),
+        }
+        // A verb Excel has still goes through.
+        run.submit(read_job(&h));
+        assert_eq!(run.pump(&mut r).unwrap().unwrap(), OpOut::Text { detail: "the helper was asked".into() });
+    }
+
+    #[test]
     fn attaching_a_hand_alone_changes_nothing() {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
@@ -536,6 +629,37 @@ mod tests {
     }
 
     #[test]
+    fn the_same_read_of_three_documents_is_not_a_loop_and_undo_never_is() {
+        // Found by the live MCP test: three summaries of three different
+        // documents were refused as one call made three times, and three
+        // undos in a row -- three changes taken back -- would have been too.
+        let (mut r, s, h) = relay1();
+        for name in ["q.xlsx", "z.xlsx"] {
+            r.attach(&s, crate::protocol::new_handle("excel", name, "Sheet1"), OpenFile {
+                kind: FileKind::Excel,
+                content: FileContent::Excel { sheets: HashMap::from([("Sheet1".into(), vec![vec!["1".into()]])]) },
+                styles: HashMap::new(),
+            });
+        }
+        let mut run = Runner::new(&s);
+        for name in ["p.xlsx", "q.xlsx", "z.xlsx"] {
+            let job = Job { handle: format!("excel:{name}:Sheet1"), summary: "read".into(), call: Call::Read(ReadArgs { selector: "Sheet1".into() }) };
+            assert!(run.run(&mut r, &job.handle.clone(), "read", job.call).is_ok(), "{name}");
+        }
+        for _ in 0..3 {
+            let out = run.run(&mut r, &h, "undo", Call::Undo);
+            assert!(!matches!(out, Err(Error::DoomLoop(_))), "undo three times running is not a loop");
+        }
+        // And the same read either side of an undo is two looks at two
+        // different documents.
+        let read = || Call::Read(ReadArgs { selector: "Sheet1".into() });
+        assert!(run.run(&mut r, &h, "read", read()).is_ok());
+        assert!(run.run(&mut r, &h, "read", read()).is_ok());
+        let _ = run.run(&mut r, &h, "undo", Call::Undo);
+        assert!(run.run(&mut r, &h, "read", read()).is_ok(), "the undo in between makes this a new look");
+    }
+
+    #[test]
     fn doomloop_autopauses() {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
@@ -563,6 +687,31 @@ mod tests {
             styles: HashMap::new(),
         });
         h
+    }
+
+    #[test]
+    fn a_call_made_while_paused_never_runs_later() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        let read = |sel: &str| Call::Read(ReadArgs { selector: sel.into() });
+        for _ in 0..3 {
+            let _ = run.run(&mut r, &h, "read", read("Sheet1"));
+        }
+        assert_eq!(run.state(), &QueueState::Paused, "three identical calls freeze the run");
+        assert!(run.run(&mut r, &h, "read", read("Sheet1!A1")).unwrap().is_none());
+        assert_eq!(run.pending(), 0, "a refused call must not wait behind the pause");
+        run.thaw(&mut r);
+        let out = run.run(&mut r, &h, "read", read("Sheet1!B1")).unwrap().unwrap();
+        assert!(format!("{out:?}").contains("1x1"), "the call after a thaw gets its own answer: {out:?}");
+    }
+
+    #[test]
+    fn thawing_never_undoes_the_kill_switch() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.kill();
+        run.thaw(&mut r);
+        assert!(matches!(run.run(&mut r, &h, "read", Call::Read(ReadArgs { selector: "Sheet1".into() })), Err(Error::Killed)));
     }
 
     #[test]

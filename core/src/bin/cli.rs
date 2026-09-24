@@ -22,12 +22,15 @@
 //!                           (once `live`, plain `write` also hits the document)
 //!   shellallow <p...>       programs the shell hand may run (empty = none)
 //!   task <class>            router slot `do` uses (skim|routine|code|deep|vision)
+//!   models [refresh] [text] the providers' model catalogs (cached, 15 min)
+//!   model <provider> <id>   talk to that model from now on | model auto
+//!   think low|medium|high   how hard it thinks | think auto (the slot's own)
 //!   do <goal>               run the agent loop until it answers or stops
 //!   approve | deny [why]    answer a held shell confirmation
 //!   quit
 
 use core::agent::{Agent, Brain, CurlBrain, Step};
-use core::bus::{FileContent, FileKind, OpenFile};
+use core::bus::OpenFile;
 use core::config;
 use core::cdp::Cdp;
 use core::chats;
@@ -36,10 +39,9 @@ use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use core::protocol::new_handle;
 use core::provider;
 use core::router::{TaskKind, route};
-use core::runner::{Job, Runner};
+use core::runner::Runner;
 use core::shell::ShellPolicy;
 use core::Relay;
-use std::collections::HashMap;
 use std::io::BufRead;
 
 /// Print, and mirror to this run's live log so a console in another
@@ -55,14 +57,24 @@ macro_rules! pr {
     }};
 }
 
-fn blank_excel() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Excel,
-        content: FileContent::Excel {
-            sheets: HashMap::from([("Sheet1".into(), vec![vec![String::new(); 4]; 4])]),
-        },
-        styles: HashMap::new(),
-    }
+
+/// The reply as the model writes it, for whoever is watching: one line per
+/// batch (`sse::Throttle` gathers a few a second), JSON so a newline or a
+/// quote in the text cannot break the line. The console draws a draft from
+/// these and drops it when the finished turn (`RECEIPT step` or `ANSWER`)
+/// arrives, so a line lost here costs a flicker, never a word.
+fn show_delta(kind: core::sse::Kind, text: &str) {
+    let kind = match kind {
+        core::sse::Kind::Text => "text",
+        core::sse::Kind::Thinking => "thinking",
+    };
+    let v = core::json::obj(vec![("kind", core::json::s(kind)), ("text", core::json::s(text))]);
+    pr!("RECEIPT delta {}", v.to_json());
+}
+
+/// The model on this endpoint, streaming to the console as it writes.
+fn watched(on: &(String, String)) -> CurlBrain {
+    CurlBrain { on_delta: Some(show_delta), ..CurlBrain::new(&on.0, &on.1) }
 }
 
 /// Submit one op and run it.
@@ -73,27 +85,15 @@ fn blank_excel() -> OpenFile {
 /// quietly edit the in-memory model instead of the open document. The agent
 /// loop already holds this invariant; the REPL now holds it too.
 fn run_op(runner: &mut Runner, relay: &mut Relay, handle: &str, what: &str, call: Call) {
-    let id = runner.submit(Job { handle: handle.into(), summary: format!("cli-{what}"), call });
-    match runner.pump(relay) {
+    let id = format!("cli-{what}");
+    match runner.run(relay, handle, &id, call) {
         Ok(Some(o)) => pr!("RECEIPT {id} {what} {o:?}"),
         Ok(None) => pr!("ERROR {id} queue not running"),
         Err(e) => pr!("ERROR {id} {e}"),
     }
 }
 
-fn blank_word() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Word,
-        content: FileContent::Word { paras: vec![], tables: vec![], changes: vec![], comments: vec![] },
-        styles: HashMap::new(),
-    }
-}
 
-fn blank_ppt() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Ppt, content: FileContent::Ppt { slides: vec![] }, styles: HashMap::new(),
-    }
-}
 
 /// Drive the loop until it finishes, stops, or stops for a human.
 /// The other model slots to try, in cost order, skipping the one that just
@@ -114,6 +114,33 @@ fn fallbacks(failed: &str) -> Vec<(core::router::Model, String)> {
         out.push((m, id));
     }
     out
+}
+
+/// What the next turn talks to: the model, its route, and the endpoint.
+///
+/// The console's picker names a model from a provider's catalog; the slots
+/// in `.env` are what is used when it has not. The thinking level is the
+/// human's either way, and a fallback keeps it: someone who asked for
+/// "low" to save money has not asked for "high" because a model was busy.
+struct Choice {
+    model: String,
+    route: core::router::Route,
+    base_url: String,
+    key_env: String,
+}
+
+fn choose(task: TaskKind, pick: &Option<(core::catalog::Provider, String)>, think: Option<core::router::Effort>) -> Choice {
+    let mut r = route(task);
+    if let Some(e) = think {
+        r.effort = e;
+    }
+    match pick {
+        Some((p, id)) => Choice { model: id.clone(), route: r, base_url: p.base_url.clone(), key_env: p.key_env.clone() },
+        None => {
+            let (base_url, key_env) = config::endpoint(r.model);
+            Choice { model: config::model_id(r.model), route: r, base_url, key_env }
+        }
+    }
 }
 
 /// Persist the conversation after every turn.
@@ -238,7 +265,7 @@ fn status_name(s: core::labels::Status) -> &'static str {
 
 /// Ask the same model again, waiting the way opencode waits.
 ///
-/// Ported from `session/retry.ts`; see `docs/DIGEST-06-opencode-loop.md`
+/// Ported from `session/retry.ts`; see `docs/design/DIGEST-06-opencode-loop.md`
 /// §3. Three things this does that the fixed `[2s, 6s, 15s]` before it did
 /// not:
 ///
@@ -315,6 +342,14 @@ fn main() {
     // Which router slot `do` runs on. Switchable because free-tier models
     // rate-limit independently: a 429 on one slot is not a reason to stop.
     let mut task = TaskKind::Routine;
+    // A model picked from a catalog, and a thinking level, when the human
+    // has chosen them. None means the slot decides.
+    let mut pick: Option<(core::catalog::Provider, String)> = None;
+    let mut think: Option<core::router::Effort> = None;
+    // Where the current run is being sent, so an approval resumes it on
+    // the same endpoint: after a fallback, or on a picked provider, the
+    // slot's own endpoint is somewhere else.
+    let mut on: (String, String) = config::endpoint(route(task).model);
     // Every live line since process start: enabling the journal backfills
     // this so a replay is always self-contained (replay/session lines kept,
     // nested replay lines skipped).
@@ -376,9 +411,9 @@ fn main() {
                     continue;
                 }
                 let (file, kind) = match a.as_slice() {
-                    ["excel", f, unit] => (blank_excel(), new_handle("excel", f, unit)),
-                    ["word", f] => (blank_word(), new_handle("word", f, "body")),
-                    ["ppt", f] => (blank_ppt(), new_handle("ppt", f, "deck")),
+                    ["excel", f, unit] => (OpenFile::blank_excel(), new_handle("excel", f, unit)),
+                    ["word", f] => (OpenFile::blank_word(), new_handle("word", f, "body")),
+                    ["ppt", f] => (OpenFile::blank_ppt(), new_handle("ppt", f, "deck")),
                     _ => {
                         pr!("ERROR usage: attach excel <file> <sheet> | attach word <file> | attach ppt <file>");
                         continue;
@@ -402,7 +437,15 @@ fn main() {
                         r.cost_rank
                     );
                 }
-                pr!("RECEIPT slots current={}", core::router::task_name(task));
+                // And what the picker last chose, so a second window, or a
+                // reload in a fresh browser, shows what the next turn will
+                // really use rather than what that browser remembers.
+                let chosen = match &pick {
+                    Some((p, id)) => format!("pick={id} provider={}", p.name),
+                    None => "pick=auto".to_string(),
+                };
+                let level = think.map(provider::effort_str).unwrap_or("auto");
+                pr!("RECEIPT slots current={} {chosen} think={level}", core::router::task_name(task));
             }
             "wiring" => {
                 for app in ["excel", "word", "ppt", "uia"] {
@@ -444,6 +487,7 @@ fn main() {
                 let call = Call::Struct(StructArgs::InsertParagraph {
                     text: a[2].into(),
                     style: word_style(a[1]),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "para", call);
             }
@@ -457,6 +501,7 @@ fn main() {
                     rows: core::tools::grid(a[2]),
                     style: word_style(a[1]),
                     selector: String::new(),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "wtable", call);
             }
@@ -556,6 +601,7 @@ fn main() {
                     rows: core::tools::grid(a[3].trim()),
                     style: if a[2] == "." { String::new() } else { a[2].into() },
                     selector: a[1].into(),
+                    at: String::new(),
                 });
                 run_op(&mut runner, &mut relay, a[0], "stable", call);
             }
@@ -755,6 +801,69 @@ fn main() {
                 let r = route(task);
                 pr!("RECEIPT task={:?} model={}", task, config::model_id(r.model));
             }
+            "model" => {
+                let a: Vec<&str> = rest.split_whitespace().collect();
+                match a.as_slice() {
+                    ["auto"] => {
+                        pick = None;
+                        pr!("RECEIPT model=auto slot={}", config::model_id(route(task).model));
+                    }
+                    [prov, id] => {
+                        // An id goes into a request body and nowhere else,
+                        // but it is still capped and checked: it arrives
+                        // from a page, and before that from a provider.
+                        if id.len() > 200 || id.chars().any(|c| c.is_control() || c == '"' || c == '\\') {
+                            pr!("ERROR model: that id is not one a provider would send");
+                            continue;
+                        }
+                        let Some(p) = core::catalog::provider_named(prov) else {
+                            let have: Vec<String> = core::catalog::providers().into_iter().map(|p| p.name).collect();
+                            pr!("ERROR model: no provider {prov:?} here (have: {})", have.join(", "));
+                            continue;
+                        };
+                        pr!("RECEIPT model={id} provider={}", p.name);
+                        pick = Some((p, id.to_string()));
+                    }
+                    _ => pr!("ERROR usage: model <provider> <id> | model auto"),
+                }
+            }
+            "think" => {
+                think = match rest.trim() {
+                    "auto" => None,
+                    level => match core::router::effort_named(level) {
+                        Some(e) => Some(e),
+                        None => {
+                            pr!("ERROR think: {level:?} is not a level (auto|low|medium|high)");
+                            continue;
+                        }
+                    },
+                };
+                let e = choose(task, &pick, think).route.effort;
+                pr!("RECEIPT think={} effort={}", rest.trim(), provider::effort_str(e));
+            }
+            "models" => {
+                // `models [refresh] [text]`. The console keeps its own copy
+                // fresh; this is the same list for someone at a terminal.
+                let (force, text) = match rest.trim().strip_prefix("refresh") {
+                    Some(t) => (true, t.trim()),
+                    None => (false, rest.trim()),
+                };
+                let needle = text.to_ascii_lowercase();
+                for s in core::catalog::update(force) {
+                    if let Some(e) = &s.error {
+                        pr!("NOTE {}: {e}", s.provider.name);
+                    }
+                    let hits: Vec<_> = s
+                        .entries
+                        .iter()
+                        .filter(|e| needle.is_empty() || e.id.to_ascii_lowercase().contains(&needle) || e.name.to_ascii_lowercase().contains(&needle))
+                        .collect();
+                    for e in hits.iter().take(40) {
+                        pr!("MODEL {} {}  {}", s.provider.name, e.id, e.name);
+                    }
+                    pr!("RECEIPT models provider={} count={} shown={}", s.provider.name, s.entries.len(), hits.len().min(40));
+                }
+            }
             "shellallow" => {
                 let progs: Vec<&str> = rest.split_whitespace().collect();
                 shell_policy = ShellPolicy::new(&progs);
@@ -765,18 +874,22 @@ fn main() {
                     pr!("ERROR usage: do <goal>");
                     continue;
                 }
-                if !config::has_api_key() {
-                    pr!("ERROR do: env {} not set (see .env.example)", config::API_KEY_ENV);
+                let c = choose(task, &pick, think);
+                if core::auth::resolve(&c.base_url, &c.key_env).is_none() {
+                    pr!("ERROR do: no key for {}: set {} (see .env.example)", c.base_url, c.key_env);
                     continue;
                 }
-                let r = route(task);
-                let model = config::model_id(r.model);
+                let (r, model) = (c.route, c.model);
+                // A new goal is the human's go-ahead after a repeated call
+                // or a dead pipe froze the last run.
+                runner.thaw(&mut relay);
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
-                let (url0, key0) = config::endpoint(r.model);
-                let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
+                on = (c.base_url, c.key_env);
+                let mut brain = watched(&on);
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
+                a.fit_context(core::catalog::context_of(&model));
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 agent = Some(a);
@@ -790,12 +903,18 @@ fn main() {
                     pr!("ERROR usage: say <text>");
                     continue;
                 }
-                if !config::has_api_key() {
-                    pr!("ERROR say: env {} not set (see .env.example)", config::API_KEY_ENV);
+                let c = choose(task, &pick, think);
+                if core::auth::resolve(&c.base_url, &c.key_env).is_none() {
+                    pr!("ERROR say: no key for {}: set {} (see .env.example)", c.base_url, c.key_env);
                     continue;
                 }
-                let r = route(task);
-                let model = config::model_id(r.model);
+                let (r, model) = (c.route, c.model);
+                // The human's next message is the confirmation the
+                // repeated-call gate asks for. Without this, one stopped
+                // turn left the runner paused and every message after it
+                // died on its first call with "queue is not running", with
+                // nothing in the console able to resume it.
+                runner.thaw(&mut relay);
                 match agent.as_mut() {
                     Some(a) => {
                         if let Err(e) = a.follow_up(text) {
@@ -809,6 +928,9 @@ fn main() {
                     None => agent = Some(Agent::new(&session, text, &model, r)),
                 }
                 let a = agent.as_mut().expect("just set");
+                // Sized to the model this turn goes to, which the picker
+                // may have changed since the last one.
+                a.fit_context(core::catalog::context_of(&model));
                 // Before every turn, not once at construction: a hand
                 // attached mid-conversation has to be visible to the next
                 // message, or the model keeps saying it cannot reach anything.
@@ -826,8 +948,8 @@ fn main() {
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
-                let (url0, key0) = config::endpoint(r.model);
-                let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
+                on = (c.base_url, c.key_env);
+                let mut brain = watched(&on);
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
 
                 // Wait and ask the SAME model again before giving up on
@@ -850,7 +972,19 @@ fn main() {
                         break;
                     }
                     pr!("RECEIPT retry model={id}");
-                    a.retarget(&id, core::router::route_of(m));
+                    let mut r = core::router::route_of(m);
+                    if let Some(e) = think {
+                        r.effort = e;
+                    }
+                    a.retarget(&id, r);
+                    a.fit_context(core::catalog::context_of(&id));
+                    // Each slot on its own endpoint. This used to keep the
+                    // first brain, which sent a slot's id to whichever host
+                    // the failed model lived on -- harmless while every slot
+                    // was OpenRouter, wrong once a model can be picked from
+                    // another provider.
+                    on = config::endpoint(m);
+                    brain = watched(&on);
                     stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                     // The new slot gets the same patience as the first.
                     stopped = wait_and_retry(&id, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
@@ -966,8 +1100,7 @@ fn main() {
                 if !matches!(outcome, Step::Stopped(_)) {
                     // The route the run is actually on, which a fallback
                     // may have changed since the REPL's task slot was set.
-                    let (url0, key0) = config::endpoint(a.route().model);
-                    let mut brain = CurlBrain { base_url: url0, api_key_env: key0 };
+                    let mut brain = watched(&on);
                     let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 save_chat(&chat_id, a);
@@ -1002,6 +1135,9 @@ fn main() {
                     Ok(h) => {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         runner.attach_hand_as(pipe, apps, Box::new(h));
+                        // Reconnecting is how a human recovers from a dead
+                        // pipe, which froze the run.
+                        runner.thaw(&mut relay);
                         pr!("RECEIPT hand={pipe} claims={claims}");
                     }
                     Err(e) => pr!("ERROR hand {e}"),
@@ -1027,6 +1163,7 @@ fn main() {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         let name = format!("cdp-{addr}");
                         runner.attach_hand_as(&name, apps, Box::new(c));
+                        runner.thaw(&mut relay);
                         pr!("RECEIPT hand={name} claims={claims} pages={open:?}");
                     }
                     Err(e) => pr!("ERROR cdp {e}"),
@@ -1058,7 +1195,7 @@ fn main() {
                     }
                 };
                 let h = new_handle(app, m, unit);
-                relay.attach(&session, h.clone(), blank_word());
+                relay.attach(&session, h.clone(), OpenFile::blank_word());
                 pr!("RECEIPT attached={h}");
             }
             "hands" => {

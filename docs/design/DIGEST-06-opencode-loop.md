@@ -7,7 +7,7 @@ Source: `sst/opencode` @ `ebb7b76`, shallow clone in `.tmp/repos/opencode`.
 Scope: `packages/opencode/src/session/` (8,117 lines) and
 `packages/opencode/src/provider/` (4,413 lines).
 
-`docs/08` claimed these loops were ported. Reading them properly, the
+An early design note claimed these loops were ported. Reading them properly, the
 *shape* was ported and most of the mechanism was not. §11 states exactly
 which files were read for this digest and which were not, so the coverage
 is checkable rather than implied.

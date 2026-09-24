@@ -19,6 +19,11 @@ const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 /// or hostile peer asks for. A DevTools reply that big is already unusable.
 const MAX_FRAME: u64 = 16 * 1024 * 1024;
 
+/// The same, for a whole message. The frame cap alone let a peer send any
+/// number of 16 MB continuations and grow one message without bound. Twice
+/// the frame cap: a full-page screenshot fits, and nothing real is bigger.
+const MAX_MESSAGE: usize = 32 * 1024 * 1024;
+
 pub fn b64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -152,6 +157,8 @@ impl Rng {
 pub struct Ws<S: Read + Write> {
     io: BufReader<S>,
     rng: Rng,
+    /// `MAX_MESSAGE`, except in tests.
+    max_message: usize,
 }
 
 fn eof(msg: &str) -> std::io::Error {
@@ -204,7 +211,7 @@ impl<S: Read + Write> Ws<S> {
         }
         let want = accept_key(&key);
         match accept {
-            Some(got) if got == want => Ok(Self { io, rng }),
+            Some(got) if got == want => Ok(Self { io, rng, max_message: MAX_MESSAGE }),
             Some(got) => Err(bad(format!("bad Sec-WebSocket-Accept: got {got}, want {want}"))),
             None => Err(bad("no Sec-WebSocket-Accept header: not a websocket server".into())),
         }
@@ -214,7 +221,7 @@ impl<S: Read + Write> Ws<S> {
     /// framing with no server; real callers go through `handshake`.
     #[doc(hidden)]
     pub fn from_upgraded(stream: S) -> Self {
-        Self { io: BufReader::new(stream), rng: Rng::new() }
+        Self { io: BufReader::new(stream), rng: Rng::new(), max_message: MAX_MESSAGE }
     }
 
     fn frame(&mut self, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
@@ -264,6 +271,9 @@ impl<S: Read + Write> Ws<S> {
                     }
                     if !assembling {
                         return Err(bad("continuation frame with nothing to continue".into()));
+                    }
+                    if buf.len() + payload.len() > self.max_message {
+                        return Err(bad(format!("websocket message exceeds the {} byte cap", self.max_message)));
                     }
                     buf.extend_from_slice(&payload);
                     if fin {
@@ -363,7 +373,7 @@ mod tests {
     fn ws(inbound: Vec<u8>) -> (Ws<Fake>, Rc<RefCell<Vec<u8>>>) {
         let wrote = Rc::new(RefCell::new(Vec::new()));
         let f = Fake { inbound: std::io::Cursor::new(inbound), wrote: Rc::clone(&wrote) };
-        (Ws { io: BufReader::new(f), rng: Rng(12345) }, wrote)
+        (Ws { io: BufReader::new(f), rng: Rng(12345), max_message: MAX_MESSAGE }, wrote)
     }
 
     /// An unmasked server text frame, as a real server sends it.
@@ -547,6 +557,22 @@ Sec-WebSocket-Accept: {}
         inbound.extend_from_slice(b"ghi"); // continuation, final
         let (mut w, _) = ws(inbound);
         assert_eq!(w.recv_text().unwrap(), "abcdefghi");
+    }
+
+    #[test]
+    fn a_message_grown_past_the_cap_by_continuations_is_refused() {
+        // Every frame is small; together they are too much.
+        let mut inbound = vec![0x01, 0x04];
+        inbound.extend_from_slice(b"abcd");
+        for _ in 0..3 {
+            inbound.extend_from_slice(&[0x00, 0x04]);
+            inbound.extend_from_slice(b"efgh");
+        }
+        inbound.extend_from_slice(&[0x80, 0x01, b'z']);
+        let (mut w, _) = ws(inbound);
+        w.max_message = 10;
+        let e = w.recv_text().unwrap_err();
+        assert!(e.to_string().contains("cap"), "{e}");
     }
 
     #[test]

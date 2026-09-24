@@ -11,7 +11,7 @@
 //! "Drew a chart on Dashboard". A run that makes forty `office-rpc/1`
 //! envelopes reads as three sentences instead of forty lines.
 //!
-//! It lives in `core`, not in a renderer, for the reason `docs/09` gives:
+//! It lives in `core`, not in a renderer, for the reason `docs/design/split-plan.md` gives:
 //! a label describes a **world tool**, so it belongs with the vocabulary it
 //! describes and travels to every client over the existing event feed. It is
 //! also pure, which is why every line of it is tested without a document, a
@@ -74,6 +74,24 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("contents", ("Insert", "Inserting", "Inserted", "a table of contents")),
     ("pageNumbers", ("Add", "Adding", "Added", "page numbers")),
     ("picture", ("Insert", "Inserting", "Inserted", "a picture")),
+    ("find", ("Search", "Searching", "Searched", "the document")),
+    ("replace", ("Replace", "Replacing", "Replaced", "text")),
+    ("delete", ("Delete", "Deleting", "Deleted", "part of the document")),
+    ("insert", ("Insert", "Inserting", "Inserted", "rows or columns")),
+    ("sort", ("Sort", "Sorting", "Sorted", "a range")),
+    ("filter", ("Filter", "Filtering", "Filtered", "a range")),
+    ("dedupe", ("Remove", "Removing", "Removed", "duplicate rows")),
+    ("copy", ("Copy", "Copying", "Copied", "a range")),
+    ("validate", ("Add", "Adding", "Added", "a validation rule")),
+    ("sheet", ("Change", "Changing", "Changed", "a worksheet")),
+    ("comment", ("Add", "Adding", "Added", "a comment")),
+    ("link", ("Add", "Adding", "Added", "a link")),
+    ("pageSetup", ("Set up", "Setting up", "Set up", "the page")),
+    ("header", ("Write", "Writing", "Wrote", "a header")),
+    ("textBox", ("Add", "Adding", "Added", "a text box")),
+    ("duplicateSlide", ("Duplicate", "Duplicating", "Duplicated", "a slide")),
+    ("moveSlide", ("Move", "Moving", "Moved", "a slide")),
+    ("theme", ("Apply", "Applying", "Applied", "a theme")),
 ];
 
 /// `macro` is four different sentences depending on its `action`, because
@@ -200,6 +218,7 @@ fn preposition(name: &str, args: &str) -> &'static str {
     match name {
         "read" => "",
         "write" | "format" => "",
+        "export" if matches!(field(args, "format").as_deref(), Some("summary" | "preview")) => "",
         "export" => "to",
         "undo" => "on",
         "shell" => "",
@@ -269,6 +288,10 @@ fn forms_for(name: &str, args: &str) -> Forms {
             return f;
         }
         return ("Change", "Changing", "Changed", "the document");
+    }
+    // A summary writes nothing, so "Exported to plan.xlsx" misdescribed it.
+    if tool == "export" && matches!(field(args, "format").as_deref(), Some("summary" | "preview")) {
+        return ("Summarise", "Summarising", "Summarised", "a document");
     }
     lookup(TOOL_FORMS, tool).unwrap_or(("Use", "Using", "Used", "a tool"))
 }
@@ -442,6 +465,14 @@ pub fn severity(step: &crate::agent::Step) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_summary_is_summarised_not_exported() {
+        let a = r#"{"handle":"excel:plan.xlsx:workbook","format":"summary"}"#;
+        assert_eq!(sentence("export", a, Status::Done), "Summarised plan.xlsx");
+        let b = r#"{"handle":"excel:plan.xlsx:workbook","format":"pdf","path":"out.pdf"}"#;
+        assert_eq!(sentence("export", b, Status::Done), "Exported to out.pdf");
+    }
 
     #[test]
     fn every_struct_verb_has_words() {

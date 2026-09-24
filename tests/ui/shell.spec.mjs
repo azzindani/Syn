@@ -1,6 +1,6 @@
 // The parts of t3code's shell that a long run needs, checked.
 //
-// docs/DIGEST-08 named five things beyond the tool rows: the three-layer
+// docs/design/DIGEST-08 named five things beyond the tool rows: the three-layer
 // contrast tokens (section 8), the timeline minimap (section 5), the
 // banner stack with activity outranking error (section 6), the budget
 // meter that says what will happen (section 7), and long messages folding
@@ -306,4 +306,33 @@ test("evidence: the shell with everything up at once", async ({ page }) => {
   await expect(page.locator("#peek")).toBeVisible();
   await page.locator("#mapstrip").hover();
   await page.screenshot({ path: path.join(shots, "shell-full.png") });
+});
+
+test("the theme can be pinned, and 'system' follows the machine", async ({ page }) => {
+  const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.evaluate(() => window.live.theme("system"));
+  expect(await theme()).toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(theme).toBe("light");
+
+  // Pinned, it no longer follows, and it survives a reload.
+  await page.evaluate(() => window.live.theme("dark"));
+  await page.emulateMedia({ colorScheme: "light" });
+  expect(await theme()).toBe("dark");
+  await page.reload();
+  await page.waitForFunction(() => !!window.live);
+  expect(await theme()).toBe("dark");
+  await expect(page.locator('#theme button[data-pref="dark"]')).toHaveAttribute("aria-pressed", "true");
+
+  await page.evaluate(() => window.live.theme("system"));
+});
+
+test("the first screen is the mark and the apps, nothing to read past", async ({ page }) => {
+  await page.evaluate(() => window.live.render([], {}));
+  await expect(page.locator(".empty .hero")).toBeVisible();
+  await expect(page.locator(".empty .works")).toContainText("Excel");
+  await expect(page.locator(".empty h2, .empty p, .empty button")).toHaveCount(0);
+  await expect(page.locator("#box")).toHaveValue("");
 });

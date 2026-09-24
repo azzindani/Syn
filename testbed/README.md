@@ -2,8 +2,9 @@
 
 Everything a real Windows + Office run touches lives here, and everything
 except this file is gitignored. Nothing in a live test should ever be written
-outside this directory: the sidecar is pointed at it via `SYN_TESTBED` in
-`.env`, so a misfired write lands on a throwaway document, not your work.
+outside this directory: the scripts in `scripts/` and `tests/capability/`
+build and open their documents here, so a misfired write lands on a
+throwaway document, not your work.
 
 ```
 testbed/

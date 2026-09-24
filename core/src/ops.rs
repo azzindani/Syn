@@ -11,7 +11,8 @@ use crate::{acp, security};
 /// refused before it ever gets there.
 const STYLE_KEYS: &[&str] = &[
     "font", "fill", "bold", "italic", "size", "color", "numberFormat", "width", "autofit", "wrap",
-    "autofitSheet", "merge", "border", "align", "freeze",
+    "autofitSheet", "merge", "border", "align", "freeze", "underline", "strike", "height", "valign", "indent",
+    "rotate", "hidden", "style", "highlight", "spaceBefore", "spaceAfter", "lineSpacing",
 ];
 /// Zero-based inclusive cell rect: (row0, col0, row1, col1).
 pub type CellRect = (usize, usize, usize, usize);
@@ -37,10 +38,15 @@ pub struct FormatArgs {
 
 #[derive(Debug, Clone)]
 pub enum StructArgs {
-    InsertParagraph { text: String, style: String },
+    /// A paragraph. `at` empty appends it at the end; `at` "p3" puts it
+    /// before paragraph p3, so it becomes the new p3. Appending was the only
+    /// choice, which made correcting a document impossible without
+    /// rewriting everything after the mistake.
+    InsertParagraph { text: String, style: String, at: String },
     /// A table. `selector` is empty for Word, where it appends at the end
-    /// of the document, and names a slide for PowerPoint.
-    InsertTable { rows: Vec<Vec<String>>, style: String, selector: String },
+    /// of the document, and names a slide for PowerPoint. `at` places it
+    /// before a Word paragraph, like `InsertParagraph`.
+    InsertTable { rows: Vec<Vec<String>>, style: String, selector: String, at: String },
     /// Start a new page, or a new section. Live-only: the in-memory model is
     /// a list of paragraphs and has no pagination to break.
     PageBreak { kind: String },
@@ -99,6 +105,16 @@ pub enum StructArgs {
     /// default; `AGENT_VBA=1` is what a human sets to allow it for one
     /// session, and the kill switch still ends it.
     Macro { action: String, module: String, code: String, name: String },
+    /// One of the table-driven verbs in `tools::OFFICE_VERBS`: find,
+    /// replace, delete, sort, filter, sheet, comment, link and the rest.
+    ///
+    /// One variant rather than eighteen. Each of them is a named set of
+    /// short fields and at most one long one, sent to the application as
+    /// exactly that, and the table is the single place that says which
+    /// fields a verb takes -- the parser, the wire and the manual all read
+    /// it, so they cannot disagree about a verb the way hand-written arms
+    /// drifted before. Live-only: each is something an application does.
+    Office { verb: String, args: Vec<(String, String)>, payload: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,8 +206,19 @@ impl Call {
         }
     }
 
-    pub fn args_key(&self) -> String {
-        format!("{self:?}")
+    /// What the repeated-call gate compares: the call and the document it
+    /// is on. Without the handle, the same read of three different files
+    /// was "the same call three times" and the third was refused.
+    pub fn args_key(&self, handle: &str) -> String {
+        format!("{handle} {self:?}")
+    }
+
+    /// Whether the repeated-call gate counts this call. `undo` three times
+    /// running is three different changes taken back, never a loop; the
+    /// helper's own stack bounds it. It resets the count instead: the same
+    /// read before and after an undo is looking at a different document.
+    pub fn gated(&self) -> bool {
+        !matches!(self, Call::Undo)
     }
 }
 
@@ -199,7 +226,11 @@ impl Call {
 pub fn execute(relay: &mut Relay, session: &str, handle: &str, call: Call) -> Result<OpOut> {
     let op = call.op();
     relay.emit(session, "step.start", handle, format!("{op:?}"))?;
-    relay.gate(session, &format!("{op:?}"), &call.args_key())?;
+    if call.gated() {
+        relay.gate(session, &format!("{op:?}"), &call.args_key(handle))?;
+    } else {
+        relay.forget_calls(session);
+    }
     if !relay.registry(session)?.contains(&handle.to_string()) {
         return Err(Error::UnknownHandle(handle.into()));
     }
@@ -414,11 +445,21 @@ fn do_format(relay: &mut Relay, session: &str, handle: &str, args: &FormatArgs) 
 
 fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -> Result<OpOut> {
     match args {
-        StructArgs::InsertParagraph { text, .. } => {
+        StructArgs::InsertParagraph { text, at, .. } => {
             let files = files(relay, session)?;
             let f = files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             if let FileContent::Word { paras, .. } = &mut f.content {
-                paras.push(text);
+                match at.trim() {
+                    "" => paras.push(text),
+                    p => {
+                        let n = p
+                            .strip_prefix('p')
+                            .and_then(|n| n.parse::<usize>().ok())
+                            .filter(|n| *n <= paras.len())
+                            .ok_or_else(|| Error::BadSelector(format!("at {p:?}: want p0..p{} (p0 is the first)", paras.len())))?;
+                        paras.insert(n, text);
+                    }
+                }
                 Ok(OpOut::Count { what: "paras".into(), n: paras.len() })
             } else {
                 Err(Error::ClosedSchema("insertParagraph needs a word handle".into()))
@@ -524,6 +565,13 @@ fn do_struct(relay: &mut Relay, session: &str, handle: &str, args: StructArgs) -
             files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
             Err(Error::ClosedSchema(format!(
                 "{name:?} needs a live handle: mark it live with a hand that drives the app"
+            )))
+        }
+        StructArgs::Office { verb, .. } => {
+            let files = files(relay, session)?;
+            files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
+            Err(Error::ClosedSchema(format!(
+                "{verb} needs a live handle: it is something the application does, and a model of a document cannot"
             )))
         }
         StructArgs::Conditional { rule, .. } => {
@@ -803,6 +851,37 @@ mod tests {
     }
 
     #[test]
+    fn a_paragraph_placed_at_p1_becomes_p1() {
+        let mut r = Relay::new();
+        let s = "s".to_string();
+        r.handshake(&s, "t");
+        let h = "word:m.docx:body".to_string();
+        r.attach(&s, h.clone(), OpenFile::blank_word());
+        let add = |r: &mut Relay, text: &str, at: &str| {
+            execute(r, &s, &h, Call::Struct(StructArgs::InsertParagraph { text: text.into(), style: String::new(), at: at.into() }))
+        };
+        add(&mut r, "first", "").unwrap();
+        add(&mut r, "third", "").unwrap();
+        add(&mut r, "second", "p1").unwrap();
+        let files = r.files_mut(&s).unwrap();
+        let FileContent::Word { paras, .. } = &files[&h].content else { panic!() };
+        assert_eq!(&paras[paras.len() - 3..], ["first", "second", "third"]);
+        assert!(matches!(add(&mut r, "x", "p99"), Err(Error::BadSelector(_))), "past the end is refused, not appended");
+    }
+
+    #[test]
+    fn a_table_verb_needs_a_live_handle() {
+        let mut r = Relay::new();
+        let s = "s".to_string();
+        r.handshake(&s, "t");
+        let h = "excel:a.xlsx:Sheet1".to_string();
+        r.attach(&s, h.clone(), OpenFile::blank_excel());
+        let c = Call::Struct(StructArgs::Office { verb: "sort".into(), args: vec![], payload: String::new() });
+        let e = execute(&mut r, &s, &h, c).unwrap_err();
+        assert!(e.to_string().contains("sort needs a live handle"), "{e}");
+    }
+
+    #[test]
     fn invoke_refuses_against_a_document_model() {
         let (mut r, s, _xh, wh, _ph) = relay3();
         let c = Call::Struct(StructArgs::Invoke { selector: "id=ok".into(), action: "invoke".into() });
@@ -883,7 +962,7 @@ mod cover_tests {
             execute(&mut r, &s, &xh, Call::Read(ReadArgs { selector: "Q3".into() })).unwrap(),
             OpOut::Grid { sheet: "Q3".into(), rows: 4, cols: 4 });
         assert_eq!(
-            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertParagraph { text: "p2".into(), style: String::new() })).unwrap(),
+            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertParagraph { text: "p2".into(), style: String::new(), at: String::new() })).unwrap(),
             OpOut::Count { what: "paras".into(), n: 2 });
         assert_eq!(
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::TrackChange { para: None, text: "t".into() })).unwrap(),
@@ -892,7 +971,7 @@ mod cover_tests {
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::Comment { at: Some("p0".into()), text: "c".into() })).unwrap(),
             OpOut::Count { what: "comments".into(), n: 1 });
         assert_eq!(
-            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]], style: String::new(), selector: String::new() })).unwrap(),
+            execute(&mut r, &s, &wh, Call::Struct(StructArgs::InsertTable { rows: vec![vec!["a".into()]], style: String::new(), selector: String::new(), at: String::new() })).unwrap(),
             OpOut::Count { what: "tables".into(), n: 1 });
         assert_eq!(
             execute(&mut r, &s, &ph, Call::Struct(StructArgs::CreateSlide { title: "S2".into(), bullets: vec![], layout: String::new() })).unwrap(),
@@ -906,7 +985,7 @@ mod cover_tests {
             execute(&mut r, &s, &wh, Call::Struct(StructArgs::AddSheet { name: "x".into() })),
             Err(Error::ClosedSchema(_))));
         assert!(matches!(
-            execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into(), style: String::new() })),
+            execute(&mut r, &s, &xh, Call::Struct(StructArgs::InsertParagraph { text: "x".into(), style: String::new(), at: String::new() })),
             Err(Error::ClosedSchema(_))));
         assert!(matches!(
             execute(&mut r, &s, &xh, Call::Struct(StructArgs::CreateSlide { title: "x".into(), bullets: vec![], layout: String::new() })),

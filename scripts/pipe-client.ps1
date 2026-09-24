@@ -1,10 +1,9 @@
 <#
   pipe-client.ps1 — send office-rpc/1 envelopes to a running office-host.
 
-  The sidecar speaks one JSON object per line over a named pipe. Nothing in
-  the Rust core can talk to it yet (see mcpgate::rpc_request, which builds the
-  envelope and has no transport), so this is the only client that exists and
-  the way the Windows runbook's smoke tests are driven.
+  The sidecar speaks one JSON object per line over a named pipe. This talks
+  to it directly, with nothing of Syn's in between: for debugging a helper
+  and for the smoke tests (see docs/troubleshooting.md).
 
   Usage:
     scripts\pipe-client.ps1 -Pipe hand-excel -Json '{"method":"read",...}'

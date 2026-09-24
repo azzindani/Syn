@@ -80,6 +80,18 @@ pub enum Effort {
     Max,
 }
 
+/// The thinking levels a human can pick, by the name the console and the
+/// CLI use. `Max` is not one: no provider agrees on what it means, and a
+/// value a provider rejects fails the whole turn.
+pub fn effort_named(name: &str) -> Option<Effort> {
+    Some(match name {
+        "low" => Effort::Low,
+        "medium" => Effort::Medium,
+        "high" => Effort::High,
+        _ => return None,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Route {
     pub model: Model,
@@ -103,7 +115,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn astra_only_for_hard_tasks() {
+    fn reasoning_only_for_hard_tasks() {
         for t in [TaskKind::Skim, TaskKind::Routine, TaskKind::Code] {
             assert_ne!(route(t).model, Model::Reasoning, "{t:?} must not route to Reasoning");
         }
@@ -134,6 +146,15 @@ mod tests {
         for m in Model::ALL {
             assert_eq!(route(task_of(m)).model, m, "task_of({m:?}) does not route back");
         }
+    }
+
+    #[test]
+    fn a_thinking_level_names_what_the_provider_is_sent() {
+        for n in ["low", "medium", "high"] {
+            assert_eq!(crate::provider::effort_str(effort_named(n).unwrap()), n);
+        }
+        assert_eq!(effort_named("max"), None);
+        assert_eq!(effort_named("High"), None, "the wire is lowercase; say so rather than guess");
     }
 
     #[test]

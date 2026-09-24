@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { here, repo, stateFile, urlFile } from "./console.mjs";
+import { here, repo, stateFile, uiBin, urlFile } from "./console.mjs";
 
 // A port of its own. The test must not steal the console the user is looking
 // at on 7777, and must not be answered by one left over from a previous run.
@@ -23,7 +23,7 @@ async function waitForUrl(child) {
 }
 
 export default async function globalSetup() {
-  const ui = path.join(repo, "core", "target", "debug", "ui.exe");
+  const ui = uiBin;
   if (!fs.existsSync(ui)) {
     throw new Error(`build it first: cd core && cargo build --bins  (missing ${ui})`);
   }

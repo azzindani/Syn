@@ -83,6 +83,7 @@ fn rendered() -> Vec<String> {
 const COMMAND_REPLIES: &[&str] = &[
     // State the page asks for and reads out of the /cmd reply.
     "waiting", "env", "mark", "session", "attached", "slots", "wiring", "registry", "events", "config", "task",
+    "model", "think", "models",
     "shell", "do", "chat", "hands", "hand", "route", "live", "open", "allowlist", "deleted",
     // Acknowledgements of a control the human just pressed. The page
     // already knows it pressed it; redrawing on the echo would fight the

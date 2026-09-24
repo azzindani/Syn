@@ -4,7 +4,7 @@
 // console reach a document, change it, come back changed, and stop when a
 // gate says stop. No model, no API key, no Office: `attach` without `live`
 // binds a handle to the in-memory document model, which is tier 2 in
-// docs/10-adding-tools-remotely.md and exercises ops, the Runner, the
+// docs/development.md and exercises ops, the Runner, the
 // queue, the registry and every gate on the way.
 //
 // What this cannot tell you: whether the COM call is right, or whether

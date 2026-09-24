@@ -274,7 +274,7 @@ The manual is a tool rather than a preamble because of cost: the surface is
 to 1,205 tokens each, pulled only when asked for. A preamble big enough to
 teach the job would crowd out the job on a free-tier context.
 
-**The arms.** Same model (`task deep`, whatever `AGENT_MODEL_ASTRA` names),
+**The arms.** Same model (`task deep`, whatever `AGENT_MODEL_REASONING` names),
 same brief, same rubric, same `AGENT_MAX_STEPS=120`, a clean fixture from
 `setup.ps1` before each.
 

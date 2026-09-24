@@ -1,6 +1,6 @@
 //! The hand: `office-rpc/1` transport from the Rust core to a live sidecar.
 //!
-//! This is the seam that was missing. `mcpgate::rpc_request` could already
+//! This is the seam that was missing. The old `mcpgate::rpc_request` could already
 //! build an envelope and nothing could send one, so the brain and the hands
 //! were two halves wired to the same protocol with nothing in between. A
 //! `Hand` is that in-between: one line of JSON out, one line of JSON back,
@@ -13,7 +13,7 @@
 //!
 //! Framing matches the sidecar exactly: byte mode, UTF-8 with no BOM, one
 //! object per line. Both of those were learned the hard way against live
-//! Excel; see `docs/runbook-windows.md`.
+//! Excel; see `docs/troubleshooting.md`.
 
 use crate::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -149,13 +149,14 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             &format!("{{\"selector\":\"{}\"}}", esc(selector)),
             Some(&grid_payload(values)),
         )),
-        Call::Export(ExportArgs { format, path, .. }) => Some(envelope(
+        Call::Export(ExportArgs { format, path, sheet }) => Some(envelope(
             "export",
             handle,
             &format!(
-                "{{\"format\":\"{}\",\"path\":\"{}\"}}",
+                "{{\"format\":\"{}\",\"path\":\"{}\",\"sheet\":\"{}\"}}",
                 esc(format),
-                esc(path.as_deref().unwrap_or(""))
+                esc(path.as_deref().unwrap_or("")),
+                esc(sheet.as_deref().unwrap_or(""))
             ),
             None,
         )),
@@ -254,18 +255,29 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             // it. A module of VBA would not survive being an arg.
             Some(code),
         )),
-        Call::Struct(StructArgs::InsertParagraph { text, style }) => Some(envelope(
+        Call::Struct(StructArgs::InsertParagraph { text, style, at }) => Some(envelope(
             "insertParagraph",
             handle,
-            &format!("{{\"name\":\"{}\"}}", esc(style)),
+            &format!("{{\"name\":\"{}\",\"at\":\"{}\"}}", esc(style), esc(at)),
             Some(text),
         )),
-        Call::Struct(StructArgs::InsertTable { rows, style, selector }) => Some(envelope(
+        Call::Struct(StructArgs::InsertTable { rows, style, selector, at }) => Some(envelope(
             "insertTable",
             handle,
-            &format!("{{\"name\":\"{}\",\"selector\":\"{}\"}}", esc(style), esc(selector)),
+            &format!(
+                "{{\"name\":\"{}\",\"selector\":\"{}\",\"at\":\"{}\"}}",
+                esc(style),
+                esc(selector),
+                esc(at)
+            ),
             Some(&grid_payload(rows)),
         )),
+        // The table-driven verbs go out as what they are: their short
+        // fields as args, their one long field as the payload.
+        Call::Struct(StructArgs::Office { verb, args, payload }) => {
+            let fields = args.iter().map(|(k, v)| format!("\"{}\":\"{}\"", esc(k), esc(v))).collect::<Vec<_>>().join(",");
+            Some(envelope(verb, handle, &format!("{{{fields}}}"), (!payload.is_empty()).then_some(payload.as_str())))
+        }
         // The deck was the one app the hand never learned to drive: a slide
         // could be added with a title on it and nothing else.
         Call::Struct(StructArgs::CreateSlide { title, bullets, layout }) => Some(envelope(
@@ -385,13 +397,32 @@ impl<S: Read + Write + std::fmt::Debug> LiveHand for Hand<S> {
     }
 }
 
-/// Windows named pipe path for a sidecar name.
+/// Where a helper named `name` listens.
+///
+/// Windows: a named pipe, which is what office-host.exe and uia-host.exe
+/// serve. Elsewhere: a Unix socket in `$XDG_RUNTIME_DIR` (else `/tmp`),
+/// which is what `sidecar-lo/lo_host.py` serves -- it computes the same
+/// path, so the two sides meet without either being told the other's.
 pub fn pipe_path(name: &str) -> String {
-    format!(r"\\.\pipe\{name}")
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\{name}")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_RUNTIME_DIR").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "/tmp".into());
+        format!("{}/syn-pipe-{name}.sock", base.trim_end_matches('/'))
+    }
 }
 
-impl Hand<std::fs::File> {
-    /// Connect to a running sidecar by pipe name.
+/// The stream a helper is reached over on this platform.
+#[cfg(windows)]
+pub type Pipe = std::fs::File;
+#[cfg(not(windows))]
+pub type Pipe = std::os::unix::net::UnixStream;
+
+impl Hand<Pipe> {
+    /// Connect to a running helper by name.
     ///
     /// A Windows named pipe opens like any other file once the server is
     /// listening. The server accepts a single client, so a second connect
@@ -399,13 +430,19 @@ impl Hand<std::fs::File> {
     /// this client's, and the error says so.
     pub fn connect(name: &str) -> std::io::Result<Self> {
         let path = pipe_path(name);
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("cannot open {path}: {e}. Is office-host running with --pipe {name}, and free?"),
-            )
+        #[cfg(windows)]
+        let stream = std::fs::OpenOptions::new().read(true).write(true).open(&path);
+        // A Unix socket can be given a deadline, and is: a helper whose
+        // office has wedged must surface as an error, not a hung session.
+        #[cfg(not(windows))]
+        let stream = std::os::unix::net::UnixStream::connect(&path).and_then(|s| {
+            s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+            Ok(s)
+        });
+        let stream = stream.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot open {path}: {e}. Is its helper running with --pipe {name}, and free?"))
         })?;
-        Ok(Self::new(file))
+        Ok(Self::new(stream))
     }
 }
 
@@ -445,6 +482,27 @@ mod tests {
 
     fn sent(w: &Rc<RefCell<Vec<u8>>>) -> String {
         String::from_utf8(w.borrow().clone()).unwrap()
+    }
+
+    #[test]
+    fn a_table_verb_goes_out_as_its_fields_and_payload() {
+        let call = Call::Struct(StructArgs::Office {
+            verb: "replace".into(),
+            args: vec![("text".into(), "Q3 \"draft\"".into()), ("with".into(), "Q3".into())],
+            payload: String::new(),
+        });
+        let e = envelope_for(&call, "word:m.docx:body").unwrap();
+        let v = crate::json::parse(&e).unwrap();
+        assert_eq!(v.get("method").and_then(|m| m.as_str()), Some("replace"));
+        assert_eq!(v.at(&["args", "text"]).and_then(|m| m.as_str()), Some("Q3 \"draft\""));
+        assert!(v.get("payload").is_none(), "no long field, no payload: {e}");
+        let call = Call::Struct(StructArgs::Office {
+            verb: "comment".into(),
+            args: vec![("selector".into(), "p3".into())],
+            payload: "line one\nline two".into(),
+        });
+        let v = crate::json::parse(&envelope_for(&call, "word:m.docx:body").unwrap()).unwrap();
+        assert_eq!(v.get("payload").and_then(|m| m.as_str()), Some("line one\nline two"));
     }
 
     #[test]
@@ -525,11 +583,13 @@ mod tests {
             Call::Struct(StructArgs::InsertParagraph {
                 text: "Estate performance".into(),
                 style: "Heading 1".into(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::InsertTable {
                 rows: vec![vec!["Site".into(), "kWh".into()], vec!["Bearspaw".into(), "3082638".into()]],
                 style: String::new(),
                 selector: String::new(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::PageBreak { kind: "page".into() }),
             Call::Struct(StructArgs::Contents { title: "Contents".into() }),
@@ -571,6 +631,7 @@ mod tests {
                 rows: vec![vec!["Site".into(), "kWh".into()]],
                 style: String::new(),
                 selector: "s2".into(),
+                at: String::new(),
             }),
             Call::Struct(StructArgs::Picture {
                 path: "out\\by-site.png".into(),
@@ -631,8 +692,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn pipe_path_is_the_windows_form() {
         assert_eq!(pipe_path("hand-excel"), r"\\.\pipe\hand-excel");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn pipe_path_elsewhere_is_the_socket_the_libreoffice_helper_serves() {
+        // sidecar-lo/lo_host.py's socket_path() computes the same thing.
+        let p = pipe_path("hand-excel");
+        assert!(p.ends_with("/syn-pipe-hand-excel.sock"), "{p}");
     }
 
     #[test]

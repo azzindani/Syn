@@ -1,13 +1,27 @@
 # UI tests
 
-Playwright against the real console: it starts `ui.exe` on port 7799 (not the
-7777 you browse), drives the page, and stops it again.
+Playwright against the real console: it starts `ui` (`ui.exe` on Windows) on
+port 7799 (not the 7777 you browse), drives the page, and stops it again.
 
 ```
 cd core && cargo build --bins
 cd ../tests/ui && npm install && npx playwright install chromium
 npm test
 ```
+
+On a machine that already has a Chromium Playwright can drive (a cloud
+sandbox, say), skip the install and point at it instead:
+`PW_CHROMIUM=/opt/pw-browsers/chromium npm test`.
+
+`chat.spec.mjs` "the machinery sits behind the status control" needs at
+least one hand wired, i.e. a `.env` with an `AGENT_PIPE_*` or `AGENT_CDP`
+line; copying `.env.example` to `.env` is enough.
+
+**Looking at it.** `node showcase.mjs` starts a console of its own, stages
+the states a person actually sees — the first screen, a run in progress, an
+approval, the status menu — and writes a PNG of each in dark and light, at
+desktop and phone width, to `testbed/shots/showcase`. It asserts nothing;
+it is for judging the design by eye, which no spec can do.
 
 **Rebuild after editing the page.** `widget/index.html` is `include_str!`'d
 into `ui.exe`, so a spec run against a stale binary tests the previous page
@@ -19,6 +33,9 @@ the binary, because that failure is silent and completely convincing.
 | `harness.spec.mjs` | does a command reach a document, change it, and stop when a gate says stop | nothing | ~9s |
 | `render.spec.mjs` | is what a human reads legible | nothing | ~5s |
 | `stream.spec.mjs` | is the live view actually live | nothing | ~26s |
+| `concurrent.spec.mjs` | do two runs at once each keep their own view | nothing | |
+| `shell.spec.mjs` | do the minimap, banners, budget meter, contrast and folding work | nothing | |
+| `models.spec.mjs` | does the model picker list, search and choose models | nothing (a local fake provider) | |
 | `chat.spec.mjs` | does a typed prompt reach a model and come back | `AGENT_API_KEY` and whichever model `.env` wires to the current slot | one model call |
 
 Everything but `chat.spec.mjs` is offline: no key, no network, no Office.

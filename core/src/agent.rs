@@ -26,7 +26,7 @@ use crate::labels;
 use crate::ops::OpOut;
 use crate::provider::{self, Msg};
 use crate::router::{Route, TaskKind};
-use crate::runner::{Job, Runner};
+use crate::runner::Runner;
 use crate::security;
 use crate::shell::{self, ShellPolicy};
 use crate::tools::{self, Action, ToolCall};
@@ -42,11 +42,30 @@ pub trait Brain {
 pub struct CurlBrain {
     pub base_url: String,
     pub api_key_env: String,
+    /// Where the reply goes as it is written, when someone is watching. The
+    /// reply is streamed either way (unless `AGENT_STREAM=0`): that is what
+    /// lets a long think run past a minute without being cut off.
+    pub on_delta: Option<fn(crate::sse::Kind, &str)>,
+}
+
+impl CurlBrain {
+    pub fn new(base_url: &str, api_key_env: &str) -> Self {
+        Self { base_url: base_url.into(), api_key_env: api_key_env.into(), on_delta: None }
+    }
 }
 
 impl Brain for CurlBrain {
     fn respond(&mut self, body: &str) -> Result<String, String> {
-        let (status, text) = provider::send_via_curl(&self.base_url, &self.api_key_env, body)?;
+        let (status, text) = if provider::streaming_on() {
+            let show = self.on_delta;
+            provider::send_streaming(&self.base_url, &self.api_key_env, body, &mut |k, t| {
+                if let Some(f) = show {
+                    f(k, t)
+                }
+            })?
+        } else {
+            provider::send_via_curl(&self.base_url, &self.api_key_env, body)?
+        };
         if status != 200 {
             return Err(provider::explain_error(status, &text));
         }
@@ -370,6 +389,9 @@ pub struct Agent {
     /// history was replaced behind its back will trust a half-remembered
     /// number instead of reading the cell again.
     summarised_turns: usize,
+    /// The model's own context window, in characters, when the provider's
+    /// catalog says what it is. None: only the configured budget applies.
+    window: Option<usize>,
 }
 
 impl Agent {
@@ -393,6 +415,19 @@ impl Agent {
 ",
                     if *live { " (live: reaches the window they are looking at)" } else { " (model only: no hand is driving it)" }
                 ));
+            }
+            // How to address each kind of thing that is open, once per app
+            // and only for apps that are: the grammar where the handles are,
+            // before the first call, not in a refusal after the first miss.
+            let mut apps: Vec<&str> = Vec::new();
+            for (h, _) in open {
+                let app = crate::coach::app_key(h.split(':').next().unwrap_or(""));
+                if !apps.contains(&app) && !crate::coach::selectors(app).is_empty() {
+                    apps.push(app);
+                }
+            }
+            for app in apps {
+                t.push_str(&format!("{}\n", crate::coach::selectors(app)));
             }
             t
         };
@@ -483,11 +518,11 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     /// needs the detail; one handed a silently shortened grid cannot tell
     /// that anything is missing.
     fn compact(&mut self, brain: &mut dyn Brain) {
-        if self.width() <= context_budget() {
+        if self.width() <= self.budget() {
             return;
         }
         self.prune();
-        if self.width() <= context_budget() {
+        if self.width() <= self.budget() {
             return;
         }
         // Pruning has shortened every old result it is allowed to and the
@@ -498,6 +533,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
 
     /// Shorten old tool results in place, keeping every message.
     fn prune(&mut self) {
+        let (protect, minimum) = self.prune_limits();
 
         // Newest first, exactly as `SessionCompaction.prune` walks it.
         // Two passes: decide, then apply, because opencode declines to
@@ -535,14 +571,14 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                 break;
             }
             seen += content.len();
-            if seen <= PRUNE_PROTECT || content.len() <= PRUNED_RESULT {
+            if seen <= protect || content.len() <= PRUNED_RESULT {
                 continue;
             }
             saving += content.len() - PRUNED_RESULT;
             victims.push(i);
         }
 
-        if saving < PRUNE_MINIMUM {
+        if saving < minimum {
             // Not worth the churn. Scattering markers through the history
             // to reclaim a few hundred characters costs the model more in
             // confusion than it buys in room.
@@ -566,7 +602,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     /// the turn goes out oversized, which is the behaviour we had before.
     fn summarise(&mut self, brain: &mut dyn Brain) {
         let prior = crate::summarise::prior(&self.msgs).map(str::to_string);
-        let Some(plan) = crate::summarise::plan(&self.msgs, context_budget(), prior.as_deref()) else {
+        let Some(plan) = crate::summarise::plan(&self.msgs, self.budget(), prior.as_deref()) else {
             return;
         };
         // No tools, and only the one question: the summariser is not the
@@ -664,6 +700,38 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             calls: Vec::new(),
             summarised: false,
             summarised_turns: 0,
+            window: None,
+        }
+    }
+
+    /// Size the transcript to the model it is sent to.
+    ///
+    /// The budget was one number for every model, ~60k tokens. That was
+    /// safe while every slot was a large model; with the console's picker
+    /// a 32k-token free model is two clicks away, and a run on one would
+    /// be refused by the provider long before compaction thought it was
+    /// needed. `tokens` is the window the provider's catalog gives; three
+    /// characters to a token (tool JSON is denser than prose) and a fifth
+    /// left for the reply. Only ever lowers the budget: a bigger window is
+    /// not a reason to send more.
+    pub fn fit_context(&mut self, tokens: Option<u64>) {
+        self.window = tokens.filter(|t| *t > 0).map(|t| (t.saturating_mul(12) / 5).max(8_000) as usize);
+    }
+
+    /// The character budget this run's requests must fit in.
+    fn budget(&self) -> usize {
+        let base = context_budget();
+        self.window.map_or(base, |w| base.min(w))
+    }
+
+    /// How much recent output pruning protects, and the least saving worth
+    /// rewriting for. opencode's numbers, scaled down with a small window:
+    /// protecting 160k characters of a 78k budget protects everything and
+    /// so prunes nothing.
+    fn prune_limits(&self) -> (usize, usize) {
+        match self.window {
+            Some(w) if w < context_budget() => (PRUNE_PROTECT.min(w * 2 / 3), PRUNE_MINIMUM.min(w / 3)),
+            _ => (PRUNE_PROTECT, PRUNE_MINIMUM),
         }
     }
 
@@ -704,8 +772,13 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             return Err(format!("still waiting on approval for {}: answer approve or deny first", p.program));
         }
         self.msgs.push(Msg::User(text.into()));
+        // Per turn, like the step budget: the one-line account of a turn is
+        // of that turn ("Read 1 range", not the four the conversation has
+        // read), and the empty-turn nudge a turn gets is its own.
         self.steps = 0;
         self.summarised = false;
+        self.calls.clear();
+        self.empty_turns = 0;
         Ok(())
     }
 
@@ -1069,8 +1142,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             Action::Doc { handle, call } => {
                 let tool = tc.name.clone();
                 let handle_for_status = handle.clone();
-                let id = runner.submit(Job { handle, summary: format!("agent:{tool}"), call });
-                match runner.pump(relay) {
+                match runner.run(relay, &handle, &format!("agent:{tool}"), call) {
                     Ok(Some(out)) => {
                         let detail = describe(&out);
                         self.observe(&tc.id, &Self::fenced(&detail));
@@ -1082,7 +1154,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                         Step::Ran { tool, detail }
                     }
                     Ok(None) => {
-                        let why = format!("{id}: queue is not running (paused or cancelled)");
+                        let why = format!("agent:{tool}: queue is not running (paused or cancelled)");
                         self.observe(&tc.id, &why);
                         self.narrate(relay, &tc, labels::Status::Stopped);
                         Step::Stopped(why)
@@ -1091,7 +1163,12 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                         let why = e.to_string();
                         // The model sees why it failed and may correct, but a
                         // latched kill or a dead pipe ends the run outright.
-                        self.observe(&tc.id, &format!("error: {why}"));
+                        // What the application said stays first; a known
+                        // failure gets one line of what to do after it,
+                        // because `com 0x800A03EC` alone teaches a model
+                        // nothing but to try the same call again.
+                        let app = handle_for_status.split(':').next().unwrap_or("");
+                        self.observe(&tc.id, &format!("error: {}", crate::coach::explain(app, &why, crate::coach::Caller::Loop)));
                         let fatal = matches!(
                             e,
                             crate::protocol::Error::Killed
@@ -1160,7 +1237,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
 }
 
 /// One-line rendering of an op result for the feed and the model.
-fn describe(out: &OpOut) -> String {
+pub(crate) fn describe(out: &OpOut) -> String {
     match out {
         OpOut::Grid { sheet, rows, cols } => format!("grid {sheet}: {rows}x{cols}"),
         OpOut::Text { detail } => detail.clone(),
@@ -1220,7 +1297,87 @@ mod tests {
 
     impl Drop for Budget {
         fn drop(&mut self) {
+            // It said "restored on drop" and restored nothing, so the last
+            // test's budget leaked into every test that ran after it.
+            unsafe { std::env::remove_var("AGENT_CONTEXT_CHARS") };
         }
+    }
+
+    /// A live Excel that is busy, answering the way office-host does.
+    #[derive(Debug)]
+    struct BusyExcel;
+
+    impl crate::hand::LiveHand for BusyExcel {
+        fn dispatch_call(&mut self, _: &crate::ops::Call, _: &str) -> std::io::Result<crate::hand::Reply> {
+            Ok(crate::hand::Reply {
+                ok: false,
+                preview: String::new(),
+                error: "com 0x800AC472: Exception from HRESULT: 0x800AC472".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn the_registry_says_how_to_address_each_kind_of_thing_open() {
+        let mut a = agent("x");
+        a.show_registry(&[
+            ("excel:plan.xlsx:Sheet1".into(), true),
+            ("excel:other.xlsx:data".into(), true),
+            ("ui:Calculator::self".into(), true),
+        ]);
+        let Some(Msg::System(note)) = a.msgs.get(1) else { panic!("no status note") };
+        assert_eq!(note.matches("Excel selectors name the sheet").count(), 1, "once per app, not per handle: {note}");
+        assert!(note.contains(":tree"), "{note}");
+        assert!(!note.contains("Word selectors"), "only for apps that are open: {note}");
+    }
+
+    #[test]
+    fn a_busy_application_is_explained_to_the_model_not_just_reported() {
+        let (mut r, mut run, _s, h) = world();
+        run.attach_hand_as("hand-excel", vec!["excel".into()], Box::new(BusyExcel));
+        run.mark_live(&h).unwrap();
+        let mut a = agent("read it");
+        let mut brain = FakeBrain::new(&[call_reply("read", &format!(r#"{{"handle":"{h}","selector":"Sheet1!A1"}}"#))]);
+        let _ = a.step(&mut brain, &mut r, &mut run, &ShellPolicy::default());
+        let Some(Msg::Tool { content, .. }) = a.msgs.last() else { panic!("no result") };
+        assert!(content.contains("0x800AC472"), "the application's words stay: {content}");
+        assert!(content.contains("What to do:") && content.contains("press Esc"), "{content}");
+    }
+
+    #[test]
+    fn a_small_model_gets_a_budget_it_can_hold() {
+        let _b = Budget::set("240000");
+        let mut a = agent("x");
+        assert_eq!(a.budget(), 240_000);
+        a.fit_context(Some(32_768));
+        assert_eq!(a.budget(), 78_643, "32k tokens at three characters, a fifth left for the reply");
+        let (protect, minimum) = a.prune_limits();
+        assert!(protect < a.budget() && minimum < protect, "{protect} {minimum}");
+        // A bigger window never raises it, and an unknown one changes nothing.
+        a.fit_context(Some(1_000_000));
+        assert_eq!(a.budget(), 240_000);
+        a.fit_context(None);
+        assert_eq!((a.budget(), a.prune_limits()), (240_000, (PRUNE_PROTECT, PRUNE_MINIMUM)));
+    }
+
+    #[test]
+    fn a_long_run_on_a_small_model_is_pruned_before_the_provider_refuses_it() {
+        let _b = Budget::set("240000");
+        let (mut r, mut run, s, h) = world();
+        let mut a = agent("read a lot");
+        a.fit_context(Some(32_768));
+        // Twenty 6k-character results: 120k characters, inside the default
+        // budget and far outside a 32k-token model's.
+        for i in 0..20 {
+            a.msgs.push(Msg::AssistantCalls(format!(r#"[{{"id":"r{i}","type":"function","function":{{"name":"read","arguments":"{{}}"}}}}]"#)));
+            a.msgs.push(Msg::Tool { id: format!("r{i}"), content: "x".repeat(6_000) });
+        }
+        assert!(a.width() > a.budget());
+        let mut brain = FakeBrain::new(&[prose_reply("done")]);
+        let _ = a.step(&mut brain, &mut r, &mut run, &ShellPolicy::default());
+        assert!(a.pruned > 0, "nothing was pruned for a model this small");
+        assert!(a.width() < 120_000, "still {} characters", a.width());
+        let _ = (&s, &h);
     }
 
     fn call_reply(name: &str, args: &str) -> String {
@@ -1373,7 +1530,7 @@ mod tests {
         // 142 and step 101 the provider answered `413 Request too large`,
         // with two of three documents untouched.
         //
-        // The policy is opencode's (DIGEST-06 section 5): walk newest
+        // The policy is opencode's (docs/design/DIGEST-06 section 5): walk newest
         // first, protect the last turn outright, protect the newest
         // PRUNE_PROTECT characters of tool output, and only act at all if
         // the saving clears PRUNE_MINIMUM.

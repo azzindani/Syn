@@ -45,7 +45,7 @@ pub const SERVICES: &[ToolSpec] = &[
     ToolSpec {
         name: "manual",
         description: "Read how a tool behaves before you use it. These tools drive applications a human has open, and each one has behaviour worth knowing first: which write fills a whole range in one call, why a chart anchored to a cell overlaps its neighbour, what a pivot cannot do. It does NOT tell you what to build or in what order -- that is yours to decide, and `plan` is where you record it. Touches no document and does not count as progress. Costs one step and routinely saves twenty. Example: manual{\"topic\":\"excel\"} before the first write into a workbook.",
-        params: r#"{"type":"object","properties":{"topic":{"type":"string","enum":["index","loop","excel","word","powerpoint"],"description":"which manual. Start with index if unsure."}},"required":["topic"],"additionalProperties":false}"#,
+        params: r#"{"type":"object","properties":{"topic":{"type":"string","enum":["index","loop","excel","word","powerpoint","windows","browser"],"description":"which manual. Start with index if unsure."}},"required":["topic"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "plan",

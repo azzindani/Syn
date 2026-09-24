@@ -117,30 +117,30 @@ pub fn load_env(start: &Path) -> Option<Loaded> {
 /// Env var naming the model for one router slot.
 pub fn model_env_key(model: Model) -> &'static str {
     match model {
-        Model::Small => "AGENT_MODEL_LUNA",
-        Model::Standard => "AGENT_MODEL_TERRA",
+        Model::Small => "AGENT_MODEL_SMALL",
+        Model::Standard => "AGENT_MODEL_STANDARD",
         Model::Coding => "AGENT_MODEL_CODING",
-        Model::Reasoning => "AGENT_MODEL_ASTRA",
+        Model::Reasoning => "AGENT_MODEL_REASONING",
     }
 }
 
-/// The endpoint env var for one slot, e.g. `AGENT_BASE_URL_LUNA`.
+/// The endpoint env var for one slot, e.g. `AGENT_BASE_URL_SMALL`.
 pub fn base_url_env_key(model: Model) -> &'static str {
     match model {
-        Model::Small => "AGENT_BASE_URL_LUNA",
-        Model::Standard => "AGENT_BASE_URL_TERRA",
+        Model::Small => "AGENT_BASE_URL_SMALL",
+        Model::Standard => "AGENT_BASE_URL_STANDARD",
         Model::Coding => "AGENT_BASE_URL_CODING",
-        Model::Reasoning => "AGENT_BASE_URL_ASTRA",
+        Model::Reasoning => "AGENT_BASE_URL_REASONING",
     }
 }
 
-/// The key env var for one slot, e.g. `AGENT_API_KEY_LUNA`.
+/// The key env var for one slot, e.g. `AGENT_API_KEY_SMALL`.
 pub fn api_key_env_key(model: Model) -> &'static str {
     match model {
-        Model::Small => "AGENT_API_KEY_LUNA",
-        Model::Standard => "AGENT_API_KEY_TERRA",
+        Model::Small => "AGENT_API_KEY_SMALL",
+        Model::Standard => "AGENT_API_KEY_STANDARD",
         Model::Coding => "AGENT_API_KEY_CODING",
-        Model::Reasoning => "AGENT_API_KEY_ASTRA",
+        Model::Reasoning => "AGENT_API_KEY_REASONING",
     }
 }
 
@@ -256,14 +256,14 @@ mod tests {
     #[test]
     fn parses_comments_quotes_and_export() {
         let got = parse_env(
-            "# comment\n\nexport AGENT_API_KEY=sk-or-v1-abc\nAGENT_MODEL_CODING=\"vendor/model-x\"\nAGENT_MODEL_LUNA='vendor/model-y'\nnoequals\n=novalue\nAGENT_BASE_URL = https://h.test/v1 \n",
+            "# comment\n\nexport AGENT_API_KEY=sk-or-v1-abc\nAGENT_MODEL_CODING=\"vendor/model-x\"\nAGENT_MODEL_SMALL='vendor/model-y'\nnoequals\n=novalue\nAGENT_BASE_URL = https://h.test/v1 \n",
         );
         assert_eq!(
             got,
             vec![
                 ("AGENT_API_KEY".to_string(), "sk-or-v1-abc".to_string()),
                 ("AGENT_MODEL_CODING".to_string(), "vendor/model-x".to_string()),
-                ("AGENT_MODEL_LUNA".to_string(), "vendor/model-y".to_string()),
+                ("AGENT_MODEL_SMALL".to_string(), "vendor/model-y".to_string()),
                 ("AGENT_BASE_URL".to_string(), "https://h.test/v1".to_string()),
             ]
         );
@@ -284,9 +284,9 @@ mod tests {
         };
         assert_eq!(model_id_with(pick("AGENT_MODEL_CODING", "vendor/code-1"), Model::Coding), "vendor/code-1");
         // trimmed
-        assert_eq!(model_id_with(pick("AGENT_MODEL_LUNA", "  v/l  "), Model::Small), "v/l");
+        assert_eq!(model_id_with(pick("AGENT_MODEL_SMALL", "  v/l  "), Model::Small), "v/l");
         // blank override is not a selection
-        assert_eq!(model_id_with(pick("AGENT_MODEL_TERRA", "   "), Model::Standard), crate::provider::model_id(Model::Standard));
+        assert_eq!(model_id_with(pick("AGENT_MODEL_STANDARD", "   "), Model::Standard), crate::provider::model_id(Model::Standard));
         // unset slot keeps the compiled default
         assert_eq!(model_id_with(|_| None, Model::Reasoning), crate::provider::model_id(Model::Reasoning));
     }
@@ -372,12 +372,12 @@ mod tests {
     #[test]
     fn a_blank_override_is_not_an_override() {
         use crate::router::Model;
-        // A .env line left as `AGENT_BASE_URL_TERRA=` must not point the
+        // A .env line left as `AGENT_BASE_URL_STANDARD=` must not point the
         // slot at the empty string and fail every call on it.
         let env = |k: &str| match k {
             "AGENT_BASE_URL" => Some("https://openrouter.ai/api/v1".to_string()),
-            "AGENT_BASE_URL_TERRA" => Some("   ".to_string()),
-            "AGENT_API_KEY_TERRA" => Some(String::new()),
+            "AGENT_BASE_URL_STANDARD" => Some("   ".to_string()),
+            "AGENT_API_KEY_STANDARD" => Some(String::new()),
             _ => None,
         };
         let (url, key) = endpoint_with(env, Model::Standard);

@@ -208,6 +208,9 @@ fn main() {
         }
     };
     let live = Arc::new(Live::default());
+    // The log this console's own child writes, which the view follows
+    // while a turn the person started here is running.
+    let own_log = cli.lock().ok().map(|c| core::live::log_of(c.child.id()));
     // A run in another process writes its own log; `--tail` pins the
     // console to one file rather than following whichever is newest.
     let pinned: Option<std::path::PathBuf> = args
@@ -251,6 +254,7 @@ fn main() {
         let live = Arc::clone(&live);
         let catalog = Arc::clone(&catalog);
         let pinned = pinned.clone();
+        let own_log = own_log.clone();
         let allowed_origins = allowed_origins.clone();
         std::thread::spawn(move || {
             let mut s = s;
@@ -378,7 +382,10 @@ data: {{\"source\":\"{}\",\"since\":{}}}
                 }
                 let mut beat = Instant::now();
                 loop {
-                    let src = pinned.clone().or_else(core::live::newest);
+                    let current = core::live::named(&source);
+                    let src = pinned.clone().or_else(|| {
+                        core::live::follow(current.as_deref(), own_log.as_deref(), live.busy.load(Ordering::SeqCst))
+                    });
                     let name =
                         src.as_ref().and_then(|p| p.file_name()).and_then(|f| f.to_str()).unwrap_or("").to_string();
                     // A different run took over. Tell the page, so it starts
@@ -460,7 +467,16 @@ data: {{\"source\":\"{}\",\"since\":{}}}
                 // the one worth watching. A finished run stops touching its
                 // file, so an active one wins on mtime without this having
                 // to know which processes are alive.
-                let src = pinned.clone().or_else(core::live::newest);
+                // The run the page is on, so a poller sticks with it the
+                // way the stream does rather than flipping between two.
+                let current = req
+                    .path
+                    .split_once("source=")
+                    .and_then(|(_, v)| v.split('&').next())
+                    .and_then(core::live::named);
+                let src = pinned.clone().or_else(|| {
+                    core::live::follow(current.as_deref(), own_log.as_deref(), live.busy.load(Ordering::SeqCst))
+                });
                 let (n, lines, running, name) = match &src {
                     Some(p) => {
                         let (n, lines) = core::live::read_from(p, since);

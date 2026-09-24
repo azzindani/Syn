@@ -30,6 +30,7 @@ Office, and a headless instance has no human to save for.
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -144,40 +145,68 @@ def rgb(v):
 
 
 class Office:
-    """One LibreOffice instance, started and owned by this helper."""
+    """One LibreOffice instance, started and owned by this helper -- or, when
+    a helper for the same pipe died without stopping it, adopted from it."""
 
-    def __init__(self, app, visible):
+    def __init__(self, app, visible, pipe=None):
         self.app = app
+        self.visible = visible
+        self.proc = None
+        self.profile = None
+        local = uno.getComponentContext()
+        resolver = local.ServiceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", local)
+        if pipe:
+            # Named after the helper's own pipe, not this process, so the
+            # next helper on that pipe can find it. A helper killed outright
+            # (SIGKILL skips every handler) used to leave its LibreOffice
+            # running with the document open and locked; the replacement
+            # started a second one, which could not open the file. Office's
+            # own rule is the one to copy: attach to the running app.
+            self.pipe = "synlo_" + re.sub(r"[^A-Za-z0-9_]", "_", pipe)
+            ctx = self._resolve(resolver, time.time() + 1)
+            if ctx is not None:
+                self.ctx = ctx
+                self.desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
+                trace("adopted the LibreOffice already on %s" % self.pipe)
+                return
+        else:
+            self.pipe = "synlo_%s_%d" % (app, os.getpid())
         self.profile = tempfile.mkdtemp(prefix="syn-lo-%s-" % app)
-        self.pipe = "synlo_%s_%d" % (app, os.getpid())
         args = [shutil.which("soffice") or "/usr/lib/libreoffice/program/soffice",
                 "--norestore", "--nologo", "--nodefault", "--nolockcheck",
                 "-env:UserInstallation=" + uno.systemPathToFileUrl(self.profile),
                 "--accept=pipe,name=%s;urp;" % self.pipe]
-        self.visible = visible
         if not visible:
             args[1:1] = ["--headless", "--invisible"]
         # Its own session, so stopping it takes the whole tree: `soffice`
         # is a script that starts oosplash that starts soffice.bin.
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, start_new_session=True)
-        local = uno.getComponentContext()
-        resolver = local.ServiceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", local)
-        deadline = time.time() + 90
-        while True:
-            try:
-                self.ctx = resolver.resolve("uno:pipe,name=%s;urp;StarOffice.ComponentContext" % self.pipe)
-                break
-            except Exception:
-                if self.proc.poll() is not None:
-                    raise RuntimeError("LibreOffice exited (%s) before it was ready" % self.proc.returncode)
-                if time.time() > deadline:
-                    raise RuntimeError("LibreOffice did not answer on its pipe within 90s")
-                time.sleep(0.3)
+        self.ctx = self._resolve(resolver, time.time() + 90)
+        if self.ctx is None:
+            raise RuntimeError("LibreOffice did not answer on its pipe within 90s")
         self.desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
         trace("LibreOffice ready on %s" % self.pipe)
 
+    def _resolve(self, resolver, deadline):
+        while True:
+            try:
+                return resolver.resolve("uno:pipe,name=%s;urp;StarOffice.ComponentContext" % self.pipe)
+            except Exception:
+                if self.proc is not None and self.proc.poll() is not None:
+                    raise RuntimeError("LibreOffice exited (%s) before it was ready" % self.proc.returncode)
+                if time.time() > deadline:
+                    return None
+                time.sleep(0.3)
+
     def stop(self):
+        if self.proc is None:
+            # Adopted: no process of ours to signal, so ask it to quit.
+            try:
+                self.desktop.terminate()
+            except Exception:
+                pass
+            return
         try:
             os.killpg(self.proc.pid, signal.SIGTERM)
             self.proc.wait(10)
@@ -776,6 +805,52 @@ def handle_line(office, line):
         return reply_fail("%s failed: %s" % (method, msg))
 
 
+# How many clients may be connected at once: the console, a couple of MCP
+# clients and a terminal. One used to be the limit, and a second client --
+# Claude Desktop holding Excel while the console asked for it -- waited in
+# the listen backlog with no answer until the first went away.
+MAX_CLIENTS = 8
+
+# LibreOffice is driven by one caller at a time. Clients interleave at the
+# granularity of one request line, exactly as they would through Excel.
+_ONE_AT_A_TIME = threading.Lock()
+
+
+def already_served(path):
+    """Whether a live helper is already answering on `path`. Binding over it
+    would unlink its socket and leave it serving nobody."""
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.settimeout(2)
+    try:
+        c.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        c.close()
+
+
+def client(office, conn):
+    trace("client connected")
+    try:
+        with conn, conn.makefile("r", encoding="utf-8", newline="\n") as rd, \
+                conn.makefile("w", encoding="utf-8", newline="\n") as wr:
+            for line in rd:
+                if not line.strip():
+                    continue
+                trace("<- " + line.strip()[:200])
+                with _ONE_AT_A_TIME:
+                    out = handle_line(office, line)
+                trace("-> " + out[:200])
+                wr.write(out + "\n")
+                wr.flush()
+    except OSError as e:
+        # A client that vanishes mid-reply ends its connection, not the
+        # helper.
+        trace("client dropped: %s" % e)
+    trace("client gone")
+
+
 def serve(office, path):
     try:
         os.unlink(path)
@@ -784,22 +859,22 @@ def serve(office, path):
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(path)
     os.chmod(path, 0o600)  # this user's helper, nobody else's
-    srv.listen(1)
+    srv.listen(MAX_CLIENTS)
     print("lo-host live: app=%s pipe=%s" % (office.app, path), flush=True)
+    live = []
     while True:
         conn, _ = srv.accept()
-        trace("client connected")
-        with conn, conn.makefile("r", encoding="utf-8", newline="\n") as rd, \
-                conn.makefile("w", encoding="utf-8", newline="\n") as wr:
-            for line in rd:
-                if not line.strip():
-                    continue
-                trace("<- " + line.strip()[:200])
-                out = handle_line(office, line)
-                trace("-> " + out[:200])
-                wr.write(out + "\n")
-                wr.flush()
-        trace("client gone; waiting for the next")
+        live = [t for t in live if t.is_alive()]
+        if len(live) >= MAX_CLIENTS:
+            # Say so rather than leave it hanging on a read that never ends.
+            try:
+                conn.sendall((json.dumps({"ok": False, "error": "busy: %d clients are already connected to this helper" % MAX_CLIENTS}) + "\n").encode())
+            finally:
+                conn.close()
+            continue
+        t = threading.Thread(target=client, args=(office, conn), daemon=True)
+        t.start()
+        live.append(t)
 
 
 def main():
@@ -811,8 +886,13 @@ def main():
     a = ap.parse_args()
     TRACE = a.trace or os.environ.get("AGENT_TRACE") == "1"
     visible = os.environ.get("AGENT_LO_VISIBLE") == "1" and bool(os.environ.get("DISPLAY"))
-    office = Office(a.app, visible)
     path = socket_path(a.pipe)
+    # Before LibreOffice is started, and before the shutdown below is
+    # armed: that unlinks the socket, which here is the other helper's.
+    if already_served(path):
+        print("lo-host: another helper is already serving %s; not taking it over" % path, flush=True)
+        sys.exit(3)
+    office = Office(a.app, visible, a.pipe)
 
     def shutdown(*_):
         try:

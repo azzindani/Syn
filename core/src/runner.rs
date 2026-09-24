@@ -155,6 +155,11 @@ impl Runner {
         }
     }
 
+    /// The name of the hand that would serve `app`, if any.
+    pub fn hand_serving(&self, app: &str) -> Option<String> {
+        self.route(app).map(str::to_string)
+    }
+
     pub fn is_live(&self, handle: &str) -> bool {
         self.hand_for(handle).is_some()
     }
@@ -242,8 +247,28 @@ impl Runner {
     /// `Ok(None)` means the queue is not running: paused, cancelled or
     /// frozen by the doom-loop gate.
     pub fn run(&mut self, relay: &mut Relay, handle: &str, summary: &str, call: Call) -> Result<Option<OpOut>> {
+        // A paused run takes nothing new. This used to queue the job anyway
+        // behind the pause; the first call after `resume` then ran it and
+        // was handed its answer, and every read from there on came back one
+        // behind -- asked for A1:D4, given the A1:C3 refused before. The
+        // kill switch still answers as itself.
+        if matches!(self.queue.state(), QueueState::Paused | QueueState::Cancelled) {
+            self.guard.armed()?;
+            return Ok(None);
+        }
         self.submit(Job { handle: handle.into(), summary: summary.into(), call });
         self.pump(relay)
+    }
+
+    /// Thaw a run the gates froze, when the thing that froze it is dealt
+    /// with: a human sent the next message after a repeated call, or a
+    /// fresh hand replaced one whose pipe died. Nothing queued is carried
+    /// over. A latched kill is not a pause and stays latched.
+    pub fn thaw(&mut self, relay: &mut Relay) {
+        if self.queue.state() == &QueueState::Paused {
+            let _ = self.resume(relay);
+            relay.forget_calls(&self.session);
+        }
     }
 
     /// Execute the next queued job. DoomLoop auto-pauses the run.
@@ -592,6 +617,31 @@ mod tests {
             styles: HashMap::new(),
         });
         h
+    }
+
+    #[test]
+    fn a_call_made_while_paused_never_runs_later() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        let read = |sel: &str| Call::Read(ReadArgs { selector: sel.into() });
+        for _ in 0..3 {
+            let _ = run.run(&mut r, &h, "read", read("Sheet1"));
+        }
+        assert_eq!(run.state(), &QueueState::Paused, "three identical calls freeze the run");
+        assert!(run.run(&mut r, &h, "read", read("Sheet1!A1")).unwrap().is_none());
+        assert_eq!(run.pending(), 0, "a refused call must not wait behind the pause");
+        run.thaw(&mut r);
+        let out = run.run(&mut r, &h, "read", read("Sheet1!B1")).unwrap().unwrap();
+        assert!(format!("{out:?}").contains("1x1"), "the call after a thaw gets its own answer: {out:?}");
+    }
+
+    #[test]
+    fn thawing_never_undoes_the_kill_switch() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.kill();
+        run.thaw(&mut r);
+        assert!(matches!(run.run(&mut r, &h, "read", Call::Read(ReadArgs { selector: "Sheet1".into() })), Err(Error::Killed)));
     }
 
     #[test]

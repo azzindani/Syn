@@ -373,14 +373,21 @@ pub fn load() -> Vec<Snapshot> {
     std::fs::read_to_string(cache_path()).map(|t| from_json(&t, &providers())).unwrap_or_default()
 }
 
+/// The context window, in tokens, the cached catalogs give for a model.
+/// What the loop sizes its transcript to (`Agent::fit_context`).
+pub fn context_of(id: &str) -> Option<u64> {
+    load().iter().flat_map(|s| &s.entries).find(|e| e.id == id && e.context > 0).map(|e| e.context)
+}
+
 pub fn save(snaps: &[Snapshot]) {
     let p = cache_path();
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     // Written aside and renamed, so a console reading it mid-write never
-    // sees half a list.
-    let tmp = p.with_extension("json.tmp");
+    // sees half a list. Aside per process: the console and a terminal CLI
+    // refreshing at once would otherwise interleave into one temp file.
+    let tmp = p.with_extension(format!("json.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, to_json(snaps)).is_ok() {
         let _ = std::fs::rename(&tmp, &p);
     }

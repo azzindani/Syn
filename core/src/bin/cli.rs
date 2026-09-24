@@ -858,12 +858,16 @@ fn main() {
                     continue;
                 }
                 let (r, model) = (c.route, c.model);
+                // A new goal is the human's go-ahead after a repeated call
+                // or a dead pipe froze the last run.
+                runner.thaw(&mut relay);
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
                 on = (c.base_url, c.key_env);
                 let mut brain = CurlBrain { base_url: on.0.clone(), api_key_env: on.1.clone() };
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
+                a.fit_context(core::catalog::context_of(&model));
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 agent = Some(a);
@@ -883,6 +887,12 @@ fn main() {
                     continue;
                 }
                 let (r, model) = (c.route, c.model);
+                // The human's next message is the confirmation the
+                // repeated-call gate asks for. Without this, one stopped
+                // turn left the runner paused and every message after it
+                // died on its first call with "queue is not running", with
+                // nothing in the console able to resume it.
+                runner.thaw(&mut relay);
                 match agent.as_mut() {
                     Some(a) => {
                         if let Err(e) = a.follow_up(text) {
@@ -896,6 +906,9 @@ fn main() {
                     None => agent = Some(Agent::new(&session, text, &model, r)),
                 }
                 let a = agent.as_mut().expect("just set");
+                // Sized to the model this turn goes to, which the picker
+                // may have changed since the last one.
+                a.fit_context(core::catalog::context_of(&model));
                 // Before every turn, not once at construction: a hand
                 // attached mid-conversation has to be visible to the next
                 // message, or the model keeps saying it cannot reach anything.
@@ -942,6 +955,7 @@ fn main() {
                         r.effort = e;
                     }
                     a.retarget(&id, r);
+                    a.fit_context(core::catalog::context_of(&id));
                     // Each slot on its own endpoint. This used to keep the
                     // first brain, which sent a slot's id to whichever host
                     // the failed model lived on -- harmless while every slot
@@ -1099,6 +1113,9 @@ fn main() {
                     Ok(h) => {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         runner.attach_hand_as(pipe, apps, Box::new(h));
+                        // Reconnecting is how a human recovers from a dead
+                        // pipe, which froze the run.
+                        runner.thaw(&mut relay);
                         pr!("RECEIPT hand={pipe} claims={claims}");
                     }
                     Err(e) => pr!("ERROR hand {e}"),
@@ -1124,6 +1141,7 @@ fn main() {
                         let claims = if apps.is_empty() { "any".to_string() } else { apps.join(",") };
                         let name = format!("cdp-{addr}");
                         runner.attach_hand_as(&name, apps, Box::new(c));
+                        runner.thaw(&mut relay);
                         pr!("RECEIPT hand={name} claims={claims} pages={open:?}");
                     }
                     Err(e) => pr!("ERROR cdp {e}"),

@@ -226,5 +226,113 @@ class NothingIsLeftRunning(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class Gate:
+    """One MCP server over stdio, for tests that need more than one."""
+
+    def __init__(self, env, name):
+        self.p = subprocess.Popen([mcpgate_exe()], cwd=REPO, env=env, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self.n = 0
+        self.rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                                "clientInfo": {"name": name, "version": "1"}})
+
+    def rpc(self, method, params):
+        self.n += 1
+        self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params}) + "\n")
+        self.p.stdin.flush()
+        return json.loads(self.p.stdout.readline())
+
+    def call(self, tool, **args):
+        r = self.rpc("tools/call", {"name": tool, "arguments": args})["result"]
+        return r.get("isError", False), r["content"][0]["text"]
+
+    def close(self):
+        self.p.stdin.close()
+        self.p.wait(60)
+        self.p.stdout.close()
+
+
+@unittest.skipIf(REASON, REASON or "")
+class TwoSessionsAtOnce(unittest.TestCase):
+    """Two MCP clients on one machine -- a desktop app and the console, or
+    two desktop apps -- driving the same Excel, the way a person would have
+    them. A helper used to serve one client at a time, and the second one's
+    `open` hung until the first went away."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="syn-lo-two-")
+        cls.docs = os.path.join(cls.dir, "docs")
+        subprocess.run([PYTHON, os.path.join(REPO, "sidecar-lo", "make_fixtures.py"), cls.docs],
+                       check=True, capture_output=True, timeout=180)
+        cls.pipe = "two%d" % os.getpid()
+        cls.env = dict(os.environ, AGENT_ENV_FILE=os.path.join(cls.dir, "no.env"),
+                       AGENT_HOME=os.path.join(cls.dir, "home"), AGENT_PYTHON=PYTHON,
+                       AGENT_PIPE_EXCEL=cls.pipe + "-excel", AGENT_PIPE_WORD=cls.pipe + "-word",
+                       AGENT_PIPE_PPT=cls.pipe + "-ppt", AGENT_MCP_ROOTS=cls.docs)
+        for k in ("AGENT_MCP_APPS", "AGENT_MCP_LAUNCH", "AGENT_OFFICE_HOST"):
+            cls.env.pop(k, None)
+        cls.a = Gate(cls.env, "session-a")
+        cls.b = Gate(cls.env, "session-b")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.a.close()
+        cls.b.close()
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def ok(self, gate, tool, **args):
+        err, text = gate.call(tool, **args)
+        self.assertFalse(err, "%s %s failed: %s" % (tool, args, text))
+        return text
+
+    def test_a_both_sessions_drive_one_workbook_and_see_each_other(self):
+        wb = os.path.join(self.docs, "sales.xlsx")
+        self.ok(self.a, "open", app="excel", path=wb)
+        started = time.time()
+        opened = self.ok(self.b, "open", app="excel", path=wb)
+        self.assertLess(time.time() - started, 10, "the second session waited on the first")
+        self.assertIn("already open", opened)
+        h = "excel:sales.xlsx:workbook"
+        self.ok(self.b, "write", handle=h, selector="data!F1", values="from b")
+        self.assertIn("from b", self.ok(self.a, "read", handle=h, selector="data!F1"))
+        self.ok(self.a, "write", handle=h, selector="data!F2", values="from a")
+        self.assertIn("from a", self.ok(self.b, "read", handle=h, selector="data!F2"))
+
+    def test_b_one_session_holds_three_apps_while_the_other_works(self):
+        # Excel, Word and PowerPoint in one session, one helper each, while
+        # the other session keeps using Excel.
+        self.ok(self.a, "open", app="word", path=os.path.join(self.docs, "memo.docx"))
+        self.ok(self.a, "open", app="powerpoint", path=os.path.join(self.docs, "deck.pptx"))
+        self.assertIn("Site visit memo", self.ok(self.a, "read", handle="word:memo.docx:body", selector="p0"))
+        self.ok(self.a, "struct", handle="ppt:deck.pptx:deck", verb="createSlide", title="Shared", bullets=["one", "two"])
+        self.assertIn("Shared", self.ok(self.a, "read", handle="ppt:deck.pptx:deck", selector="s1"))
+        self.assertIn("Region", self.ok(self.b, "read", handle="excel:sales.xlsx:workbook", selector="data!A1"))
+
+    def test_c_a_helper_that_dies_is_recovered_by_opening_again(self):
+        # Killed outright, so nothing of it gets to clean up: its LibreOffice
+        # is left running with the workbook open. The session must say how
+        # to recover, recover on `open`, and not refuse the retry as a loop.
+        h = "excel:sales.xlsx:workbook"
+        self.ok(self.a, "read", handle=h, selector="data!A1:B2")
+        pids = subprocess.run(["pgrep", "-f", "lo_host.py --pipe %s-excel" % self.pipe],
+                              capture_output=True, text=True).stdout.split()
+        self.assertTrue(pids)
+        for pid in pids:
+            os.kill(int(pid), 9)
+        time.sleep(1)
+        err, text = self.a.call("read", handle=h, selector="data!A1:B2")
+        self.assertTrue(err)
+        self.assertIn("open", text)
+        err, text = self.a.call("read", handle=h, selector="data!A1:B2")
+        self.assertTrue(err)
+        self.assertIn("Call `open`", text, "a paused session must say how to mend it")
+        self.assertIn("already open", self.ok(self.a, "open", app="excel", path=os.path.join(self.docs, "sales.xlsx")))
+        self.assertIn("Region", self.ok(self.a, "read", handle=h, selector="data!A1:B2"))
+        # The other session reconnects the same way.
+        self.ok(self.b, "open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
+        self.assertIn("Region", self.ok(self.b, "read", handle=h, selector="data!A1"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -370,6 +370,9 @@ pub struct Agent {
     /// history was replaced behind its back will trust a half-remembered
     /// number instead of reading the cell again.
     summarised_turns: usize,
+    /// The model's own context window, in characters, when the provider's
+    /// catalog says what it is. None: only the configured budget applies.
+    window: Option<usize>,
 }
 
 impl Agent {
@@ -483,11 +486,11 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     /// needs the detail; one handed a silently shortened grid cannot tell
     /// that anything is missing.
     fn compact(&mut self, brain: &mut dyn Brain) {
-        if self.width() <= context_budget() {
+        if self.width() <= self.budget() {
             return;
         }
         self.prune();
-        if self.width() <= context_budget() {
+        if self.width() <= self.budget() {
             return;
         }
         // Pruning has shortened every old result it is allowed to and the
@@ -498,6 +501,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
 
     /// Shorten old tool results in place, keeping every message.
     fn prune(&mut self) {
+        let (protect, minimum) = self.prune_limits();
 
         // Newest first, exactly as `SessionCompaction.prune` walks it.
         // Two passes: decide, then apply, because opencode declines to
@@ -535,14 +539,14 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                 break;
             }
             seen += content.len();
-            if seen <= PRUNE_PROTECT || content.len() <= PRUNED_RESULT {
+            if seen <= protect || content.len() <= PRUNED_RESULT {
                 continue;
             }
             saving += content.len() - PRUNED_RESULT;
             victims.push(i);
         }
 
-        if saving < PRUNE_MINIMUM {
+        if saving < minimum {
             // Not worth the churn. Scattering markers through the history
             // to reclaim a few hundred characters costs the model more in
             // confusion than it buys in room.
@@ -566,7 +570,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     /// the turn goes out oversized, which is the behaviour we had before.
     fn summarise(&mut self, brain: &mut dyn Brain) {
         let prior = crate::summarise::prior(&self.msgs).map(str::to_string);
-        let Some(plan) = crate::summarise::plan(&self.msgs, context_budget(), prior.as_deref()) else {
+        let Some(plan) = crate::summarise::plan(&self.msgs, self.budget(), prior.as_deref()) else {
             return;
         };
         // No tools, and only the one question: the summariser is not the
@@ -664,6 +668,38 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             calls: Vec::new(),
             summarised: false,
             summarised_turns: 0,
+            window: None,
+        }
+    }
+
+    /// Size the transcript to the model it is sent to.
+    ///
+    /// The budget was one number for every model, ~60k tokens. That was
+    /// safe while every slot was a large model; with the console's picker
+    /// a 32k-token free model is two clicks away, and a run on one would
+    /// be refused by the provider long before compaction thought it was
+    /// needed. `tokens` is the window the provider's catalog gives; three
+    /// characters to a token (tool JSON is denser than prose) and a fifth
+    /// left for the reply. Only ever lowers the budget: a bigger window is
+    /// not a reason to send more.
+    pub fn fit_context(&mut self, tokens: Option<u64>) {
+        self.window = tokens.filter(|t| *t > 0).map(|t| (t.saturating_mul(12) / 5).max(8_000) as usize);
+    }
+
+    /// The character budget this run's requests must fit in.
+    fn budget(&self) -> usize {
+        let base = context_budget();
+        self.window.map_or(base, |w| base.min(w))
+    }
+
+    /// How much recent output pruning protects, and the least saving worth
+    /// rewriting for. opencode's numbers, scaled down with a small window:
+    /// protecting 160k characters of a 78k budget protects everything and
+    /// so prunes nothing.
+    fn prune_limits(&self) -> (usize, usize) {
+        match self.window {
+            Some(w) if w < context_budget() => (PRUNE_PROTECT.min(w * 2 / 3), PRUNE_MINIMUM.min(w / 3)),
+            _ => (PRUNE_PROTECT, PRUNE_MINIMUM),
         }
     }
 
@@ -704,8 +740,13 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             return Err(format!("still waiting on approval for {}: answer approve or deny first", p.program));
         }
         self.msgs.push(Msg::User(text.into()));
+        // Per turn, like the step budget: the one-line account of a turn is
+        // of that turn ("Read 1 range", not the four the conversation has
+        // read), and the empty-turn nudge a turn gets is its own.
         self.steps = 0;
         self.summarised = false;
+        self.calls.clear();
+        self.empty_turns = 0;
         Ok(())
     }
 
@@ -1219,7 +1260,46 @@ mod tests {
 
     impl Drop for Budget {
         fn drop(&mut self) {
+            // It said "restored on drop" and restored nothing, so the last
+            // test's budget leaked into every test that ran after it.
+            unsafe { std::env::remove_var("AGENT_CONTEXT_CHARS") };
         }
+    }
+
+    #[test]
+    fn a_small_model_gets_a_budget_it_can_hold() {
+        let _b = Budget::set("240000");
+        let mut a = agent("x");
+        assert_eq!(a.budget(), 240_000);
+        a.fit_context(Some(32_768));
+        assert_eq!(a.budget(), 78_643, "32k tokens at three characters, a fifth left for the reply");
+        let (protect, minimum) = a.prune_limits();
+        assert!(protect < a.budget() && minimum < protect, "{protect} {minimum}");
+        // A bigger window never raises it, and an unknown one changes nothing.
+        a.fit_context(Some(1_000_000));
+        assert_eq!(a.budget(), 240_000);
+        a.fit_context(None);
+        assert_eq!((a.budget(), a.prune_limits()), (240_000, (PRUNE_PROTECT, PRUNE_MINIMUM)));
+    }
+
+    #[test]
+    fn a_long_run_on_a_small_model_is_pruned_before_the_provider_refuses_it() {
+        let _b = Budget::set("240000");
+        let (mut r, mut run, s, h) = world();
+        let mut a = agent("read a lot");
+        a.fit_context(Some(32_768));
+        // Twenty 6k-character results: 120k characters, inside the default
+        // budget and far outside a 32k-token model's.
+        for i in 0..20 {
+            a.msgs.push(Msg::AssistantCalls(format!(r#"[{{"id":"r{i}","type":"function","function":{{"name":"read","arguments":"{{}}"}}}}]"#)));
+            a.msgs.push(Msg::Tool { id: format!("r{i}"), content: "x".repeat(6_000) });
+        }
+        assert!(a.width() > a.budget());
+        let mut brain = FakeBrain::new(&[prose_reply("done")]);
+        let _ = a.step(&mut brain, &mut r, &mut run, &ShellPolicy::default());
+        assert!(a.pruned > 0, "nothing was pruned for a model this small");
+        assert!(a.width() < 120_000, "still {} characters", a.width());
+        let _ = (&s, &h);
     }
 
     fn call_reply(name: &str, args: &str) -> String {

@@ -116,8 +116,12 @@ const BANNER_LINES: usize = 3;
 /// the idle newcomer beat the working run, and the page followed it into
 /// an empty file. A log still on its banner is not a run.
 pub fn newest() -> Option<PathBuf> {
+    newest_in(&dir())
+}
+
+fn newest_in(d: &Path) -> Option<PathBuf> {
     let mut best: Option<(SystemTime, PathBuf)> = None;
-    for e in fs::read_dir(dir()).ok()?.flatten() {
+    for e in fs::read_dir(d).ok()?.flatten() {
         let p = e.path();
         if p.extension().and_then(|x| x.to_str()) != Some("log") {
             continue;
@@ -131,6 +135,59 @@ pub fn newest() -> Option<PathBuf> {
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// The log a process with this pid writes.
+pub fn log_of(pid: u32) -> PathBuf {
+    dir().join(format!("{pid}.log"))
+}
+
+/// A log named by a page, if it is one of ours: `<digits>.log`, in the
+/// live directory. Anything else is refused, so a query string cannot
+/// point the console at another file on the machine.
+pub fn named(name: &str) -> Option<PathBuf> {
+    let stem = name.strip_suffix(".log")?;
+    (!stem.is_empty() && stem.chars().all(|c| c.is_ascii_digit())).then(|| dir().join(name))
+}
+
+/// Which run the console should show, given the one it is showing now.
+///
+/// It used to be whichever log was written last. With two runs going at
+/// once -- the console's own turn and an MCP client, or two MCP clients --
+/// that flipped on every step, and each flip wiped the view and replayed
+/// the other run from the top. Now: the console's own run while it is
+/// mid-turn, because that is the one the person just asked for; otherwise
+/// stay with the current run while it is still going; only then move to
+/// the newest.
+pub fn follow(current: Option<&Path>, own: Option<&Path>, own_busy: bool) -> Option<PathBuf> {
+    follow_in(&dir(), current, own, own_busy)
+}
+
+fn follow_in(d: &Path, current: Option<&Path>, own: Option<&Path>, own_busy: bool) -> Option<PathBuf> {
+    if own_busy
+        && let Some(o) = own.filter(|o| lines_in(o) > BANNER_LINES)
+    {
+        return Some(o.to_path_buf());
+    }
+    // Never sticky on the console's own log when it is not mid-turn: the
+    // page's own queries (`slots`, `wiring`, `chat list`) keep it fresh,
+    // and holding on to it would hide a run another client just started.
+    let sticky = current.filter(|c| Some(*c) != own && written_within(c, STICKY) && lines_in(c) > BANNER_LINES);
+    if let Some(c) = sticky {
+        return Some(c.to_path_buf());
+    }
+    newest_in(d)
+}
+
+/// How long a run keeps the view after its last line while another run is
+/// writing. Longer than a step's usual pause, so two runs taking turns do
+/// not flip it every step; short enough that a run which has finished
+/// hands over within the minute rather than after `QUIET`.
+const STICKY: Duration = Duration::from_secs(45);
+
+fn written_within(p: &Path, d: Duration) -> bool {
+    let Ok(t) = fs::metadata(p).and_then(|m| m.modified()) else { return false };
+    SystemTime::now().duration_since(t).unwrap_or(Duration::MAX) < d
 }
 
 fn lines_in(p: &Path) -> usize {
@@ -168,6 +225,43 @@ pub fn active(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_runs_at_once_do_not_steal_the_view_from_each_other() {
+        let d = std::env::temp_dir().join(format!("agent-live-follow-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let (a, b, own) = (d.join("100.log"), d.join("200.log"), d.join("300.log"));
+        let body = "a\nb\nc\nd\ne\n";
+        fs::write(&a, body).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&b, body).unwrap();
+        // B wrote last, but the view is on A and A is still going: stay.
+        assert_eq!(follow_in(&d, Some(&a), None, false), Some(a.clone()));
+        // Nothing followed yet: the newest.
+        assert_eq!(follow_in(&d, None, None, false), Some(b.clone()));
+        // The console's own turn wins while it is running...
+        fs::write(&own, body).unwrap();
+        assert_eq!(follow_in(&d, Some(&a), Some(&own), true), Some(own.clone()));
+        // ...but not a child that has only printed its banner.
+        fs::write(&own, "env\nbanner\n").unwrap();
+        assert_eq!(follow_in(&d, Some(&a), Some(&own), true), Some(a.clone()));
+        // And an idle console's own log never holds the view: the page's
+        // queries keep it fresh, and another client's run must show.
+        fs::write(&own, body).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&b, body).unwrap();
+        assert_eq!(follow_in(&d, Some(&own), Some(&own), false), Some(b.clone()));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_page_can_only_name_a_run_log() {
+        assert!(named("1234.log").is_some());
+        for bad in ["../x.log", "1234", ".log", "12a.log", "/etc/passwd", "12.log/..", ""] {
+            assert!(named(bad).is_none(), "{bad}");
+        }
+    }
 
     #[test]
     fn reading_from_a_cursor_returns_only_what_is_new() {

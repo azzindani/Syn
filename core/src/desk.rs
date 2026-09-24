@@ -201,7 +201,20 @@ impl Desk {
         let c = self.connector.connect(app)?;
         let note = c.launched.then(|| format!("started {}'s helper", app_name(app)));
         self.runner.attach_hand_as(&c.name, c.apps, c.hand);
+        // A hand is (re)connected, so a run frozen by the one whose pipe
+        // died can go again. Without this an MCP session whose helper
+        // crashed answered "the queue is paused" to every call, `open`
+        // included, until the client was restarted.
+        self.runner.thaw(&mut self.relay);
         Ok(note)
+    }
+
+    /// Drop the hand serving `app` and connect a fresh one.
+    fn reconnect(&mut self, app: &str) -> Result<Option<String>, String> {
+        if let Some(name) = self.runner.hand_serving(app) {
+            self.runner.detach_hand(&name);
+        }
+        self.ensure_hand(app)
     }
 
     /// Open a file, or find one already open, and hand back its handle.
@@ -253,15 +266,32 @@ impl Desk {
         let mut notes = Vec::new();
         notes.extend(self.ensure_hand(app)?);
         if let Some(full) = &full {
-            let said = self.runner.open_file(app, &full.to_string_lossy()).map_err(|e| explain(app, e))?;
-            notes.push(said);
+            let path = full.to_string_lossy().to_string();
+            let said = match self.runner.open_file(app, &path) {
+                // The helper went away since this session last used it: it
+                // crashed, or another session's copy of it did. `open` is
+                // what a model is told to call to recover, so it has to
+                // recover rather than report the same broken pipe again.
+                Err(Error::Transport(_)) => {
+                    notes.extend(self.reconnect(app)?);
+                    self.runner.open_file(app, &path)
+                }
+                other => other,
+            };
+            notes.push(said.map_err(|e| explain(app, e))?);
         }
         let handle = new_handle(app, &file, unit_for(app));
         self.register(&handle, app)?;
 
         // Look once. For a bare name this is also the check that it really
         // is open: a handle that points at nothing must not be handed out.
-        match self.first_look(&handle, app) {
+        let mut look = self.first_look(&handle, app);
+        if look.as_ref().is_err_and(|e| e.contains("helper broke")) {
+            notes.extend(self.reconnect(app)?);
+            self.register(&handle, app)?;
+            look = self.first_look(&handle, app);
+        }
+        match look {
             Ok((summary, sheets)) => {
                 let doc = Doc { handle, app: app.into(), summary: join_notes(notes, &summary), sheets };
                 self.remember(doc.clone());
@@ -710,6 +740,16 @@ pub mod testing {
         /// Files that count as already open.
         pub open: Vec<String>,
         pub dead: bool,
+        /// Which helper this is, counting connects; it is dead once the
+        /// connector's `killed` reaches it, the way a crashed helper is.
+        pub generation: u32,
+        pub killed: Rc<std::cell::Cell<u32>>,
+    }
+
+    impl FakeOffice {
+        fn gone(&self) -> bool {
+            self.dead || self.generation <= self.killed.get()
+        }
     }
 
     fn ok(p: &str) -> Reply {
@@ -721,7 +761,7 @@ pub mod testing {
 
     impl LiveHand for FakeOffice {
         fn dispatch_call(&mut self, call: &Call, handle: &str) -> std::io::Result<Reply> {
-            if self.dead {
+            if self.gone() {
                 return Err(std::io::Error::other("pipe closed"));
             }
             self.log.borrow_mut().calls.push((handle.into(), format!("{call:?}")));
@@ -742,6 +782,9 @@ pub mod testing {
         }
 
         fn send_envelope(&mut self, line: &str) -> std::io::Result<Reply> {
+            if self.gone() {
+                return Err(std::io::Error::other("pipe closed"));
+            }
             self.log.borrow_mut().envelopes.push(line.into());
             let path = crate::json::parse(line).ok().and_then(|v| v.at(&["args", "path"]).and_then(|p| p.as_str().map(str::to_string)));
             let name = path.as_deref().map(|p| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string()).unwrap_or_default();
@@ -754,12 +797,22 @@ pub mod testing {
         pub log: Rc<RefCell<Log>>,
         pub sheets: Vec<String>,
         pub already_open: Vec<String>,
+        /// Set to a connect count to kill every helper up to it.
+        pub killed: Rc<std::cell::Cell<u32>>,
     }
 
     impl FakeConnector {
         pub fn new() -> (Self, Rc<RefCell<Log>>) {
             let log = Rc::new(RefCell::new(Log::default()));
-            (Self { log: log.clone(), sheets: vec!["data".into(), "Summary sheet".into()], already_open: vec![] }, log)
+            (
+                Self {
+                    log: log.clone(),
+                    sheets: vec!["data".into(), "Summary sheet".into()],
+                    already_open: vec![],
+                    killed: Rc::default(),
+                },
+                log,
+            )
         }
     }
 
@@ -775,7 +828,15 @@ pub mod testing {
                 return Err("no browser is wired".into());
             }
             self.log.borrow_mut().connects.push(app.into());
-            let hand = FakeOffice { log: self.log.clone(), sheets: self.sheets.clone(), open: self.already_open.clone(), dead: false };
+            let generation = self.log.borrow().connects.len() as u32;
+            let hand = FakeOffice {
+                log: self.log.clone(),
+                sheets: self.sheets.clone(),
+                open: self.already_open.clone(),
+                dead: false,
+                generation,
+                killed: self.killed.clone(),
+            };
             Ok(Connected { name: format!("hand-{app}"), apps: vec![app.into()], hand: Box::new(hand), launched: true })
         }
     }
@@ -789,6 +850,40 @@ mod tests {
     fn desk() -> (Desk, std::rc::Rc<std::cell::RefCell<Log>>) {
         let (c, log) = FakeConnector::new();
         (Desk::new("t", Box::new(c)), log)
+    }
+
+    #[test]
+    fn open_recovers_a_session_whose_helper_died() {
+        let (c, log) = FakeConnector::new();
+        let killed = c.killed.clone();
+        let mut d = Desk::new("t", Box::new(c));
+        let path = std::env::temp_dir().join("plan.xlsx");
+        let doc = d.open("excel", &path.to_string_lossy()).unwrap();
+        // The helper dies. The next op says so and pauses the session...
+        killed.set(1);
+        let read = || crate::ops::Call::Read(crate::ops::ReadArgs { selector: "data!A1".into() });
+        assert!(matches!(d.runner.run(&mut d.relay, &doc.handle, "t", read()), Err(Error::Transport(_))));
+        assert!(d.runner.run(&mut d.relay, &doc.handle, "t", read()).unwrap().is_none(), "paused until reconnected");
+        // ...and `open`, which that error tells the model to call, mends it.
+        d.open("excel", &path.to_string_lossy()).unwrap();
+        assert!(d.runner.run(&mut d.relay, &doc.handle, "t", read()).unwrap().is_some());
+        assert_eq!(log.borrow().connects.len(), 2);
+    }
+
+    #[test]
+    fn open_reconnects_by_itself_when_the_helper_died_unnoticed() {
+        // Another session's helper crashed and this one has not used it
+        // since: its first `open` finds the pipe dead. It used to fail and
+        // need a second `open`.
+        let (c, log) = FakeConnector::new();
+        let killed = c.killed.clone();
+        let mut d = Desk::new("t", Box::new(c));
+        let path = std::env::temp_dir().join("plan.xlsx");
+        d.open("excel", &path.to_string_lossy()).unwrap();
+        killed.set(1);
+        let doc = d.open("excel", &path.to_string_lossy()).expect("the first open after the crash works");
+        assert!(d.runner.run(&mut d.relay, &doc.handle, "t", crate::ops::Call::Read(crate::ops::ReadArgs { selector: "data!A1".into() })).unwrap().is_some());
+        assert_eq!(log.borrow().connects.len(), 2);
     }
 
     #[test]

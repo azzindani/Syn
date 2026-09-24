@@ -521,7 +521,17 @@ impl Server {
                         (e.to_string(), Status::Refused)
                     }
                     Err(e) => (e.to_string(), Status::Failed),
-                    Ok(_) => ("the queue is paused; nothing ran".to_string(), Status::Stopped),
+                    // Only a broken connection leaves an MCP session paused
+                    // (a repeated call is thawed above), so say how to mend
+                    // it. The bare "queue is paused" left a model nothing
+                    // to do but try the same call again.
+                    Ok(_) => (
+                        format!(
+                            "nothing ran: this session paused when the connection to a helper broke. Call `open` for {} again to reconnect, then repeat this call.",
+                            crate::desk::app_name(&app)
+                        ),
+                        Status::Stopped,
+                    ),
                 };
                 let said = labels::sentence(name, &arguments, status);
                 self.report(name, &said, &app, status, &why);

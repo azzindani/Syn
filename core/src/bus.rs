@@ -88,6 +88,16 @@ pub struct DocSnapshot {
     pub host: String,
 }
 
+/// How much of a session's event feed is kept. Nothing reads further back
+/// than the last run, and a server left running all day (`mcpgate` behind
+/// a desktop client) emitted two or three events a call, each carrying a
+/// preview of up to 2,000 characters, for as long as it lived.
+const EVENTS_KEPT: usize = 5_000;
+
+/// Undo depth per document, for the in-memory model. Every mutation used to
+/// push a copy of the whole file, for ever.
+pub const UNDO_DEPTH: usize = 50;
+
 #[derive(Debug, Default)]
 struct Session {
     files: HashMap<String, OpenFile>,
@@ -96,6 +106,18 @@ struct Session {
     snapshots: HashMap<String, Vec<FileContent>>,
     docs: HashMap<String, DocSnapshot>,
     follow: HashMap<String, String>,
+}
+
+impl Session {
+    /// Append to the feed, dropping the oldest tenth once it is full, so
+    /// trimming is not paid on every event.
+    fn log(&mut self, e: Event) {
+        self.events.push(e);
+        if self.events.len() > EVENTS_KEPT + EVENTS_KEPT / 10 {
+            let extra = self.events.len() - EVENTS_KEPT;
+            self.events.drain(..extra);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -119,7 +141,7 @@ impl Relay {
     /// Admit (or rejoin) a session. Idempotent like opencode session adopt.
     pub fn handshake(&mut self, id: &str, client: &str) -> Vec<String> {
         let s = self.sessions.entry(id.to_string()).or_default();
-        s.events.push(Event { t: "session.open".into(), handle: String::new(), detail: client.into() });
+        s.log(Event { t: "session.open".into(), handle: String::new(), detail: client.into() });
         let mut files: Vec<String> = s.files.keys().cloned().collect();
         files.sort();
         files
@@ -131,7 +153,7 @@ impl Relay {
 
     pub fn attach(&mut self, session: &str, handle: String, file: OpenFile) {
         let s = self.sessions.entry(session.to_string()).or_default();
-        s.events.push(Event { t: "file.attach".into(), handle: handle.clone(), detail: format!("{:?}", file.kind) });
+        s.log(Event { t: "file.attach".into(), handle: handle.clone(), detail: format!("{:?}", file.kind) });
         s.files.insert(handle.clone(), file);
         s.snapshots.entry(handle).or_default();
     }
@@ -143,7 +165,7 @@ impl Relay {
         self.attach(session, handle.clone(), file);
         if let Ok(s) = self.session_mut(session) {
             s.docs.insert(handle.clone(), snap);
-            s.events.push(Event { t: "file.hello".into(), handle, detail });
+            s.log(Event { t: "file.hello".into(), handle, detail });
         }
     }
 
@@ -154,7 +176,7 @@ impl Relay {
             return Err(Error::UnknownHandle(handle.into()));
         }
         s.follow.insert(handle.to_string(), selection.to_string());
-        s.events.push(Event { t: "follow".into(), handle: handle.into(), detail: selection.into() });
+        s.log(Event { t: "follow".into(), handle: handle.into(), detail: selection.into() });
         Ok(())
     }
 
@@ -178,7 +200,7 @@ impl Relay {
     }
 
     pub fn emit(&mut self, session: &str, t: &str, handle: &str, detail: String) -> Result<()> {
-        self.session_mut(session)?.events.push(Event { t: t.into(), handle: handle.into(), detail });
+        self.session_mut(session)?.log(Event { t: t.into(), handle: handle.into(), detail });
         Ok(())
     }
 
@@ -192,6 +214,9 @@ impl Relay {
         let content = s.files.get(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?.content.clone();
         let stack = s.snapshots.entry(handle.to_string()).or_default();
         stack.push(content);
+        if stack.len() > UNDO_DEPTH {
+            stack.remove(0);
+        }
         Ok(stack.len())
     }
 
@@ -202,7 +227,7 @@ impl Relay {
         let file = s.files.get_mut(handle).ok_or_else(|| Error::UnknownHandle(handle.into()))?;
         file.content = content;
         let remaining = stack.len();
-        s.events.push(Event { t: "step.undo".into(), handle: handle.into(), detail: format!("remaining={remaining}") });
+        s.log(Event { t: "step.undo".into(), handle: handle.into(), detail: format!("remaining={remaining}") });
         Ok(remaining)
     }
 
@@ -210,6 +235,12 @@ impl Relay {
     pub fn gate(&mut self, session: &str, op: &str, args_key: &str) -> Result<()> {
         let s = self.session_mut(session)?;
         s.calls.push((op.to_string(), args_key.to_string()));
+        // The gate only ever looks at the last few, and a write's key
+        // carries its whole grid: keeping every call kept every payload.
+        if s.calls.len() > DOOM_LOOP_THRESHOLD {
+            let extra = s.calls.len() - DOOM_LOOP_THRESHOLD;
+            s.calls.drain(..extra);
+        }
         let n = s.calls.len();
         if n >= DOOM_LOOP_THRESHOLD {
             let last = &s.calls[n - DOOM_LOOP_THRESHOLD..];
@@ -218,6 +249,16 @@ impl Relay {
             }
         }
         Ok(())
+    }
+
+    /// Start the repeat count again. Called when a frozen run is thawed:
+    /// the calls that failed on a dead pipe were never the model going in
+    /// circles, and retrying one after reconnecting is the right thing to
+    /// do. It was being refused as the third identical call.
+    pub fn forget_calls(&mut self, session: &str) {
+        if let Ok(s) = self.session_mut(session) {
+            s.calls.clear();
+        }
     }
 
     pub(crate) fn files_mut(&mut self, session: &str) -> Result<&mut HashMap<String, OpenFile>> {
@@ -305,6 +346,43 @@ mod tests {
         assert!(kinds.contains(&"file.hello".to_string()));
         assert!(kinds.contains(&"follow".to_string()));
         assert!(r.follow("s", "word:nope:body", "p1").is_err());
+    }
+
+    #[test]
+    fn a_session_left_running_all_day_keeps_a_bounded_feed() {
+        let mut r = Relay::new();
+        r.handshake("s", "t");
+        for i in 0..EVENTS_KEPT * 3 {
+            r.emit("s", "step.done", "h", format!("call {i}")).unwrap();
+        }
+        let ev = r.events("s").unwrap();
+        assert!(ev.len() <= EVENTS_KEPT + EVENTS_KEPT / 10, "{}", ev.len());
+        assert_eq!(ev.last().unwrap().detail, format!("call {}", EVENTS_KEPT * 3 - 1), "the newest are the ones kept");
+    }
+
+    #[test]
+    fn the_repeat_gate_still_fires_after_thousands_of_different_calls() {
+        let mut r = Relay::new();
+        r.handshake("s", "t");
+        for i in 0..10_000 {
+            r.gate("s", "Write", &format!("cell {i}")).unwrap();
+        }
+        r.gate("s", "Read", "a").unwrap();
+        r.gate("s", "Read", "a").unwrap();
+        assert!(matches!(r.gate("s", "Read", "a"), Err(Error::DoomLoop(_))));
+        assert!(r.session("s").unwrap().calls.len() <= DOOM_LOOP_THRESHOLD);
+    }
+
+    #[test]
+    fn the_undo_stack_is_bounded_and_still_undoes_the_latest() {
+        let mut r = Relay::new();
+        r.handshake("s", "t");
+        r.attach("s", "h".into(), excel());
+        for _ in 0..UNDO_DEPTH + 20 {
+            r.snapshot("s", "h").unwrap();
+        }
+        assert_eq!(r.snapshot_len("s", "h"), UNDO_DEPTH);
+        assert_eq!(r.undo("s", "h").unwrap(), UNDO_DEPTH - 1);
     }
 }
 

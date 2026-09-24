@@ -18,6 +18,7 @@
 // the user's app, no orphans). Word and PowerPoint paths are written but
 // NOT yet exercised live -- see docs/runbook-windows.md.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using Microsoft.CSharp.RuntimeBinder;
@@ -27,6 +28,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Syn.Sidecar
 {
@@ -36,6 +38,21 @@ namespace Syn.Sidecar
         private static string _app = "excel";
         private static volatile bool _stop;
         private static bool _trace;
+
+        /// <summary>How many clients may be connected at once: the console,
+        /// a few MCP clients, a terminal.</summary>
+        private const int MaxClients = 8;
+
+        /// <summary>One request line and the reply the STA thread gives it.</summary>
+        private sealed record Job(string Line)
+        {
+            public TaskCompletionSource<string> Reply { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        /// <summary>Requests from every connected client, in arrival order,
+        /// for the one thread that owns COM.</summary>
+        private static readonly BlockingCollection<Job> Jobs = new();
 
         [STAThread]
         private static int Main(string[] args)
@@ -58,6 +75,9 @@ namespace Syn.Sidecar
             {
                 e.Cancel = true;
                 _stop = true;
+                // Ends the STA thread's loop once the request in hand is
+                // answered; the listeners are background threads.
+                Jobs.CompleteAdding();
                 Console.WriteLine("stop requested: draining");
             };
             var sta = new Thread(Run) { IsBackground = true };
@@ -95,59 +115,87 @@ namespace Syn.Sidecar
                 var ppt = _app == "powerpoint";
                 Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
                 Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
-                // Byte mode, not Message: the client is an ordinary
-                // StreamReader/StreamWriter pair, and a message-mode server
-                // framed against a byte-mode client never completes a read.
                 // Serve clients one after another. The first version served
                 // exactly one and exited on its disconnect, so the sidecar
                 // died the moment anything reconnected -- which is precisely
                 // when it should be settling down to wait for the next one.
                 // The UIA sidecar learned this already; this one had not.
-                while (!_stop)
+                //
+                // And several at once. One client at a time meant a desktop
+                // MCP client that held Excel all day locked the Syn console
+                // (and every other client) out of it: the second connection
+                // waited for a pipe instance that never came free. Now up to
+                // MaxClients listeners each own a pipe instance and hand each
+                // request line to this thread, which is still the only one
+                // that touches COM. Requests interleave a line at a time,
+                // exactly as two people clicking in one Excel would.
+                for (var i = 0; i < MaxClients; i++)
+                    new Thread(Listen) { IsBackground = true, Name = $"pipe-{i}" }.Start();
+                foreach (var job in Jobs.GetConsumingEnumerable())
                 {
-                    NamedPipeServerStream? server = null;
-                    try
-                    {
-                        server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
-                            PipeTransmissionMode.Byte, PipeOptions.None);
-                        Trace($"pipe {_pipe}: waiting for client");
-                        server.WaitForConnection();
-                        Trace("pipe: client connected");
-                        // UTF8Encoding(false): the default Encoding.UTF8 carries
-                        // a byte-order-mark preamble, and StreamWriter emits it
-                        // on the first flush -- three stray bytes in front of the
-                        // first JSON reply, which every client then fails to parse.
-                        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-                        using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
-                        using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
-                        Trace("pipe: reader and writer ready");
-                        while (!_stop)
-                        {
-                            var line = reader.ReadLine();
-                            if (line == null) { Trace("pipe: EOF, client gone"); break; }
-                            Trace($"pipe: got {line.Length} chars");
-                            writer.WriteLine(Dispatch(app, line));
-                            Trace("pipe: reply sent");
-                        }
-                    }
-                    catch (IOException e)
-                    {
-                        // A client that vanishes mid-write breaks the pipe. That
-                        // ends the connection, not the sidecar.
-                        Trace($"pipe: {e.Message}");
-                    }
-                    finally
-                    {
-                        // Disposing over a dead pipe throws from the final
-                        // flush, and an escape here kills the process for the
-                        // one thing it is supposed to shrug off.
-                        try { server?.Dispose(); } catch (IOException) { }
-                    }
+                    string reply;
+                    try { reply = Dispatch(app, job.Line); }
+                    catch (Exception e) { reply = Fail($"{e.GetType().Name}: {e.Message}"); }
+                    job.Reply.TrySetResult(reply);
                 }
             }
             finally
             {
                 try { Marshal.FinalReleaseComObject(app); } catch { /* detach only, never kill user app */ }
+            }
+        }
+
+        /// <summary>One pipe instance: accept a client, pass each line it
+        /// sends to the STA thread, write back the reply, repeat.</summary>
+        private static void Listen()
+        {
+            // UTF8Encoding(false): the default Encoding.UTF8 carries a
+            // byte-order-mark preamble, and StreamWriter emits it on the first
+            // flush -- three stray bytes in front of the first JSON reply,
+            // which every client then fails to parse.
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            while (!_stop)
+            {
+                NamedPipeServerStream? server = null;
+                try
+                {
+                    // Byte mode, not Message: the client is an ordinary
+                    // StreamReader/StreamWriter pair, and a message-mode
+                    // server framed against a byte-mode client never
+                    // completes a read. Every instance must name the same
+                    // MaxClients, or the second one fails to create.
+                    server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, MaxClients,
+                        PipeTransmissionMode.Byte, PipeOptions.None);
+                    Trace($"pipe {_pipe}: waiting for client");
+                    server.WaitForConnection();
+                    Trace("pipe: client connected");
+                    using var reader = new StreamReader(server, utf8, detectEncodingFromByteOrderMarks: false);
+                    using var writer = new StreamWriter(server, utf8) { AutoFlush = true };
+                    while (!_stop)
+                    {
+                        var line = reader.ReadLine();
+                        if (line == null) { Trace("pipe: EOF, client gone"); break; }
+                        Trace($"pipe: got {line.Length} chars");
+                        var job = new Job(line);
+                        try { Jobs.Add(job); }
+                        catch (InvalidOperationException) { break; } // stopping
+                        writer.WriteLine(job.Reply.Task.Result);
+                        Trace("pipe: reply sent");
+                    }
+                }
+                catch (IOException e)
+                {
+                    // A client that vanishes mid-write breaks the pipe. That
+                    // ends the connection, not the sidecar.
+                    Trace($"pipe: {e.Message}");
+                }
+                finally
+                {
+                    // Disposing over a dead pipe throws from the final
+                    // flush, and an escape here kills the process for the
+                    // one thing it is supposed to shrug off.
+                    try { server?.Dispose(); } catch (IOException) { }
+                }
             }
         }
 

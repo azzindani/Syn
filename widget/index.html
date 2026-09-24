@@ -1875,7 +1875,7 @@ async function tail() {
   // it means every row twice.
   if (sseOK) return;
   try {
-    const r = await fetch("/events?since=" + tailAt);
+    const r = await fetch("/events?since=" + tailAt + "&source=" + encodeURIComponent(tailSrc || ""));
     if (!r.ok) return;
     const d = await r.json();
     // The first look at a log is a catch-up, not a replay. The saved

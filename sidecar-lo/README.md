@@ -53,6 +53,14 @@ page numbers, pictures, charts to PNG) is refused with
 `core/tests/wire_contract.rs` checks that every method handled here is one
 the Rust side sends, and that the core set above is still handled.
 
+Up to eight clients can be connected at once (the console, MCP clients, a
+terminal). LibreOffice handles one request at a time, in arrival order. A
+helper refuses to start if another one is already answering on its pipe.
+If a helper dies without stopping its LibreOffice (SIGKILL), the next helper
+on the same pipe takes over that LibreOffice instead of starting a second
+one that would find the documents locked, the way office-host attaches to a
+running Excel.
+
 Differences a model might notice: a LibreOffice deck always has at least one
 slide, so an "empty" deck arrives with one blank slide, and the first
 `createSlide` fills it. Word's table style names have no LibreOffice

@@ -134,7 +134,9 @@ recipe is in `docs/10`.
 - **The sidecar never closes or saves what it did not open.** Office COM
   servers are single-instance per user, so quitting one can close the
   user's own work. Read the lessons in `docs/runbook-windows.md` §0 before
-  editing the C#. In particular, PowerPoint's `Visible`, `DisplayAlerts`,
+  editing the C#. A helper serves up to eight clients at once, but COM
+  calls stay on office-host's one STA thread: listeners queue work to it
+  and never call COM themselves. In particular, PowerPoint's `Visible`, `DisplayAlerts`,
   `HasTextFrame` and `HasTable` are `MsoTriState`, not bool.
 - **Capability-test honesty.** Never re-score a recorded run, and never
   add, remove or loosen a check after seeing a run. Pre-register an

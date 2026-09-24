@@ -76,12 +76,29 @@ namespace Syn.Uia
             return 0;
         }
 
-        // One client at a time, but many clients over the process lifetime.
-        // A single-shot server exits when the first CLI session ends, so the
-        // next `hand hand-uia` fails with a confusing "no hand" and the human
-        // has to remember to restart the sidecar. The attached application
-        // outlives any one conversation; the hand should too.
+        /// <summary>How many clients may be connected at once.</summary>
+        private const int MaxClients = 8;
+
+        /// <summary>One request at a time across every client. UI Automation
+        /// from an MTA is safe to call from several threads, but a tree walk
+        /// racing a click on the same window is not a thing to find out
+        /// about live.</summary>
+        private static readonly object Gate = new();
+
+        // Many clients over the process lifetime, and several at once. A
+        // single-shot server exited when the first CLI session ended, so the
+        // next `hand hand-uia` failed with a confusing "no hand"; a
+        // one-at-a-time server let a desktop MCP client that held the hand
+        // lock every other client out of it. The attached application
+        // outlives any one conversation, and is shared by all of them.
         private static void Serve()
+        {
+            for (var i = 0; i < MaxClients; i++)
+                new Thread(Listen) { IsBackground = true, Name = $"pipe-{i}" }.Start();
+            while (!_stop) Thread.Sleep(200);
+        }
+
+        private static void Listen()
         {
             var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             while (!_stop)
@@ -89,7 +106,9 @@ namespace Syn.Uia
                 NamedPipeServerStream? server = null;
                 try
                 {
-                    server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, 1,
+                    // Every instance must name the same MaxClients, or the
+                    // second one fails to create.
+                    server = new NamedPipeServerStream(_pipe, PipeDirection.InOut, MaxClients,
                         PipeTransmissionMode.Byte, PipeOptions.None);
                     Trace($"pipe {_pipe}: waiting for client");
                     server.WaitForConnection();
@@ -100,7 +119,9 @@ namespace Syn.Uia
                     {
                         var line = reader.ReadLine();
                         if (line == null) { Trace("pipe: EOF, client gone; waiting for the next"); break; }
-                        writer.WriteLine(Dispatch(line));
+                        string reply;
+                        lock (Gate) reply = Dispatch(line);
+                        writer.WriteLine(reply);
                     }
                 }
                 catch (IOException e)

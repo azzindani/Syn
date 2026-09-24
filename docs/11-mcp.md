@@ -110,6 +110,23 @@ Settings for the human, in `.env`:
 | `AGENT_OFFICE_HOST`, `AGENT_UIA_HOST` | Where the helpers are, if not in this repository's Release build. |
 | `AGENT_VBA` | `1` to allow `struct` `macro` for the session. Off by default. |
 
+## More than one client at once
+
+Claude Desktop, OpenCode and the Syn console can all be open at once, each
+with its own `mcpgate` (or CLI), driving the same Excel. Each helper serves
+up to eight clients: requests interleave one call at a time, and
+office-host still makes every COM call from its one STA thread. What one
+session writes, the others read. Before this, a helper served one client,
+so a desktop app holding Excel all day locked everyone else out, and the
+second client's `open` just hung.
+
+If a helper dies, every session using it gets a broken-connection error
+that says to call `open` again. `open` reconnects (starting a new helper if
+needed), and the session carries on. The call that failed does not count
+towards the repeated-call limit. A helper stops when the client that started
+it exits, so the other sessions see that as a broken connection and recover
+the same way.
+
 ## Watching it
 
 Every call an outside model makes is written to Syn's live log, in the same
@@ -167,7 +184,11 @@ That run found three real bugs, all fixed:
 - A label ending in "…" got a full stop after it.
 
 `tests/test_lo_live.py` repeats that job automatically, and CI's
-`libreoffice` job runs it on every push with LibreOffice installed.
+`libreoffice` job runs it on every push with LibreOffice installed. It also
+runs two MCP sessions against the same helpers at once: both drive one
+workbook and read each other's writes, one holds Excel, Word and PowerPoint
+while the other works, and a helper killed mid-session is recovered by
+`open`.
 
 Verified here (Linux, tier 1): 36 new tests. They cover the protocol in
 both eras, the surface generated from `tools::TOOLS` with a drift check,

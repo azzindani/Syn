@@ -111,6 +111,9 @@ struct Req {
     method: String,
     path: String,
     origin: Option<String>,
+    /// What a browser sends when EventSource reconnects on its own: the
+    /// `id:` of the last frame it saw.
+    last_event_id: Option<String>,
     body: String,
 }
 
@@ -121,7 +124,7 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
     let mut parts = start.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("/").to_string();
-    let (mut len, mut origin) = (0usize, None);
+    let (mut len, mut origin, mut last_event_id) = (0usize, None, None);
     loop {
         let mut line = String::new();
         if r.read_line(&mut line)? == 0 {
@@ -136,6 +139,7 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
             match k.as_str() {
                 "content-length" => len = v.parse().unwrap_or(0),
                 "origin" => origin = Some(v),
+                "last-event-id" => last_event_id = Some(v),
                 _ => {}
             }
         }
@@ -146,7 +150,13 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
     if len > 0 {
         r.read_exact(&mut body)?;
     }
-    Ok(Req { method, path, origin, body: String::from_utf8_lossy(&body).into_owned() })
+    Ok(Req { method, path, origin, last_event_id, body: String::from_utf8_lossy(&body).into_owned() })
+}
+
+/// One query parameter, by exact name. `split_once("since=")` also matched
+/// inside any longer name ending in it.
+fn param<'a>(path: &'a str, key: &str) -> Option<&'a str> {
+    path.split_once('?')?.1.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))
 }
 
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &str) -> std::io::Result<()> {
@@ -330,18 +340,30 @@ fn main() {
             // rather than a request every 700ms and a page that cannot
             // tell "quiet" from "not asked yet".
             ("GET", "/stream") => {
-                let mut cursor = req
-                    .path
-                    .split_once("since=")
-                    .and_then(|(_, v)| v.split('&').next())
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0);
+                // Where to start: the page says which run it is on and how
+                // many of its lines it has drawn. A browser reconnecting by
+                // itself says the same thing in `Last-Event-ID`, which every
+                // frame carries as `<run>/<line>`; that wins, because it is
+                // newer than the URL the stream was first opened with. The
+                // stream used to start from `since` alone, and a reconnect
+                // replayed the run from its first line.
+                let mut since = param(&req.path, "since").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+                let mut asked = param(&req.path, "source").unwrap_or("").to_string();
+                if let Some((src, n)) = req.last_event_id.as_deref().and_then(|v| v.rsplit_once('/'))
+                    && let Ok(n) = n.parse::<usize>()
+                {
+                    asked = src.to_string();
+                    since = n;
+                }
+                // `retry:` is how long a browser waits before reconnecting
+                // on its own.
                 let head = concat!(
                     "HTTP/1.1 200 OK\r\n",
                     "Content-Type: text/event-stream\r\n",
                     "Cache-Control: no-store\r\n",
                     "Connection: keep-alive\r\n",
                     "X-Accel-Buffering: no\r\n\r\n",
+                    "retry: 2000\n\n",
                 );
                 if s.write_all(head.as_bytes()).is_err() {
                     return;
@@ -352,63 +374,68 @@ fn main() {
                 // this loop can leave on.
                 let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
 
-                // Seed the source from whatever is current, so the first
-                // pass through the loop is not mistaken for a change of run.
-                // It was: `source` started empty, the first iteration saw a
-                // difference, reset the cursor to 0 and replayed the whole
-                // log -- on top of everything the page had already drawn
-                // from its own first poll. The result was every step of a
-                // run rendered twice, which is what a person actually saw.
-                let mut source = pinned
-                    .clone()
-                    .or_else(core::live::newest)
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                {
-                    // Still say which run this is, so a page that has been
-                    // following a different one can reset itself. Naming it
-                    // is not the same as rewinding to the start of it.
-                    let ev = format!("event: source
-data: {{\"source\":\"{}\",\"since\":{}}}
-
-",
-                        json_escape(&source), cursor);
-                    if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
-                        return;
-                    }
+                let name_of = |p: &Option<std::path::PathBuf>| {
+                    p.as_ref().and_then(|p| p.file_name()).and_then(|f| f.to_str()).unwrap_or("").to_string()
+                };
+                let pick = |current: Option<&std::path::Path>| {
+                    pinned.clone().or_else(|| {
+                        core::live::follow(current, own_log.as_deref(), live.busy.load(Ordering::SeqCst))
+                    })
+                };
+                // The run to show, chosen the way `/events` chooses, from
+                // the one the page is on. The cursor only means something
+                // for that run: if the choice is a different one, it starts
+                // from the top. It used to keep the old run's line count
+                // and read the new run from the middle.
+                let mut src = pick(core::live::named(&asked).as_deref());
+                let mut source = name_of(&src);
+                if source != asked {
+                    since = 0;
+                }
+                let mut tail = src.as_deref().map(|p| core::live::Tail::at(p, since));
+                // Name the run, so a page on a different one resets. Naming
+                // it is not the same as rewinding to the start of it.
+                let at = tail.as_ref().map(core::live::Tail::n).unwrap_or(0);
+                let ev = format!("event: source\ndata: {{\"source\":\"{}\",\"since\":{at}}}\n\n", json_escape(&source));
+                if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
+                    return;
                 }
                 let mut beat = Instant::now();
+                let mut looked = Instant::now();
                 loop {
-                    let current = core::live::named(&source);
-                    let src = pinned.clone().or_else(|| {
-                        core::live::follow(current.as_deref(), own_log.as_deref(), live.busy.load(Ordering::SeqCst))
-                    });
-                    let name =
-                        src.as_ref().and_then(|p| p.file_name()).and_then(|f| f.to_str()).unwrap_or("").to_string();
-                    // A different run took over. Tell the page, so it starts
-                    // that one from the top rather than splicing it onto the
-                    // tail of the last.
-                    if name != source {
-                        source = name.clone();
-                        cursor = 0;
-                        let ev =
-                            format!("event: source\ndata: {{\"source\":\"{}\"}}\n\n", json_escape(&name));
-                        if s.write_all(ev.as_bytes()).is_err() {
-                            return;
+                    // Which run to show is a directory scan; twice a second
+                    // is plenty for a hand-over that happens once a run.
+                    // The lines themselves are read every pass.
+                    if looked.elapsed() >= Duration::from_millis(500) {
+                        looked = Instant::now();
+                        let next = pick(src.as_deref());
+                        let name = name_of(&next);
+                        // A different run took over. Tell the page, so it
+                        // starts that one from the top rather than splicing
+                        // it onto the tail of the last.
+                        if name != source {
+                            source = name;
+                            src = next;
+                            tail = src.as_deref().map(|p| core::live::Tail::at(p, 0));
+                            let ev = format!("event: source\ndata: {{\"source\":\"{}\"}}\n\n", json_escape(&source));
+                            if s.write_all(ev.as_bytes()).is_err() {
+                                return;
+                            }
                         }
                     }
-                    let (n, lines) = match &src {
-                        Some(p) => core::live::read_from(p, cursor),
-                        None => (0, Vec::new()),
-                    };
-                    cursor = n;
-                    // One frame per line. An SSE `data:` field may not carry
-                    // a newline, and these lines never do.
+                    let lines = tail.as_mut().map(core::live::Tail::read).unwrap_or_default();
+                    // One frame per line, each carrying where it leaves the
+                    // cursor, so a page (or a browser reconnecting) always
+                    // knows exactly what it has. An SSE `data:` field may
+                    // not carry a newline, and these lines never do.
+                    let mut n = tail.as_ref().map(core::live::Tail::n).unwrap_or(0) - lines.len();
                     for line in &lines {
-                        let ev = format!("data: {{\"line\":\"{}\"}}\n\n", json_escape(line));
+                        n += 1;
+                        let ev = format!(
+                            "id: {}/{n}\ndata: {{\"line\":\"{}\",\"n\":{n}}}\n\n",
+                            json_escape(&source),
+                            json_escape(line)
+                        );
                         if s.write_all(ev.as_bytes()).is_err() {
                             return;
                         }
@@ -457,23 +484,14 @@ data: {{\"source\":\"{}\",\"since\":{}}}
                 let _ = respond(&mut s, "200 OK", "application/json", &body);
             }
             ("GET", "/events") => {
-                let since = req
-                    .path
-                    .split_once("since=")
-                    .and_then(|(_, v)| v.split('&').next())
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0);
+                let since = param(&req.path, "since").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
                 // Whichever run is currently saying something, which is
                 // the one worth watching. A finished run stops touching its
                 // file, so an active one wins on mtime without this having
                 // to know which processes are alive.
                 // The run the page is on, so a poller sticks with it the
                 // way the stream does rather than flipping between two.
-                let current = req
-                    .path
-                    .split_once("source=")
-                    .and_then(|(_, v)| v.split('&').next())
-                    .and_then(core::live::named);
+                let current = param(&req.path, "source").and_then(core::live::named);
                 let src = pinned.clone().or_else(|| {
                     core::live::follow(current.as_deref(), own_log.as_deref(), live.busy.load(Ordering::SeqCst))
                 });
@@ -534,6 +552,7 @@ mod tests {
             method: method.into(),
             path: "/cmd".into(),
             origin: origin.map(str::to_string),
+            last_event_id: None,
             body: "hands".into(),
         }
     }
@@ -547,6 +566,15 @@ mod tests {
             Some(o) => ours.iter().any(|a| a == o),
             None => false,
         }
+    }
+
+    #[test]
+    fn a_query_parameter_is_found_by_its_whole_name() {
+        let p = "/stream?since=12&source=345.log";
+        assert_eq!(param(p, "since"), Some("12"));
+        assert_eq!(param(p, "source"), Some("345.log"));
+        assert_eq!(param("/events?xsince=9&since=3", "since"), Some("3"));
+        assert_eq!(param("/stream", "since"), None);
     }
 
     #[test]

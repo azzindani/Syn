@@ -11,7 +11,9 @@ software hands (Office first) in one live session, any model via OpenRouter.
   - `sessions` — multi-session hub (M5): independent runners, list/drop.
   - `memory` — session facts + cross-app transfer log + compaction (M2/M3).
   - `guard` — runtime allowlist + kill switch, enforced in `Runner::pump`.
-  - `provider` — OpenRouter bodies, SSE streaming parse, Picker + budget.
+  - `provider` — OpenRouter bodies, the curl transport (streamed by
+    default), Picker + budget. `sse` folds a streamed reply back into the
+    shape of a whole one, so nothing downstream had to change.
   - `mcpgate` — MCP server: the six document ops generated from `tools`,
     plus `status`, `open` and `manual`, for any MCP client
     (`docs/11-mcp.md`). Every call goes through `Runner`.
@@ -204,6 +206,15 @@ in `.env`. Beside it, the thinking level (auto, low, medium, high) sets how
 hard the model reasons before it answers; auto leaves it to Syn. Both apply
 to the next turn of the conversation you are in, which is what makes a 429
 on a free-tier model survivable: pick another and send again.
+
+The reply is drawn as the model writes it, with what it is thinking shown on
+one line above until the text starts; the finished answer replaces the
+draft. Replies are streamed from the provider, so a long think is not cut
+off: the only limit is on silence, `AGENT_STREAM_IDLE_SECS` (180 by
+default). `AGENT_STREAM=0` goes back to waiting for whole replies, for a
+gateway that mishandles streaming. The page follows the run over a
+server-sent event stream that resumes from its last line if it drops, and
+polls meanwhile.
 
 It binds 127.0.0.1 only, and a command is refused unless its `Origin` is
 the console's own (and refused outright with none). Browsers attach

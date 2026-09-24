@@ -58,6 +58,25 @@ macro_rules! pr {
 }
 
 
+/// The reply as the model writes it, for whoever is watching: one line per
+/// batch (`sse::Throttle` gathers a few a second), JSON so a newline or a
+/// quote in the text cannot break the line. The console draws a draft from
+/// these and drops it when the finished turn (`RECEIPT step` or `ANSWER`)
+/// arrives, so a line lost here costs a flicker, never a word.
+fn show_delta(kind: core::sse::Kind, text: &str) {
+    let kind = match kind {
+        core::sse::Kind::Text => "text",
+        core::sse::Kind::Thinking => "thinking",
+    };
+    let v = core::json::obj(vec![("kind", core::json::s(kind)), ("text", core::json::s(text))]);
+    pr!("RECEIPT delta {}", v.to_json());
+}
+
+/// The model on this endpoint, streaming to the console as it writes.
+fn watched(on: &(String, String)) -> CurlBrain {
+    CurlBrain { on_delta: Some(show_delta), ..CurlBrain::new(&on.0, &on.1) }
+}
+
 /// Submit one op and run it.
 ///
 /// Every op arm goes through here. Calling `ops::execute` from a command
@@ -868,7 +887,7 @@ fn main() {
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
                 on = (c.base_url, c.key_env);
-                let mut brain = CurlBrain { base_url: on.0.clone(), api_key_env: on.1.clone() };
+                let mut brain = watched(&on);
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
                 a.fit_context(core::catalog::context_of(&model));
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
@@ -930,7 +949,7 @@ fn main() {
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
                 on = (c.base_url, c.key_env);
-                let mut brain = CurlBrain { base_url: on.0.clone(), api_key_env: on.1.clone() };
+                let mut brain = watched(&on);
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
 
                 // Wait and ask the SAME model again before giving up on
@@ -965,7 +984,7 @@ fn main() {
                     // was OpenRouter, wrong once a model can be picked from
                     // another provider.
                     on = config::endpoint(m);
-                    brain = CurlBrain { base_url: on.0.clone(), api_key_env: on.1.clone() };
+                    brain = watched(&on);
                     stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                     // The new slot gets the same patience as the first.
                     stopped = wait_and_retry(&id, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
@@ -1081,7 +1100,7 @@ fn main() {
                 if !matches!(outcome, Step::Stopped(_)) {
                     // The route the run is actually on, which a fallback
                     // may have changed since the REPL's task slot was set.
-                    let mut brain = CurlBrain { base_url: on.0.clone(), api_key_env: on.1.clone() };
+                    let mut brain = watched(&on);
                     let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
                 save_chat(&chat_id, a);

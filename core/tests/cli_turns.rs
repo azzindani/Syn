@@ -42,6 +42,18 @@ fn provider(script: Vec<String>) -> Provider {
             let _ = r.read_exact(&mut body);
             log.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
             let reply = script.next().unwrap_or_else(|| answer("out of script"));
+            // A scripted stream is sent the way a provider sends one: no
+            // length, a keep-alive comment, and the chunks with pauses
+            // between them, so the reader really sees pieces.
+            if reply.starts_with("data:") {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: PROCESSING\n\n");
+                for chunk in reply.split("\n\n") {
+                    let _ = write!(s, "{chunk}\n\n");
+                    let _ = s.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                continue;
+            }
             let _ = write!(
                 s,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
@@ -61,6 +73,29 @@ fn call(id: &str, tool: &str, args: &str) -> String {
 
 fn answer(text: &str) -> String {
     format!(r#"{{"choices":[{{"finish_reason":"stop","message":{{"role":"assistant","content":"{text}"}}}}]}}"#)
+}
+
+/// `text` as a stream of SSE chunks, a few words each, with reasoning first.
+fn streamed(thinking: &str, text: &str) -> String {
+    let mut out = vec![format!(r#"data: {{"choices":[{{"delta":{{"reasoning":"{thinking}"}}}}]}}"#)];
+    for w in text.split_inclusive(' ') {
+        out.push(format!(r#"data: {{"choices":[{{"delta":{{"content":"{w}"}}}}]}}"#));
+    }
+    out.push(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#.to_string());
+    out.push("data: [DONE]".to_string());
+    out.join("\n\n")
+}
+
+/// A tool call streamed in two pieces.
+fn streamed_call(id: &str, tool: &str, args: &str) -> String {
+    let (a, b) = args.split_at(args.len() / 2);
+    let (a, b) = (a.replace('"', "\\\""), b.replace('"', "\\\""));
+    [
+        format!(r#"data: {{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"{id}","type":"function","function":{{"name":"{tool}","arguments":"{a}"}}}}]}}}}]}}"#),
+        format!(r#"data: {{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"arguments":"{b}"}}}}]}},"finish_reason":"tool_calls"}}]}}"#),
+        "data: [DONE]".to_string(),
+    ]
+    .join("\n\n")
 }
 
 /// Feed the CLI these lines and return everything it printed.
@@ -139,4 +174,28 @@ fn a_call_refused_while_frozen_never_runs_later() {
     let after = &out[out.find("RECEIPT resumed").expect(&out)..];
     let sizes: Vec<&str> = after.lines().filter_map(|l| l.split("grid Sheet1: ").nth(1)).map(|t| &t[..3]).collect();
     assert_eq!(sizes, ["4x4", "5x5"], "each read after resume must get its own answer:\n{out}");
+}
+
+#[test]
+fn a_streamed_reply_is_shown_as_it_is_written_and_still_answers() {
+    // A tool call and an answer, both streamed. The call must arrive whole
+    // (its arguments were split across chunks), the answer must be the
+    // whole text, and the console must have seen the words on the way as
+    // `RECEIPT delta` lines, the reasoning among them.
+    let p = provider(vec![streamed_call("c1", "read", READ), streamed("Looking at the range.", "The range is empty so far.")]);
+    let out = cli(&p, &["attach excel plan.xlsx Sheet1", "say what is in it"]);
+    assert!(out.contains("DID Read 1 range"), "the streamed call did not run:\n{out}");
+    assert!(out.contains("ANSWER The range is empty so far."), "the streamed answer did not come back whole:\n{out}");
+    let deltas: Vec<&str> = out.lines().filter(|l| l.starts_with("RECEIPT delta ")).collect();
+    assert!(deltas.iter().any(|l| l.contains(r#""kind":"thinking""#) && l.contains("Looking")), "no thinking shown:\n{out}");
+    let shown: String = deltas
+        .iter()
+        .filter(|l| l.contains(r#""kind":"text""#))
+        .filter_map(|l| l.split(r#""text":""#).nth(1))
+        .map(|t| t.trim_end_matches("\"}"))
+        .collect();
+    assert_eq!(shown, "The range is empty so far.", "{out}");
+    assert!(deltas.len() >= 2, "the text came in one piece, not as it was written:\n{out}");
+    let sent = p.sent.lock().unwrap();
+    assert!(sent[0].contains(r#""stream":true"#), "{}", sent[0]);
 }

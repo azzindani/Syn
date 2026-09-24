@@ -42,11 +42,30 @@ pub trait Brain {
 pub struct CurlBrain {
     pub base_url: String,
     pub api_key_env: String,
+    /// Where the reply goes as it is written, when someone is watching. The
+    /// reply is streamed either way (unless `AGENT_STREAM=0`): that is what
+    /// lets a long think run past a minute without being cut off.
+    pub on_delta: Option<fn(crate::sse::Kind, &str)>,
+}
+
+impl CurlBrain {
+    pub fn new(base_url: &str, api_key_env: &str) -> Self {
+        Self { base_url: base_url.into(), api_key_env: api_key_env.into(), on_delta: None }
+    }
 }
 
 impl Brain for CurlBrain {
     fn respond(&mut self, body: &str) -> Result<String, String> {
-        let (status, text) = provider::send_via_curl(&self.base_url, &self.api_key_env, body)?;
+        let (status, text) = if provider::streaming_on() {
+            let show = self.on_delta;
+            provider::send_streaming(&self.base_url, &self.api_key_env, body, &mut |k, t| {
+                if let Some(f) = show {
+                    f(k, t)
+                }
+            })?
+        } else {
+            provider::send_via_curl(&self.base_url, &self.api_key_env, body)?
+        };
         if status != 200 {
             return Err(provider::explain_error(status, &text));
         }

@@ -186,3 +186,45 @@ test("the poller carries the page when the stream cannot", async ({ page }) => {
   emit(step({ label: "Read Sheet1!Q1", tool: "read", app: "excel", status: "done", detail: "ok" }));
   await expect(page.locator(".act")).toHaveCount(before + 1, { timeout: 5000 });
 });
+
+test("a reply is drawn as the model writes it, then replaced by the answer", async ({ page }) => {
+  // `RECEIPT delta` lines carry the reply a few times a second while the
+  // model is still writing. The page shows them as a draft (and the
+  // thinking, on one line) and drops both the moment the answer lands, so
+  // the finished text is drawn exactly once.
+  const delta = (kind, text) => "RECEIPT delta " + JSON.stringify({ kind, text });
+  emit("RECEIPT say model=test/m open=0");
+  emit(delta("thinking", "The user wants the total, "));
+  emit(delta("thinking", "so sum column B."));
+  await expect(page.locator(".thought .tx")).toContainText("so sum column B.");
+  emit(delta("text", "The total "));
+  emit(delta("text", "is **42**."));
+  await expect(page.locator(".bot.draft")).toContainText("The total is 42.");
+  // The thinking gives way to the reply once the reply starts.
+  await expect(page.locator(".thought")).toHaveCount(0);
+  await expect(page.locator(".bot.draft strong")).toHaveText("42");
+
+  emit("ANSWER The total is **42**.");
+  await expect(page.locator(".bot.draft")).toHaveCount(0);
+  await expect(page.locator(".bot").last()).toContainText("The total is 42.");
+  const drafts = await page.evaluate(() => window.live.draft);
+  expect(drafts).toBeNull();
+});
+
+test("a stream that drops comes back by itself and misses nothing", async ({ page }) => {
+  // The page used to close the stream for good on its first error and poll
+  // for the rest of its life. Now it polls while it is down and reopens
+  // from where it got to: every line once, none twice, none lost.
+  await page.evaluate(() => window.live.dropStream());
+  expect(await page.evaluate(() => window.live.sse)).toBe(false);
+  emit(step({ label: "Read Gap!A1", tool: "read", app: "excel", status: "done", detail: "ok" }));
+  await page.waitForFunction(() => window.live.sse === true, null, { timeout: 10_000 });
+  emit(step({ label: "Read Gap!A2", tool: "read", app: "excel", status: "done", detail: "ok" }));
+  const count = async (l) => (await page.evaluate(() => window.live.rows.map((r) => r.text))).filter((t) => t === l).length;
+  await expect.poll(() => count("Read Gap!A2")).toBe(1);
+  await page.waitForTimeout(800);
+  expect(await count("Read Gap!A1")).toBe(1);
+  expect(await count("Read Gap!A2")).toBe(1);
+  // Pushed again, not polled.
+  expect(await page.evaluate(() => window.live.polling)).toBe(false);
+});

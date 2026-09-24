@@ -432,6 +432,16 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
   color:var(--muted-foreground)}
 .did::before{content:"";flex:none;width:15px;height:15px;border-radius:50%;
   background:var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 12.5 4 4 8-9'/%3E%3C/svg%3E") center/10px no-repeat}
+/* The reply while the model is still writing it, and what it is thinking
+   on the way. Both are gone when the finished turn arrives. */
+.bot.draft > :is(p,h2,h3,h4,blockquote):last-child::after,
+.bot.draft > :is(ul,ol):last-child > li:last-child::after{content:"";display:inline-block;width:.5em;height:1em;margin-left:2px;
+  vertical-align:-.12em;border-radius:2px;background:var(--primary);animation:pulse 1.1s infinite}
+.thought{align-self:flex-start;max-width:100%;display:flex;gap:8px;font-size:12.5px;line-height:1.5;
+  color:var(--muted-foreground)}
+.thought .lbl{flex:none;font-weight:600}
+.thought .tx{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;
+  font-style:italic;opacity:.85}
 .note{align-self:center;padding:3px 11px;border-radius:99px;background:var(--accent);
   font-size:12px;color:var(--muted-foreground)}
 .fail{display:flex;gap:10px;font-size:13px;line-height:1.5;color:var(--error-foreground);
@@ -1712,7 +1722,61 @@ function liveRow(node) {
   scrollEnd();
 }
 
+// The reply as it is written. `RECEIPT delta` lines carry it a few times a
+// second; the draft is only ever a preview, and is dropped the moment the
+// finished turn (a step, the answer, a stop) says what really happened.
+let draft = null, draftText = "", thought = null, thoughtText = "", draftPaint = 0;
+
+function dropDraft() {
+  if (draft) draft.remove();
+  if (thought) thought.remove();
+  draft = thought = null;
+  draftText = thoughtText = "";
+  cancelAnimationFrame(draftPaint);
+  draftPaint = 0;
+}
+
+function onDelta(d) {
+  if (typeof d.text !== "string" || !d.text) return;
+  if (d.kind === "thinking") {
+    // Only the latest of it, on one line: the reasoning is a sign of life,
+    // not something to read back.
+    thoughtText = (thoughtText + d.text).slice(-600);
+    if (!thought) {
+      thought = el("div", "thought");
+      thought.append(el("span", "lbl", "Thinking"), el("span", "tx"));
+      liveRow(thought);
+    }
+    // U+200E keeps an rtl-clipped tail from moving its punctuation.
+    thought.querySelector(".tx").textContent = "\u200e" + thoughtText.replace(/\s+/g, " ").trim() + "\u200e";
+    return;
+  }
+  draftText += d.text;
+  if (thought) { thought.remove(); thought = null; thoughtText = ""; }
+  if (!draft) {
+    draft = el("div", "bot draft");
+    liveRow(draft);
+  }
+  // Markdown is re-rendered once a frame at most, however fast text comes.
+  if (!draftPaint) draftPaint = requestAnimationFrame(() => {
+    draftPaint = 0;
+    if (!draft) return;
+    draft.innerHTML = md(draftText);
+    scrollEnd();
+  });
+}
+
 function liveStep(line) {
+  // RECEIPT delta {"kind","text"} -- the reply, as it is being written.
+  let m0 = line.match(/^RECEIPT delta (\{[\s\S]*\})$/);
+  if (m0) {
+    let d = null;
+    try { d = JSON.parse(m0[1]); } catch { return; }
+    return void onDelta(d);
+  }
+  // Anything else that says what happened replaces the preview of it.
+  if (/^(RECEIPT (say|step|did|retry) |ANSWER |STOPPED |ERROR )/.test(line)) dropDraft();
+
   // RECEIPT say model=X open=N -- a turn is starting.
   let m = line.match(/^RECEIPT say model=(\S+)/);
   if (m) {
@@ -1790,7 +1854,7 @@ function liveStep(line) {
 // A run that has stopped printing leaves its steps on screen but stops
 // claiming to be in progress.
 function liveState(running) {
-  if (!running) setBanner("busy", null);
+  if (!running) { setBanner("busy", null); dropDraft(); }
   if (!running && liveActs) liveClose();
 }
 
@@ -1799,6 +1863,7 @@ function liveState(running) {
 function liveSource(name) {
   tailSrc = name;
   tailAt = 0;
+  dropDraft();
   setBanner("run", null);
   for (const n of liveNodes) n.remove();
   if (liveTurn && !liveTurn.children.length) liveTurn.remove();
@@ -1819,13 +1884,24 @@ function liveSource(name) {
    a little behind. `sseOK` decides which is running, so the two can never
    both be appending to the same timeline. */
 let es = null, sseOK = false;
+// Whether the page wants the stream at all (a test can force the poller),
+// and how long to wait before trying it again after it drops.
+let streamWanted = true, streamRetry = 1000, streamAgain = null;
 
 function streamOpen() {
   if (es || typeof EventSource !== "function") return false;
-  try { es = new EventSource("/stream?since=" + tailAt); } catch { return false; }
+  streamWanted = true;
+  clearTimeout(streamAgain);
+  streamAgain = null;
+  // Where the page is: the run it is on and how many of its lines it has.
+  // The server resumes from exactly there, so a stream that comes back
+  // after a drop neither misses a line nor draws one twice.
+  const at = "/stream?since=" + tailAt + "&source=" + encodeURIComponent(tailSrc || "");
+  try { es = new EventSource(at); } catch { return false; }
 
   es.onopen = () => {
     sseOK = true;
+    streamRetry = 1000;
     // Belt and braces: the fallback must not keep appending underneath a
     // stream that has just come up.
     clearInterval(tailTimer);
@@ -1834,6 +1910,15 @@ function streamOpen() {
   es.onmessage = (e) => {
     let d = null;
     try { d = JSON.parse(e.data); } catch { return; }
+    // Every frame says where it leaves the cursor. A line at or behind
+    // the page's cursor was already drawn -- by the poller, in the moment
+    // between a stream dropping and the next one opening -- and drawing it
+    // again is every row twice. The cursor also lets the poller carry on
+    // from here if this stream drops.
+    if (typeof d.n === "number") {
+      if (d.n <= tailAt) return;
+      tailAt = d.n;
+    }
     if (typeof d.line === "string") liveStep(d.line);
   };
   es.addEventListener("source", (e) => {
@@ -1844,7 +1929,9 @@ function streamOpen() {
     // connect threw away what the first poll had already drawn -- then
     // the replay drew it again underneath. Every step twice.
     if (d.source === tailSrc) {
-      if (typeof d.since === "number") tailAt = d.since;
+      // Never backwards: the poller may have drawn past where this stream
+      // was asked to start.
+      if (typeof d.since === "number" && d.since > tailAt) tailAt = d.since;
       return;
     }
     liveSource(d.source);
@@ -1855,11 +1942,19 @@ function streamOpen() {
     liveState(!!d.running);
   });
   es.onerror = () => {
-    // EventSource reconnects by itself, and would replay from `since=0`
-    // on a URL we cannot change after the fact. One failure is enough:
-    // close it for good and let the poller carry the page.
+    // The page reconnects, not the browser. EventSource would retry by
+    // itself with the last frame's id, which the server understands, but
+    // the poller carries the page in between and moves the cursor on;
+    // a browser retry would then replay what the poller drew. So: close
+    // it, poll meanwhile, and open a new stream from the current cursor.
+    // This used to close the stream for good on the first error, and one
+    // dropped connection left the page polling for the rest of its life.
     streamClose();
-    if (!tailTimer) tailTimer = setInterval(tail, 1000);
+    if (!tailTimer) tailTimer = setInterval(tail, busy ? 700 : 1000);
+    if (streamWanted && !streamAgain) {
+      streamAgain = setTimeout(() => { streamAgain = null; if (streamWanted) streamOpen(); }, streamRetry);
+      streamRetry = Math.min(streamRetry * 2, 15000);
+    }
   };
   return true;
 }
@@ -1878,6 +1973,9 @@ async function tail() {
     const r = await fetch("/events?since=" + tailAt + "&source=" + encodeURIComponent(tailSrc || ""));
     if (!r.ok) return;
     const d = await r.json();
+    // The stream came back while this poll was out; it owns the timeline
+    // now, and this answer would draw what the stream is drawing.
+    if (sseOK) return;
     // The first look at a log is a catch-up, not a replay. The saved
     // transcript already has everything that finished, and `refresh()`
     // has just drawn it; redrawing the same steps out of the progress
@@ -2340,6 +2438,11 @@ window.live = {
       app: e.dataset.app ?? "",
     }));
   },
+  /** The reply being written, and the thinking shown on the way. */
+  get draft() { return draft ? draftText : null; },
+  get thought() { return thought ? thoughtText : null; },
+  /** Drop the stream the way a network blip does. */
+  dropStream() { if (es) es.onerror(); },
   /** Feed one CLI output line, exactly as a transport would. */
   step: line => liveStep(line),
   /** The minimap's ticks, one per user turn. */
@@ -2363,12 +2466,16 @@ window.live = {
   fold: node => foldIfLong(node),
   /** Drop to polling, the way a proxy that eats event-streams would. */
   toPolling(ms) {
+    streamWanted = false;
+    clearTimeout(streamAgain);
     streamClose();
     clearInterval(tailTimer);
     tailTimer = setInterval(tail, ms || 300);
   },
   /** Stop both transports, so a test measures rendering and not timing. */
   quiet() {
+    streamWanted = false;
+    clearTimeout(streamAgain);
     streamClose();
     clearInterval(tailTimer);
     tailTimer = null;

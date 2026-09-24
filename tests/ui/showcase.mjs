@@ -121,6 +121,22 @@ try {
       await page.evaluate(() => (document.getElementById("scroll").scrollTop = 1e9));
     }
 
+    // 2b. The model thinking, then writing its reply as it goes.
+    if (!tag || tag === "-narrow") {
+      const d = (kind, text) => "RECEIPT delta " + JSON.stringify({ kind, text });
+      await page.evaluate(() => window.live.banner("retry", null));
+      await page.evaluate((x) => window.live.step(x),
+        d("thinking", "The summary should lead with the payback period, since that is what the board asked about last time, then the risks."));
+      await page.evaluate(() => (document.getElementById("scroll").scrollTop = 1e9));
+      await stage(page, "thinking" + tag);
+      await page.evaluate((x) => window.live.step(x),
+        d("text", "The memo now opens with an **Executive summary**:\n\n- Payback in 6.2 years at current tariffs\n- The main risk is"));
+      await page.waitForTimeout(100);
+      await page.evaluate(() => (document.getElementById("scroll").scrollTop = 1e9));
+      await stage(page, "writing" + tag);
+      await page.evaluate(() => window.live.step("RECEIPT retry model=qwen/qwen3-coder"));
+    }
+
     // 3. The decision point: a shell call waiting for a human.
     await page.evaluate(() => {
       window.live.banner("retry", null);

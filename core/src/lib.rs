@@ -33,6 +33,7 @@ pub mod runner;
 pub mod security;
 pub mod sessions;
 pub mod shell;
+pub mod sse;
 pub mod snapshots;
 pub mod stream;
 pub mod summarise;

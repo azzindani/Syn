@@ -35,4 +35,4 @@ Implication: external-model desktop brain exists. None bundles native Office.js 
 ## What is still open (build this)
 1. One external session ID spanning Office.js (Mac/Web) + COM live (Win) + browser + Adobe UXP + Blender/Unreal/AutoCAD, with OpenRouter picker and shared history — nobody ships this bundle.
 2. Relay pairing (6-digit) + allowlisted background shell + GetActiveObject live attach as product UX, not GitHub README.
-3. API-first router that never pays Astra pixels unless Office.js/COM/Graph provably can't reach the control.
+3. API-first router that never pays for pixels unless Office.js/COM/Graph provably can't reach the control.

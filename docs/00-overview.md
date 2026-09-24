@@ -13,7 +13,7 @@ Status: idea bucket
 - Office plugins are standalone: ChatGPT for Excel/PowerPoint (Marketplace, Excel+PPT only, separate history; Codex desktop CAN drive open Excel via add-in, Excel-only). Claude for Word/Excel/PowerPoint (GA paid) + Outlook (beta), one conversation across Office apps. Neither runs inside the desktop AI app.
 - Claude Desktop alone = Graph file-level (OneDrive/SharePoint/Outlook/Teams read, write with scopes), not live open-doc UI control. Live tracked-changes / cell / slide-master work needs add-in hands.
 - Built-in first-party wall: Office.js iframe can only touch its own doc + https out. No cross-app, no OS, no localhost in prod. Hence fragmentation.
-- GPT-6 Astra computer-use is best (`gpt-6-astra`, 72.6% OSWorld 2.0, ~47% faster than Sol) but heavy: screenshot loops, $10/M in / $50/M out, long-context surcharge, per-call fee.
+- Frontier computer-use models are best at this (72.6% OSWorld 2.0 at the top) but heavy: screenshot loops, ~$10/M in / $50/M out, long-context surcharge, per-call fee.
 
 ## Vision
 External desktop orchestrator + thin connectors, one `session_id`:

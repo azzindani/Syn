@@ -33,8 +33,8 @@ Same session, two modes, one event stream:
 - Per-file undo scope: Word native Ctrl+Z chain, Excel snapshot+`excel_undo`, PPT step stack. Stop button halts queue, keeps files open, `.bak` before save.
 - Human take-over: pause -> human edits live -> resume, agent re-reads handle before next step.
 
-## Switch policy (API-first, Astra-last)
-1. Office.js/COM/Graph if reachable. 2. Visible attach if user opened app. 3. Headless bulk otherwise. 4. Astra vision only for UI-only gaps. Never pixels for what API can do.
+## Switch policy (API-first, vision-last)
+1. Office.js/COM/Graph if reachable. 2. Visible attach if user opened app. 3. Headless bulk otherwise. 4. Vision (reasoning slot) only for UI-only gaps. Never pixels for what API can do.
 
 ## MVP build
 - Relay rooms: `session:{id}` global + `file:{handle}` per doc.

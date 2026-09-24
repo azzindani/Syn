@@ -5,13 +5,20 @@
 
 use crate::router::{Effort, Model, Route};
 
-/// Default model IDs. Override via deployment config, not code edits.
+/// The compiled default for every slot: OpenRouter's own router, which
+/// picks a model per request. Neutral on purpose -- no vendor is baked into
+/// the binary, and a deployment names its models in `.env`
+/// (`AGENT_MODEL_SMALL|STANDARD|CODING|REASONING`), not by code edits.
+///
+/// Every slot shares it, so an unconfigured install has no failover chain:
+/// `fallbacks` skips slots that resolve to the same id.
+pub const DEFAULT_MODEL: &str = "openrouter/auto";
+
+/// Default model ID for one slot. Override via deployment config. The match
+/// is exhaustive so a new slot has to choose its default here.
 pub fn model_id(model: Model) -> &'static str {
     match model {
-        Model::Small => "openai/gpt-5.6-luna",
-        Model::Standard => "openai/gpt-5.6-terra",
-        Model::Coding => "openai/gpt-5.6-sol",
-        Model::Reasoning => "openai/gpt-6-astra",
+        Model::Small | Model::Standard | Model::Coding | Model::Reasoning => DEFAULT_MODEL,
     }
 }
 
@@ -637,26 +644,29 @@ mod tests {
     fn body_carries_model_effort_and_escaped_prompt() {
         let r = route(TaskKind::Code);
         let body = request_body(r, "sys", "say \"hi\"\nnewline");
-        assert!(body.contains("openai/gpt-5.6-sol"));
+        assert!(body.contains(r#""model":"openrouter/auto""#));
         assert!(body.contains("\\\"hi\\\""));
         assert!(body.contains("\\n"));
         let m = Mock { seen_url: Default::default(), seen_body: Default::default() };
         m.post(DEFAULT_BASE_URL, "AGENT_API_KEY", &body).unwrap();
         assert!(m.seen_url.borrow().contains("openrouter.ai"));
-        assert!(m.seen_body.borrow().contains("gpt-5.6-sol"));
+        assert!(m.seen_body.borrow().contains(DEFAULT_MODEL));
     }
 
     #[test]
-    fn the_reasoning_slot_resolves_to_the_flagship() {
+    fn every_slot_defaults_to_the_neutral_router() {
+        for m in crate::router::Model::ALL {
+            assert_eq!(model_id(m), DEFAULT_MODEL, "{m:?}");
+        }
         let r = route(TaskKind::VisionFallback);
-        assert!(request_body(r, "", "").contains("openai/gpt-6-astra"));
+        assert!(request_body(r, "", "").contains(DEFAULT_MODEL));
     }
 
     #[test]
     fn stream_body_flags_sse() {
         let b = stream_body(route(TaskKind::Routine), "s", "u");
         assert!(b.contains(r#""stream":true"#));
-        assert!(b.contains("gpt-5.6-terra"));
+        assert!(b.contains(DEFAULT_MODEL));
     }
 
     #[test]

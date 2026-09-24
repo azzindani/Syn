@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn astra_only_for_hard_tasks() {
+    fn reasoning_only_for_hard_tasks() {
         for t in [TaskKind::Skim, TaskKind::Routine, TaskKind::Code] {
             assert_ne!(route(t).model, Model::Reasoning, "{t:?} must not route to Reasoning");
         }

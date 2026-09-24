@@ -8,7 +8,7 @@ This is a small movable widget: one desktop brain orchestrating many open softwa
 ## 2. Problem
 - Vendor sidebars are standalone per app with separate history and locked models.
 - MCP file tools are headless-blind: human sees final output only, no watch/interrupt.
-- Computer-use pixels (Astra) work but cost $10/M in / $50/M out + slow screenshot loops.
+- Computer-use pixels work but cost $10/M in / $50/M out + slow screenshot loops.
 
 ## 3. User
 Single user, single Windows device, Office installed (like Claude/ChatGPT Desktop shape). No org/tenant features in POC.
@@ -18,7 +18,7 @@ Single user, single Windows device, Office installed (like Claude/ChatGPT Deskto
 - Live attach to open Word/Excel/PPT via COM (`GetActiveObject`, `Visible=true`); headless file mode via `Visible=false`.
 - Multi-open registry (`app:type:pid:docId`), typed transfers with provenance (Excel range -> Word table -> PPT chart).
 - Watchable run: broadcast event stream to widget, per-file undo scope, pause/resume/take-over.
-- Model router: OpenRouter picker (Luna skim / Terra routine / Sol code / Astra fallback-only).
+- Model router: OpenRouter picker over four slots (small = skim / standard = routine / coding = code / reasoning = deep work and vision fallback only).
 
 ## 5. Non-Goals (POC)
 No Mac/Linux builds (CI later), no Adobe/3D/CAD hands, no Marketplace listing, no multi-user, no cloud relay (localhost/named pipe only), no pixel-vision control.
@@ -43,4 +43,4 @@ Closed schemas (`additionalProperties:false`, caps, refuse-not-truncate), read/w
 - Exit POC when M3 demo passes 3/3 runs; then plan Office.js panes + CI + next hands.
 
 ## 10. Risks / Open
-COM single-instance quirks, modal dialogs blocking STA, file locks/co-author conflicts, WebView localhost limits (deferred via named pipe), Astra fallback cost caps.
+COM single-instance quirks, modal dialogs blocking STA, file locks/co-author conflicts, WebView localhost limits (deferred via named pipe), vision-fallback cost caps.

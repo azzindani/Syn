@@ -15,9 +15,15 @@ Verified 2026-09-19 on Windows 11 + Microsoft 365 + .NET 8.0.425:
 Run it yourself: `scripts\live-excel-smoke.ps1` (prints PASS/FAIL, transcript
 in `testbed/logs/`). Fixtures come from `scripts\new-testbed-docs.ps1`.
 
-**Not yet verified live:** Word and PowerPoint dispatch, `export`, snapshot
-`.bak`, the Tauri bundle, and anything driving the sidecar from the Rust core
-— there is still no pipe client in Rust (see §6).
+Since then, also verified live:
+
+- the Rust core drives the sidecar over the pipe (`core::hand::Hand`, §6);
+- Word and PowerPoint dispatch, `format`, `struct` and `export`, all
+  exercised by the capability test's scripted control
+  (`tests/capability/load.txt`: 217 operations over Excel, Word and
+  PowerPoint, every figure exact — see `tests/capability/SPEC-v3.md`).
+
+**Not yet verified live:** snapshot `.bak` and the Tauri bundle.
 
 ### Four things real Office taught us that no container could
 
@@ -44,7 +50,7 @@ in `testbed/logs/`). Fixtures come from `scripts\new-testbed-docs.ps1`.
 
 ## 1. COM sidecar (live hands)
 ```
-cd data\agent\sidecar-csharp\Host
+cd sidecar-csharp\Host
 dotnet build -c Release
 .\bin\Release\net8.0-windows\office-host.exe --pipe hand-excel --app excel
 ```
@@ -64,12 +70,13 @@ set AGENT_BASE_URL=https://openrouter.ai/api/v1
 cli.exe  ->  send routine "summarize the registry"
 ```
 - Watch the widget feed: `step.start` → streamed tokens → `step.done`.
-- Astra check: `route vision` must resolve `openai/gpt-6-astra`, effort low.
+- Routing check: `route vision` must resolve the reasoning slot
+  (`AGENT_MODEL_REASONING`, default `openrouter/auto`), effort low.
 - Budget check: set cap 3 in the widget, run 3 routine tasks, 4th auto-pauses.
 
 ## 3. Widget bundle
 ```
-cd data\agent\widget\src-tauri && cargo tauri build
+cd widget\src-tauri && cargo tauri build
 ```
 - Sign the bundle, install, drag it over Excel: it must stay on top,
   keep working while Excel has focus, and die with no orphan when closed.
@@ -112,8 +119,8 @@ document edits, not just in-memory ones.
 
 Deliberate gaps: no relay snapshot is taken for a live handle (undo belongs
 to the sidecar's `.bak` plus the app's own stack, and a fake snapshot would
-make `undo` look available when it is not); `format` and `struct` have no
-sidecar verbs and refuse rather than silently no-op; a dead pipe drops the
+make `undo` look available when it is not); a verb a sidecar does not
+implement refuses rather than silently no-ops; a dead pipe drops the
 hand and freezes the queue so the next op cannot quietly fall back to the
 in-memory model and report success for a document nobody touched.
 

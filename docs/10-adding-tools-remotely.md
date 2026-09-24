@@ -20,7 +20,7 @@ exactly one step for the machine with Office on it.
 | 3 | Windows + Office | that the COM call is right and the document ends up correct |
 
 Tier 1 is `cargo test` on any platform — Linux, macOS, a cloud sandbox. It is
-already 285 tests and CI runs it on three operating systems.
+several hundred tests and CI runs it on three operating systems.
 
 Tier 2 is the part people forget exists: `attach` **without** `live` binds a
 handle to the in-memory document model. `read`, `write`, `format`,

@@ -35,8 +35,8 @@ software hands (Office first) in one live session, any model via OpenRouter.
   that types it into a real `cli` process, so the page can only do what the
   CLI can do. Layout digested from t3code (`docs/DIGEST-05-t3code-ui.md`).
   (Tauri shell in `widget/src-tauri`, still unbuilt.)
-  - `chats` — saved conversations as JSON Lines under `.agent/chats`
-    (gitignored). One file per thread, appended per turn.
+- `core/src/chats.rs` — saved conversations as JSON Lines under
+  `.agent/chats` (gitignored). One file per thread, appended per turn.
 - `sidecar-csharp/Host/` — full STA COM sidecar (Word/Excel/PowerPoint,
   named-pipe office-rpc/1, timeout-guarded calls, .bak snapshots).
   Needs Windows + .NET 8 + Office to compile/run.
@@ -51,9 +51,14 @@ software hands (Office first) in one live session, any model via OpenRouter.
   `live-cdp-smoke.ps1` (a real browser), `live-uia-smoke.ps1` (Calculator).
 - `testbed/` — gitignored run area for live Office tests (docs/out/logs).
 - `.env.example` — provider key, endpoint, and the four model slots
-  (`AGENT_MODEL_LUNA|TERRA|SOL|ASTRA`); copy to `.env`, which is gitignored.
-- `docs/` — 00→08, DIGEST-00→04, PRD, ideas, runbook-windows.
-- `.tmp/repos/` — 9 cloned sources this was ported from.
+  (`AGENT_MODEL_SMALL|STANDARD|CODING|REASONING`); copy to `.env`, which is
+  gitignored. Unset slots default to `openrouter/auto`.
+- `tests/capability/` — the v0.1.0 capability test: brief, rubric, scorers,
+  and every recorded run (`SPEC-v3.md`).
+- `tests/ui/` — Playwright specs that drive the real console.
+- `docs/` — 00→10, DIGEST-00→08, PRD, ideas, runbook-windows.
+- `.tmp/repos/` — gitignored; local clones of the sources this was ported
+  from (`docs/DIGEST-00-inventory.md`).
 
 ## Port map (digested in docs/DIGEST-*)
 - opencode loops -> bus events, part states, compaction budgets, retry,
@@ -67,25 +72,27 @@ software hands (Office first) in one live session, any model via OpenRouter.
 
 ## Run here (Linux POC)
 ```
-python3 -m unittest discover -s tests   # 23 green
-cd core && cargo test                      # 178 green
-cargo run --example demo && ./target/release/cli < ../tests/e2e_script.txt
+python3 -m unittest discover -s tests      # relay POC
+cd core && cargo clippy --all-targets -- -D warnings && cargo test
+cargo build --release && cargo run --example demo
+./target/release/cli < ../tests/e2e_script.txt
 ./target/release/cli < ../tests/e2e_safety.txt   # allow/kill/journal/replay/sessions
 printf '{"tool":"list"}\n' | cargo run -q --bin mcpgate
 ```
 ## Run on Windows (live Office)
 ```
 dotnet build sidecar-csharp\Host\Host.csproj -c Release
-powershell -File scripts
-ew-testbed-docs.ps1     # fixtures (close Office first)
+powershell -File scripts\new-testbed-docs.ps1     # fixtures (close Office first)
 powershell -File scripts\live-excel-smoke.ps1     # attach + read/write live Excel
 ```
 Verified on Windows 11 + Microsoft 365 + .NET 8: the sidecar attaches to an
 open workbook, reads and writes it live, fails closed on bad handles, and
 detaches without closing the user's Excel — driven both by the PowerShell
-smoke test and by `cli.exe` itself over the pipe (`hand` / `lread` / `lwrite`). Word/PowerPoint dispatch, export,
-the Tauri bundle and a Rust-side pipe client are still unproven — status and
-the COM lessons behind the fixes are in `docs/runbook-windows.md`.
+smoke test and by `cli.exe` itself over the pipe (`hand` / `lread` / `lwrite`).
+Word and PowerPoint were driven live by the capability test's scripted
+control (`tests/capability/load.txt`: 217 operations across all three apps).
+The Tauri bundle is still unbuilt — status and the COM lessons behind the
+fixes are in `docs/runbook-windows.md`.
 
 Copy `.env.example` to `.env` and add a key to enable `send` and `do`.
 

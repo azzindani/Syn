@@ -25,7 +25,7 @@
 4. Stream start/block/end live-writing UX for struct.*.
 5. Disk-persisted snapshot index + orphan prune.
 6. ACP 3-level responses + formula sanitiser on cell writes.
-7. Screenshot tools as the sanctioned vision-fallback path (Astra-routed).
+7. Screenshot tools as the sanctioned vision-fallback path (routed to the reasoning slot).
 8. Follow-mode selection tracking into live feed.
 
 ## Implementation status (loop D3, verified)

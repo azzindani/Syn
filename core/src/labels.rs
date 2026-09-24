@@ -218,6 +218,7 @@ fn preposition(name: &str, args: &str) -> &'static str {
     match name {
         "read" => "",
         "write" | "format" => "",
+        "export" if matches!(field(args, "format").as_deref(), Some("summary" | "preview")) => "",
         "export" => "to",
         "undo" => "on",
         "shell" => "",
@@ -287,6 +288,10 @@ fn forms_for(name: &str, args: &str) -> Forms {
             return f;
         }
         return ("Change", "Changing", "Changed", "the document");
+    }
+    // A summary writes nothing, so "Exported to plan.xlsx" misdescribed it.
+    if tool == "export" && matches!(field(args, "format").as_deref(), Some("summary" | "preview")) {
+        return ("Summarise", "Summarising", "Summarised", "a document");
     }
     lookup(TOOL_FORMS, tool).unwrap_or(("Use", "Using", "Used", "a tool"))
 }
@@ -460,6 +465,14 @@ pub fn severity(step: &crate::agent::Step) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_summary_is_summarised_not_exported() {
+        let a = r#"{"handle":"excel:plan.xlsx:workbook","format":"summary"}"#;
+        assert_eq!(sentence("export", a, Status::Done), "Summarised plan.xlsx");
+        let b = r#"{"handle":"excel:plan.xlsx:workbook","format":"pdf","path":"out.pdf"}"#;
+        assert_eq!(sentence("export", b, Status::Done), "Exported to out.pdf");
+    }
 
     #[test]
     fn every_struct_verb_has_words() {

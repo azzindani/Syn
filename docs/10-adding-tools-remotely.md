@@ -55,9 +55,15 @@ disagree:
 It needs no Office, no dotnet and no network, and it runs in under a second.
 A verb added on one side only now fails in CI instead of on someone's desk.
 Methods deliberately left unimplemented are listed in
-`DELIBERATELY_UNIMPLEMENTED` with the reason — currently just `undo`, whose
-live behaviour belongs to the sidecar's `.bak` and the application's own
-undo stack.
+`DELIBERATELY_UNIMPLEMENTED` with the reason. It is empty: `undo` was there
+until office-host kept its own record of what it changed (`Undo.cs`).
+
+`each_app_is_offered_exactly_the_verbs_its_helper_handles` holds
+`tools::APP_METHODS` to each app's dispatcher, both ways. That table is what
+the runner refuses by before the helper is asked ("sort is Excel only; Word
+has no sort. Word's struct verbs are: ..."), so a verb added to one app's
+switch also needs its row there, and the struct description's per-app list
+is checked against the same table.
 
 ## Adding a verb, start to finish
 

@@ -285,7 +285,7 @@ pub fn app_key(app: &str) -> &str {
 pub fn selectors(app: &str) -> &'static str {
     match app_key(app) {
         "excel" => "Excel selectors name the sheet: Sheet1!A1:D10, or 'Q3 sales'!B2 when the name has a space.",
-        "word" => "Word selectors are body, or p0, p1 ... for one paragraph; p0 is the first.",
+        "word" => "Word selectors are body (the text, numbered), p3 for one paragraph or p3:p9 for several; p0 is the first.",
         "ppt" => "PowerPoint selectors are deck, or s1, s2 ... for one slide, s2.notes for its notes.",
         "web" => "Selectors on a web page are CSS: h1, #total, table tr:nth-child(2).",
         "ui" => "Window selectors are :tree for the control list, or id=..., name=..., type=... joined by commas.",

@@ -793,5 +793,94 @@ namespace Syn.Sidecar
                 yield return t ?? "";
             }
         }
+
+        // ---- the shared verbs, where an app had gone without ----
+        // header, pageNumbers and pageSetup were each missing from one app,
+        // so the same request worked in two and was "unsupported" in the
+        // third. A model should not have to know which.
+
+        /// Excel's header or footer: the centre section, on one sheet or on
+        /// every sheet when no sheet is named.
+        private static string ExcelHeader(dynamic wb, string handle, string selector, string which, string text)
+        {
+            Snapshot(handle);
+            var footer = (which ?? "").Trim().ToLowerInvariant() switch
+            {
+                "header" or "" => false,
+                "footer" => true,
+                _ => throw new InvalidOperationException($"header takes name header or footer, not {which}"),
+            };
+            // & starts a code in Excel's header grammar (&P is the page
+            // number), so a literal one is doubled.
+            var value = (text ?? "").Replace("&", "&&");
+            if (value.Length > 250) throw new InvalidOperationException("Excel keeps a header or footer to 255 characters: shorten it");
+            var sheets = SheetsNamed((object)wb, selector);
+            foreach (var ws in sheets)
+            {
+                if (footer) ws.PageSetup.CenterFooter = value;
+                else ws.PageSetup.CenterHeader = value;
+            }
+            return Ok($"{(footer ? "footer" : "header")} set on {sheets.Count} sheet(s); it shows when printed or exported to pdf");
+        }
+
+        /// Page numbers in the footer of one sheet, or of every sheet.
+        private static string ExcelPageNumbers(dynamic wb, string handle, string selector, string text)
+        {
+            Snapshot(handle);
+            var lead = string.IsNullOrWhiteSpace(text) ? "" : text.Replace("&", "&&") + "  ";
+            var sheets = SheetsNamed((object)wb, selector);
+            foreach (var ws in sheets) ws.PageSetup.CenterFooter = lead + "Page &P of &N";
+            return Ok($"page numbers in the footer of {sheets.Count} sheet(s)");
+        }
+
+        private static List<dynamic> SheetsNamed(object wbO, string selector)
+        {
+            dynamic wb = wbO;
+            var (sheet, _) = SplitRange(selector ?? "");
+            var list = new List<dynamic>();
+            if (!string.IsNullOrEmpty(sheet)) { list.Add(Sheet(wb, sheet)); return list; }
+            int n = wb.Worksheets.Count;
+            for (var i = 1; i <= n; i++) list.Add(wb.Worksheets[i]);
+            return list;
+        }
+
+        /// A deck's slide size and orientation.
+        private static string SlidePageSetup(dynamic pres, string handle, string style)
+        {
+            Snapshot(handle);
+            dynamic ps = pres.PageSetup;
+            var did = new List<string>();
+            foreach (var (k, v) in Pairs(style))
+            {
+                switch (k)
+                {
+                    case "size":
+                    case "paper":
+                        // Width and height in points for the two screen shapes
+                        // everyone means; PowerPoint's own size types for
+                        // paper. Either way it rescales what is on the slides.
+                        switch (v.Trim().ToLowerInvariant())
+                        {
+                            case "16:9": case "widescreen": ps.SlideWidth = 960; ps.SlideHeight = 540; break;
+                            case "4:3": case "standard": ps.SlideWidth = 720; ps.SlideHeight = 540; break;
+                            case "16:10": ps.SlideWidth = 720; ps.SlideHeight = 450; break;
+                            case "a4": ps.SlideSize = 3; break;      // ppSlideSizeA4Paper
+                            case "letter": ps.SlideSize = 2; break;  // ppSlideSizeLetterPaper
+                            default: throw new InvalidOperationException($"size does not know {v}: 16:9, 4:3, 16:10, A4 or Letter");
+                        }
+                        did.Add($"size {v}");
+                        break;
+                    case "orientation":
+                        // msoOrientationHorizontal 1, msoOrientationVertical 2
+                        ps.SlideOrientation = v.StartsWith("port", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+                        did.Add($"orientation {v}");
+                        break;
+                    default:
+                        throw new InvalidOperationException($"pageSetup on a deck takes size (16:9, 4:3, 16:10, A4, Letter) and orientation, not {k}");
+                }
+            }
+            if (did.Count == 0) throw new InvalidOperationException("pageSetup needs style, e.g. size=16:9 or orientation=portrait");
+            return Ok($"deck is now {string.Join(", ", did)} ({(double)ps.SlideWidth:0}x{(double)ps.SlideHeight:0} points)");
+        }
     }
 }

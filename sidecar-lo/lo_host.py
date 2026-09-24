@@ -620,6 +620,42 @@ class Calc:
             return "sheet %s %s" % (sheet, "shown" if action == "show" else "hidden")
         raise Refused("sheet does not know %s: rename, delete, copy, hide or show" % action)
 
+    def page_styles(self, selector):
+        """The page styles of the named sheet, or of every sheet."""
+        sheet, _ = split_range(selector or "")
+        sheets = [self.sheet(sheet)] if sheet else [self.doc.Sheets.getByIndex(i) for i in range(self.doc.Sheets.getCount())]
+        fam = self.doc.StyleFamilies.getByName("PageStyles")
+        names = []
+        for ws in sheets:
+            if ws.PageStyle not in names:
+                names.append(ws.PageStyle)
+        return [fam.getByName(n) for n in names], len(sheets)
+
+    def header(self, selector, which, text):
+        which = (which or "header").strip().lower()
+        if which not in ("header", "footer"):
+            raise Refused("header takes name header or footer, not %s" % which)
+        styles, n = self.page_styles(selector)
+        for st in styles:
+            setattr(st, "HeaderIsOn" if which == "header" else "FooterIsOn", True)
+            key = "RightPageHeaderContent" if which == "header" else "RightPageFooterContent"
+            content = getattr(st, key)
+            content.CenterText.setString(text)
+            setattr(st, key, content)
+        return "%s set on %d sheet(s); it shows when printed or exported to pdf" % (which, n)
+
+    def page_numbers(self, selector, text):
+        styles, n = self.page_styles(selector)
+        for st in styles:
+            st.FooterIsOn = True
+            content = st.RightPageFooterContent
+            t = content.CenterText
+            t.setString(("%s  " % text if text else "") + "Page ")
+            field = self.doc.createInstance("com.sun.star.text.TextField.PageNumber")
+            t.insertTextContent(t.getEnd(), field, False)
+            st.RightPageFooterContent = content
+        return "page numbers in the footer of %d sheet(s)" % n
+
     def comment(self, selector, text):
         sheet, addr = split_range(selector)
         if not addr:
@@ -863,6 +899,34 @@ class Impress:
         t = self.shape_of(page, "TitleTextShape")
         return t.getString() if t is not None else ""
 
+    def page_setup(self, style):
+        """Slide size and orientation, in 1/100 mm as Impress keeps them."""
+        page = self.pages().getByIndex(0)
+        did = []
+        for pair in (style or "").split(";"):
+            if "=" not in pair:
+                continue
+            k, v = [x.strip() for x in pair.split("=", 1)]
+            k, v = k.lower(), v.lower()
+            if k in ("size", "paper"):
+                size = {"16:9": (33867, 19050), "widescreen": (33867, 19050), "4:3": (25400, 19050),
+                        "standard": (25400, 19050), "16:10": (25400, 15875), "a4": (27517, 19050),
+                        "letter": (25400, 19050)}.get(v)
+                if size is None:
+                    raise Refused("size does not know %s: 16:9, 4:3, 16:10, A4 or Letter" % v)
+                page.Width, page.Height = size
+                did.append("size " + v)
+            elif k == "orientation":
+                w, h = page.Width, page.Height
+                if (v.startswith("port") and w > h) or (v.startswith("land") and h > w):
+                    page.Width, page.Height = h, w
+                did.append("orientation " + v)
+            else:
+                raise Refused("pageSetup on a deck takes size (16:9, 4:3, 16:10, A4, Letter) and orientation, not %s" % k)
+        if not did:
+            raise Refused("pageSetup needs style, e.g. size=16:9 or orientation=portrait")
+        return "deck is now %s" % ", ".join(did)
+
     def read_deck(self):
         pages = self.pages()
         out = "slides=%d" % pages.getCount()
@@ -1038,18 +1102,199 @@ DEFAULT_FORMAT = {"excel": "xlsx", "word": "docx", "powerpoint": "pptx"}
 
 
 
-def export(app, doc, fmt, path):
-    if not path:
-        raise Refused("export needs a path")
+def summary(app, doc):
+    if app == "excel":
+        parts = []
+        for i in range(doc.Sheets.getCount()):
+            ws = doc.Sheets.getByIndex(i)
+            c = ws.createCursor()
+            c.gotoStartOfUsedArea(False)
+            c.gotoEndOfUsedArea(True)
+            a = c.getRangeAddress()
+            parts.append("%s %s%d:%s%d" % (ws.Name, col_name(a.StartColumn), a.StartRow + 1,
+                                            col_name(a.EndColumn), a.EndRow + 1))
+        return "%d sheet(s): %s" % (len(parts), "; ".join(parts))
+    if app == "word":
+        w = Writer(doc)
+        ps = w.paras()
+        heads = ["p%d %s" % (i, trunc(p.getString())) for i, p in enumerate(ps)
+                 if (p.ParaStyleName or "").lower().startswith(("heading", "title"))][:30]
+        return "paras=%d%s" % (len(ps), ("; headings: " + " | ".join(heads)) if heads else "")
+    return Impress(doc).read_deck()
+
+
+def export(app, doc, fmt, path, sheet=""):
     fmt = (fmt or "").lower()
+    if fmt in ("summary", "preview"):
+        return summary(app, doc)
+    if not path:
+        raise Refused("export %s needs a path to write to" % fmt)
     if fmt == "png":
         raise Refused("export png (charts to pictures) needs Excel; this LibreOffice helper does xlsx, pdf and csv")
     filters = FILTERS[app]
     flt = filters.get(fmt) or filters[DEFAULT_FORMAT[app]]
     full = os.path.abspath(path)
     os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
-    doc.storeToURL(uno.systemPathToFileUrl(full), (prop("FilterName", flt),))
+    options = (prop("FilterName", flt),)
+    if fmt == "csv":
+        # CSV is one sheet. The twelfth filter token picks it by number
+        # (LibreOffice 7.2+); switching the active sheet does nothing in a
+        # helper with no window, which is how the first sheet came out.
+        ws = Calc(doc).sheet(split_range(sheet)[0]) if sheet else doc.Sheets.getByIndex(0)
+        n = list(doc.Sheets.ElementNames).index(ws.Name) + 1
+        options += (prop("FilterOptions", "44,34,76,1,,0,false,true,true,false,false,%d" % n),)
+    # storeToURL writes a copy: the open document keeps its own path.
+    doc.storeToURL(uno.systemPathToFileUrl(full), options)
+    if fmt == "csv" and not os.path.exists(full):
+        # With a sheet number LibreOffice names the file stem-Sheet.csv; the
+        # caller asked for the path it gave.
+        stem, ext = os.path.splitext(full)
+        named = "%s-%s%s" % (stem, ws.Name, ext)
+        if os.path.exists(named):
+            os.replace(named, full)
     return "exported %s" % full
+
+
+# Paragraphs a Word read returns before it names the range to read next,
+# as office-host's ReadParaCap and ReadCharCap.
+READ_PARA_CAP, READ_CHAR_CAP = 60, 6000
+
+# Undo, the way office-host does it for Word: each call that changes a
+# document is one entry in LibreOffice's own undo list, titled so that undo
+# can tell Syn's entry from one a person made since, and refuse rather than
+# take theirs back.
+UNDO_TITLE = "Syn: "
+_UNDO = {}  # document URL (or id) -> titles of Syn's entries, oldest first
+
+
+def doc_key(doc):
+    return doc.getURL() or str(id(doc))
+
+
+def deck_state(doc):
+    """Every slide, every shape on it and its notes, and their text."""
+    state = []
+    pages = doc.DrawPages
+    for i in range(pages.getCount()):
+        page = pages.getByIndex(i)
+        shapes = []
+        for holder in (page, page.NotesPage):
+            for k in range(holder.getCount()):
+                sh = holder.getByIndex(k)
+                try:
+                    text = sh.getString()
+                except Exception:
+                    text = None
+                shapes.append((holder, sh, text))
+        state.append((page, shapes))
+    return state
+
+
+def same(a, b):
+    try:
+        return a == b
+    except Exception:
+        return a is b
+
+
+def recorded_deck(doc, method, run):
+    """Impress through its API does not reach LibreOffice's undo list (a
+    slide created and undone lost its title and kept its body), so decks
+    keep their own record: slides and shapes a call added are removed, and
+    the text of the ones it found is put back. A slide it deleted or moved
+    cannot be put back here, and undo says so."""
+    before = deck_state(doc)
+    out = run()
+    after = deck_state(doc)
+    pages_after = [p for p, _ in after]
+    lost = [p for p, _ in before if not any(same(p, q) for q in pages_after)]
+    order_before = [p for p, _ in before]
+    kept_after = [p for p in pages_after if any(same(p, q) for q in order_before)]
+    moved = any(not same(a, b) for a, b in zip(kept_after, [p for p in order_before if any(same(p, q) for q in kept_after)]))
+
+    def revert():
+        pages = doc.DrawPages
+        for page in list(pages_after):
+            if not any(same(page, p) for p, _ in before):
+                pages.remove(page)
+        for page, shapes in before:
+            for holder in (page, page.NotesPage):
+                for k in reversed(range(holder.getCount())):
+                    sh = holder.getByIndex(k)
+                    if not any(same(sh, s2) for _, s2, _ in shapes):
+                        holder.remove(sh)
+            for _, sh, text in shapes:
+                if text is not None:
+                    try:
+                        if sh.getString() != text:
+                            sh.setString(text)
+                    except Exception:
+                        pass
+
+    why = None
+    if lost:
+        why = "the LibreOffice helper cannot bring back a deleted slide"
+    elif moved:
+        why = "the LibreOffice helper cannot move a slide back"
+    stack = _DECK_UNDO.setdefault(doc_key(doc), [])
+    stack.append((method, revert, why, deck_print(doc)))
+    del stack[:-20]
+    return out
+
+
+def deck_print(doc):
+    return repr([(p.getCount(), [t for _, _, t in shapes]) for p, shapes in deck_state(doc)])
+
+
+_DECK_UNDO = {}
+
+
+def recorded(doc, method, run):
+    if doc.supportsService("com.sun.star.presentation.PresentationDocument"):
+        return recorded_deck(doc, method, run)
+    um = doc.getUndoManager()
+    title = UNDO_TITLE + method
+    um.enterUndoContext(title)
+    try:
+        out = run()
+    finally:
+        um.leaveUndoContext()
+    # An empty context leaves no entry; only count one that is there.
+    try:
+        if um.isUndoPossible() and um.getCurrentUndoActionTitle() == title:
+            stack = _UNDO.setdefault(doc_key(doc), [])
+            stack.append(title)
+            del stack[:-20]
+    except Exception:
+        pass
+    return out
+
+
+def undo(doc, app):
+    if app == "powerpoint":
+        stack = _DECK_UNDO.get(doc_key(doc), [])
+        if not stack:
+            raise Refused("nothing to undo in %s: Syn has not changed it since this helper started" % Office.name_of(doc))
+        method, revert, why, printed = stack[-1]
+        if deck_print(doc) != printed:
+            raise Refused("the document changed after Syn's last edit (someone typed or edited in it), so undoing now "
+                          "could take their work away too. Undo in the application itself (Ctrl+Z), or ask the person first")
+        if why:
+            raise Refused("the last change (%s) cannot be undone here: %s" % (method, why))
+        revert()
+        stack.pop()
+        return "undid the %s; %d more change(s) can be undone" % (method, len(stack))
+    stack = _UNDO.get(doc_key(doc), [])
+    if not stack:
+        raise Refused("nothing to undo in %s: Syn has not changed it since this helper started" % Office.name_of(doc))
+    um = doc.getUndoManager()
+    top = um.getCurrentUndoActionTitle() if um.isUndoPossible() else ""
+    if top != stack[-1]:
+        raise Refused("the document changed after Syn's last edit (someone typed or edited in it), so undoing now "
+                      "could take their work away too. Undo in the application itself (Ctrl+Z), or ask the person first")
+    um.undo()
+    title = stack.pop()
+    return "undid the %s; %d more change(s) can be undone" % (title[len(UNDO_TITLE):], len(stack))
 
 
 def handle_line(office, line):
@@ -1071,7 +1316,9 @@ def handle_line(office, line):
             noun = {"excel": "workbook", "word": "doc", "powerpoint": "presentation"}[app]
             raise Refused("%s not open for %s" % (noun, handle))
         if method == "export":
-            return reply_ok(export(app, doc, args.get("format", ""), args.get("path", "")))
+            return reply_ok(export(app, doc, args.get("format", ""), args.get("path", ""), args.get("sheet", "")))
+        if method == "undo":
+            return reply_ok(undo(doc, app))
         if app == "excel":
             c = Calc(doc)
             out = {
@@ -1089,17 +1336,42 @@ def handle_line(office, line):
                 "comment": lambda: c.comment(selector, payload),
                 "find": lambda: c.find(selector, args.get("text", "")),
                 "replace": lambda: c.replace(selector, args.get("text", ""), args.get("with", "")),
+                "header": lambda: c.header(selector, args.get("name", ""), payload),
+                "pageNumbers": lambda: c.page_numbers(selector, args.get("text", "")),
             }.get(method)
         elif app == "word":
             w = Writer(doc)
 
             def word_read():
-                if selector in ("body", ""):
-                    return "paras=%d" % len(w.paras())
-                if selector.startswith("p") and selector[1:].isdigit():
-                    n = int(selector[1:])
-                    return "para %d: %s" % (n, trunc(w.para(n).getString()))
-                raise Refused("word selector %s: use body, or p0, p1 ... for one paragraph" % selector)
+                # office-host's WordRead, line for line: the text, numbered,
+                # up to a cap past which it names the range to read next.
+                ps = w.paras()
+                total = len(ps)
+                m = re.match(r"^p(\d+)(?::p?(\d+))?$", selector.strip())
+                if selector.strip() in ("body", ""):
+                    lo, hi = 0, total - 1
+                elif m:
+                    lo = int(m.group(1))
+                    hi = int(m.group(2)) if m.group(2) else lo
+                    lo, hi = min(lo, hi), max(lo, hi)
+                    if lo >= total:
+                        raise Refused("p%d does not exist: the document has %d paragraph(s), p0 to p%d" % (lo, total, total - 1))
+                    hi = min(hi, total - 1)
+                    if lo == hi:
+                        return "para %d: %s" % (lo, trunc(ps[lo].getString(), 4000))
+                else:
+                    raise Refused("word selector %s: use body, p3 for one paragraph or p3:p9 for several; p0 is the first" % selector)
+                out, chars = ["paras=%d" % total], 0
+                for i in range(lo, hi + 1):
+                    if i - lo >= READ_PARA_CAP or chars >= READ_CHAR_CAP:
+                        out.append("... p%d to p%d not shown: read p%d:p%d next" % (i, hi, i, min(hi, i + READ_PARA_CAP - 1)))
+                        break
+                    style = ps[i].ParaStyleName or ""
+                    tag = "" if style in ("", "Standard", "Default Paragraph Style", "Text Body", "Body Text") else " [%s]" % style
+                    shown = trunc(ps[i].getString(), 1500)
+                    chars += len(shown)
+                    out.append("p%d%s: %s" % (i, tag, shown))
+                return " | ".join(out)
 
             def word_write():
                 if not (selector.startswith("p") and selector[1:].isdigit()):
@@ -1131,12 +1403,15 @@ def handle_line(office, line):
                 "delete": lambda: p.delete(selector),
                 "duplicateSlide": lambda: p.duplicate(selector),
                 "textBox": lambda: p.text_box(selector, args.get("name", ""), payload, args.get("style", "")),
+                "pageSetup": lambda: p.page_setup(args.get("style", "")),
                 "find": lambda: p.find(args.get("text", "")),
                 "replace": lambda: p.replace(args.get("text", ""), args.get("with", "")),
             }.get(method)
         if out is None:
             raise Refused("unsupported %s.%s on the LibreOffice helper" % (app, method))
-        return reply_ok(out())
+        if method in ("read", "find"):
+            return reply_ok(out())
+        return reply_ok(recorded(doc, method, out))
     except Refused as e:
         return reply_fail(str(e))
     except Exception as e:  # a UNO failure: say what it was, keep serving

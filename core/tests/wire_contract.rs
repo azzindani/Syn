@@ -121,13 +121,11 @@ fn is_word(s: &str) -> bool {
 
 /// Methods the Rust side sends that no sidecar implements, on purpose.
 ///
-/// `undo` is the only one. The runbook says why: undo for a live handle
-/// belongs to the sidecar's `.bak` and to the application's own undo stack,
-/// and taking a relay snapshot would make `undo` look available when it is
-/// not. The op is sent, refused by the sidecar, and reported — which is the
-/// intended behaviour, not a missing handler. If that ever changes, delete
-/// the entry and the test starts requiring a handler.
-const DELIBERATELY_UNIMPLEMENTED: &[&str] = &["undo"];
+/// Empty. `undo` was here: live undo "belonged to the application", which in
+/// practice meant every live document refused it. office-host keeps its own
+/// record now (sidecar-csharp/Host/Undo.cs), so the test requires a handler
+/// for it like any other method.
+const DELIBERATELY_UNIMPLEMENTED: &[&str] = &[];
 
 #[test]
 fn every_method_the_rust_side_sends_has_a_handler_behind_it() {
@@ -219,5 +217,48 @@ fn the_libreoffice_helper_handles_only_what_rust_sends_and_the_core_of_it() {
     assert!(dead.is_empty(), "sidecar-lo/lo_host.py handles {dead:?}, which core/src/hand.rs never sends");
     for core in ["open", "read", "write", "format", "export", "addSheet", "chart", "insertParagraph", "insertTable", "createSlide"] {
         assert!(handled.iter().any(|m| m == core), "sidecar-lo/lo_host.py no longer handles {core}: {handled:?}");
+    }
+}
+
+/// The methods one app's dispatcher in office-host handles: the arms of
+/// `WordDispatch`, `ExcelDispatch` or `PptDispatch`, plus the ones every app
+/// answers before dispatch (`undo`, `open`).
+fn methods_one_app_handles(dispatcher: &str) -> Vec<String> {
+    let src = source("sidecar-csharp/Host/Program.cs");
+    let from = src.find(&format!("private static string {dispatcher}(")).unwrap_or_else(|| panic!("{dispatcher}"));
+    let body = &src[from..];
+    let to = body.find("\n            });").expect("end of the dispatcher");
+    let mut out = Vec::new();
+    for line in body[..to].lines() {
+        let t = line.trim_start();
+        if !t.starts_with('"') {
+            continue;
+        }
+        let Some(end) = t[1..].find('"') else { continue };
+        let name = &t[1..=end];
+        let rest = t[end + 2..].trim_start();
+        if (rest.starts_with("when") || rest.starts_with("=>")) && is_word(name) {
+            out.push(name.to_string());
+        }
+    }
+    out.push("undo".into());
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[test]
+fn each_app_is_offered_exactly_the_verbs_its_helper_handles() {
+    // `tools::APP_METHODS` decides what is refused before the helper is
+    // asked. A method listed there that the app's dispatcher lacks reaches
+    // the helper and comes back "unsupported"; one the dispatcher has that
+    // the table lacks is refused though it would have worked. Both ways.
+    for (app, dispatcher) in [("excel", "ExcelDispatch"), ("word", "WordDispatch"), ("ppt", "PptDispatch")] {
+        let handled = methods_one_app_handles(dispatcher);
+        let (_, table) = core::tools::APP_METHODS.iter().find(|(a, _)| *a == app).expect(app);
+        let mut table: Vec<String> = table.iter().map(|m| m.to_string()).collect();
+        table.sort();
+        table.dedup();
+        assert_eq!(table, handled, "{app}: tools::APP_METHODS and {dispatcher} disagree");
     }
 }

@@ -164,9 +164,12 @@ impl Desk {
         }
         let want = asked.trim().to_ascii_lowercase();
         let file_of = |h: &str| h.split(':').nth(1).unwrap_or("").to_ascii_lowercase();
+        // The app by what it is, not how it was spelled: `powerpoint:` for a
+        // deck registered as `ppt:` is the same deck.
         let app_file = |h: &str| {
             let mut p = h.splitn(3, ':');
-            (p.next().unwrap_or("").to_ascii_lowercase(), p.next().unwrap_or("").to_ascii_lowercase())
+            let app = p.next().unwrap_or("").to_ascii_lowercase();
+            (crate::coach::app_key(&app).to_string(), p.next().unwrap_or("").to_ascii_lowercase())
         };
         let asked_parts = app_file(&want);
         let hits: Vec<&String> = open
@@ -477,7 +480,7 @@ pub fn next_step(d: &Doc) -> String {
             let quoted = if sheet.contains(' ') { format!("'{sheet}'") } else { sheet.to_string() };
             format!("{} to see the top of the first sheet. Every Excel selector names its sheet.", call(&format!("{quoted}!A1:H20")))
         }
-        "word" => format!("{} for the paragraph count, then p0 (the first), p1 ... for the text.", call("body")),
+        "word" => format!("{} for the text, numbered p0 (the first), p1 ...; p3:p9 reads a stretch of a long one.", call("body")),
         "ppt" => format!("{} for the slides, then s1, s2 ... for one slide.", call("deck")),
         "web" => format!("{} -- selectors on a page are CSS.", call("h1")),
         _ => format!("{} for the window's controls, then struct invoke to press one by id.", call(":tree")),
@@ -990,6 +993,8 @@ mod tests {
         assert_eq!(d.resolve("EXCEL:PLAN.XLSX:WORKBOOK").unwrap(), "excel:plan.xlsx:workbook");
         assert_eq!(d.resolve("excel:plan.xlsx:Sheet1").unwrap(), "excel:plan.xlsx:workbook", "the example's unit");
         assert!(d.resolve("word:plan.xlsx:body").is_err(), "another app is another document");
+        d.open("powerpoint", r"C:\b\deck.pptx").unwrap();
+        assert_eq!(d.resolve("powerpoint:deck.pptx:deck").unwrap(), "ppt:deck.pptx:deck", "the app by name, not spelling");
         let e = d.resolve("nope.xlsx").unwrap_err();
         assert!(e.contains("excel:plan.xlsx:workbook"), "the error names what is open: {e}");
         d.open("word", r"C:\b\plan.docx").unwrap();

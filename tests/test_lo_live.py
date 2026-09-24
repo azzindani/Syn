@@ -437,5 +437,115 @@ class TheFullToolSet(unittest.TestCase):
         self.assertIn("unsupported", text)
 
 
+
+@unittest.skipIf(REASON, REASON or "")
+class EveryToolThroughMcp(unittest.TestCase):
+    """The audit's findings, each proved through the real MCP server: undo
+    on a live document, Word read as text, a verb sent to the wrong app,
+    exports that are copies, and the shared verbs every app now has."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="syn-lo-every-")
+        cls.docs = os.path.join(cls.dir, "docs")
+        cls.out = os.path.join(cls.dir, "out")
+        subprocess.run([PYTHON, os.path.join(REPO, "sidecar-lo", "make_fixtures.py"), cls.docs],
+                       check=True, capture_output=True, timeout=180)
+        pipe = "every%d" % os.getpid()
+        env = dict(os.environ, AGENT_ENV_FILE=os.path.join(cls.dir, "no.env"),
+                   AGENT_HOME=os.path.join(cls.dir, "home"), AGENT_PYTHON=PYTHON,
+                   AGENT_PIPE_EXCEL=pipe + "-excel", AGENT_PIPE_WORD=pipe + "-word",
+                   AGENT_PIPE_PPT=pipe + "-ppt", AGENT_MCP_ROOTS=cls.docs + ";" + cls.out)
+        for k in ("AGENT_MCP_APPS", "AGENT_MCP_LAUNCH", "AGENT_OFFICE_HOST"):
+            env.pop(k, None)
+        cls.g = Gate(env, "every")
+        cls.g.call("open", app="excel", path=os.path.join(cls.docs, "sales.xlsx"))
+        cls.g.call("open", app="word", path=os.path.join(cls.docs, "memo.docx"))
+        cls.g.call("open", app="powerpoint", path=os.path.join(cls.docs, "deck.pptx"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.g.close()
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    X, W, P = "excel:sales.xlsx:workbook", "word:memo.docx:body", "ppt:deck.pptx:deck"
+
+    def ok(self, tool, **args):
+        err, text = self.g.call(tool, **args)
+        self.assertFalse(err, "%s %s failed: %s" % (tool, args, text))
+        return text
+
+    def refused(self, tool, **args):
+        err, text = self.g.call(tool, **args)
+        self.assertTrue(err, "%s %s should have been refused: %s" % (tool, args, text))
+        return text
+
+    def test_0_undo_takes_back_the_last_change_in_each_app(self):
+        # First (the name sorts first), so the counts are its own.
+        # It used to answer "unsupported excel.undo" on every live document.
+        self.ok("write", handle=self.X, selector="data!A2", values="CHANGED")
+        self.ok("write", handle=self.X, selector="data!B2", values="ALSO")
+        self.assertIn("1 more change", self.ok("undo", handle=self.X))
+        self.assertIn("= Jan", self.ok("read", handle=self.X, selector="data!B2"))
+        self.assertIn("= CHANGED", self.ok("read", handle=self.X, selector="data!A2"), "one call per undo")
+        self.ok("undo", handle=self.X)
+        self.assertIn("= North", self.ok("read", handle=self.X, selector="data!A2"))
+        self.assertIn("nothing to undo", self.refused("undo", handle=self.X))
+
+        self.ok("struct", handle=self.W, verb="insertParagraph", text="Inserted line", at="p1")
+        self.ok("undo", handle=self.W)
+        self.assertIn("p1: Prepared for the energy team", self.ok("read", handle=self.W, selector="body"))
+
+        self.ok("struct", handle=self.P, verb="createSlide", title="One", bullets=["a"])
+        self.ok("struct", handle=self.P, verb="createSlide", title="Two", bullets=["b"])
+        self.assertIn("slides=2", self.ok("read", handle=self.P, selector="deck"))
+        self.ok("undo", handle=self.P)
+        deck = self.ok("read", handle=self.P, selector="deck")
+        self.assertIn("slides=1", deck)
+        self.assertNotIn("Two", deck)
+
+    def test_word_reads_as_text_numbered_and_by_range(self):
+        # `body` was a paragraph count and nothing else.
+        body = self.ok("read", handle=self.W, selector="body")
+        self.assertIn("paras=4 | p0: Site visit memo | p1: Prepared for the energy team.", body)
+        part = self.ok("read", handle=self.W, selector="p1:p2")
+        self.assertIn("p2: Findings follow.", part)
+        self.assertNotIn("p0:", part)
+        self.assertIn("p0 to p3", self.refused("read", handle=self.W, selector="p9"))
+
+    def test_a_verb_the_app_does_not_have_is_refused_with_the_ones_it_does(self):
+        text = self.refused("struct", handle=self.W, verb="sort", selector="p1", name="x")
+        self.assertIn("sort is Excel only", text)
+        self.assertIn("insertParagraph", text)
+        self.assertNotIn("unsupported", text, "refused before the helper, not by it")
+
+    def test_a_deck_answers_to_powerpoint_as_well_as_ppt(self):
+        self.assertIn("slides=", self.ok("read", handle="powerpoint:deck.pptx:deck", selector="deck"))
+
+    def test_exports_are_copies_and_summaries_need_no_path(self):
+        self.assertIn("data A1:D25", self.ok("export", handle=self.X, format="summary"))
+        self.assertIn("paras=4", self.ok("export", handle=self.W, format="summary"))
+        self.assertIn("slides=", self.ok("export", handle=self.P, format="summary"))
+        csv = os.path.join(self.out, "q3.csv")
+        self.ok("export", handle=self.X, format="csv", path=csv, sheet="'Q3 sales'")
+        with open(csv) as f:
+            self.assertNotIn("Region,Month", f.read(), "the named sheet, not the first")
+        copy = os.path.join(self.out, "copy.xlsx")
+        self.ok("export", handle=self.X, format="xlsx", path=copy)
+        self.assertTrue(zipfile.is_zipfile(copy))
+        # The open workbook is still the one on its own path: the handle
+        # still finds it.
+        self.ok("write", handle=self.X, selector="data!J1", values="after export")
+        self.ok("export", handle=self.P, format="pptx", path=os.path.join(self.out, "deck-copy.pptx"))
+        self.assertIn("slides=", self.ok("read", handle=self.P, selector="deck"))
+
+    def test_the_shared_verbs_work_in_every_app(self):
+        self.assertIn("1 sheet(s)", self.ok("struct", handle=self.X, verb="header", name="footer",
+                                            text="Confidential & internal", selector="data"))
+        self.assertIn("2 sheet(s)", self.ok("struct", handle=self.X, verb="pageNumbers", text="Sales"))
+        self.assertIn("4:3", self.ok("struct", handle=self.P, verb="pageSetup", style="size=4:3"))
+        self.ok("undo", handle=self.P)
+
+
 if __name__ == "__main__":
     unittest.main()

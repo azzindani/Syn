@@ -149,13 +149,14 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             &format!("{{\"selector\":\"{}\"}}", esc(selector)),
             Some(&grid_payload(values)),
         )),
-        Call::Export(ExportArgs { format, path, .. }) => Some(envelope(
+        Call::Export(ExportArgs { format, path, sheet }) => Some(envelope(
             "export",
             handle,
             &format!(
-                "{{\"format\":\"{}\",\"path\":\"{}\"}}",
+                "{{\"format\":\"{}\",\"path\":\"{}\",\"sheet\":\"{}\"}}",
                 esc(format),
-                esc(path.as_deref().unwrap_or(""))
+                esc(path.as_deref().unwrap_or("")),
+                esc(sheet.as_deref().unwrap_or(""))
             ),
             None,
         )),

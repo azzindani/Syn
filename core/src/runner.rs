@@ -318,7 +318,19 @@ impl Runner {
     fn pump_live(&mut self, relay: &mut Relay, job: Job) -> Result<OpOut> {
         let op = job.call.op();
         relay.emit(&self.session, "step.start", &job.handle, format!("{op:?} live"))?;
-        if let Err(e) = relay.gate(&self.session, &format!("{op:?}"), &job.call.args_key()) {
+        // A verb this app does not have, refused here with the verbs it
+        // does, rather than sent to the helper to come back "unsupported".
+        if let Some(why) = crate::hand::envelope_for(&job.call, &job.handle)
+            .and_then(|line| crate::json::parse(&line).ok())
+            .and_then(|v| v.get("method").and_then(crate::json::Value::as_str).map(str::to_string))
+            .and_then(|m| crate::tools::app_refuses(app_of(&job.handle), &m))
+        {
+            relay.emit(&self.session, "step.error", &job.handle, why.clone())?;
+            return Err(Error::ClosedSchema(why));
+        }
+        if !job.call.gated() {
+            relay.forget_calls(&self.session);
+        } else if let Err(e) = relay.gate(&self.session, &format!("{op:?}"), &job.call.args_key(&job.handle)) {
             self.queue.freeze();
             return Err(e);
         }
@@ -457,6 +469,33 @@ mod tests {
     }
 
     #[test]
+    fn a_verb_the_app_does_not_have_is_refused_before_the_helper_with_the_ones_it_does() {
+        let (mut r, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.attach_hand(Box::new(FakeHand::ok(&["the helper was asked"])));
+        run.mark_live(&h).unwrap();
+        run.submit(Job {
+            handle: h.clone(),
+            summary: "move".into(),
+            call: Call::Struct(crate::ops::StructArgs::Office {
+                verb: "moveSlide".into(),
+                args: vec![("selector".into(), "s2".into()), ("at".into(), "s1".into())],
+                payload: String::new(),
+            }),
+        });
+        match run.pump(&mut r) {
+            Err(Error::ClosedSchema(why)) => {
+                assert!(why.contains("PowerPoint only"), "{why}");
+                assert!(why.contains("Excel's struct verbs are:") && why.contains("sort"), "{why}");
+            }
+            other => panic!("moveSlide on a workbook must be refused before the helper, got {other:?}"),
+        }
+        // A verb Excel has still goes through.
+        run.submit(read_job(&h));
+        assert_eq!(run.pump(&mut r).unwrap().unwrap(), OpOut::Text { detail: "the helper was asked".into() });
+    }
+
+    #[test]
     fn attaching_a_hand_alone_changes_nothing() {
         let (mut r, s, h) = relay1();
         let mut run = Runner::new(&s);
@@ -587,6 +626,37 @@ mod tests {
         let missing = run.resume(&r).unwrap();
         assert_eq!(missing, vec!["excel:gone.xlsx:S1".to_string()]);
         assert_eq!(run.pending(), 1);
+    }
+
+    #[test]
+    fn the_same_read_of_three_documents_is_not_a_loop_and_undo_never_is() {
+        // Found by the live MCP test: three summaries of three different
+        // documents were refused as one call made three times, and three
+        // undos in a row -- three changes taken back -- would have been too.
+        let (mut r, s, h) = relay1();
+        for name in ["q.xlsx", "z.xlsx"] {
+            r.attach(&s, crate::protocol::new_handle("excel", name, "Sheet1"), OpenFile {
+                kind: FileKind::Excel,
+                content: FileContent::Excel { sheets: HashMap::from([("Sheet1".into(), vec![vec!["1".into()]])]) },
+                styles: HashMap::new(),
+            });
+        }
+        let mut run = Runner::new(&s);
+        for name in ["p.xlsx", "q.xlsx", "z.xlsx"] {
+            let job = Job { handle: format!("excel:{name}:Sheet1"), summary: "read".into(), call: Call::Read(ReadArgs { selector: "Sheet1".into() }) };
+            assert!(run.run(&mut r, &job.handle.clone(), "read", job.call).is_ok(), "{name}");
+        }
+        for _ in 0..3 {
+            let out = run.run(&mut r, &h, "undo", Call::Undo);
+            assert!(!matches!(out, Err(Error::DoomLoop(_))), "undo three times running is not a loop");
+        }
+        // And the same read either side of an undo is two looks at two
+        // different documents.
+        let read = || Call::Read(ReadArgs { selector: "Sheet1".into() });
+        assert!(run.run(&mut r, &h, "read", read()).is_ok());
+        assert!(run.run(&mut r, &h, "read", read()).is_ok());
+        let _ = run.run(&mut r, &h, "undo", Call::Undo);
+        assert!(run.run(&mut r, &h, "read", read()).is_ok(), "the undo in between makes this a new look");
     }
 
     #[test]

@@ -117,9 +117,11 @@ machinery provably held: after `allow word` the live write was refused with
 with the latch error. **Neither cell was written** — the guards stop live
 document edits, not just in-memory ones.
 
-Deliberate gaps: no relay snapshot is taken for a live handle (undo belongs
-to the sidecar's `.bak` plus the app's own stack, and a fake snapshot would
-make `undo` look available when it is not); a verb a sidecar does not
+Deliberate gaps: no relay snapshot is taken for a live handle -- undo for a
+live document is office-host's own record (sidecar-csharp/Host/Undo.cs:
+Word's undo list with one record per call, a hidden scratch workbook of the
+cells an Excel call changes, a SaveCopyAs of the deck before a PowerPoint
+call), and it refuses when the document changed since Syn's call; a verb a sidecar does not
 implement refuses rather than silently no-ops; a dead pipe drops the
 hand and freezes the queue so the next op cannot quietly fall back to the
 in-memory model and report success for a document nobody touched.

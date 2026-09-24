@@ -240,6 +240,13 @@ Syn's console. The guidance is written so that small and mid-size models
 can follow it, not only frontier ones. Setup, settings and what is still
 unverified on real Office: `docs/11-mcp.md`.
 
+Every Office tool is reachable this way, in all three apps: `undo` takes
+back Syn's last change to a document (and refuses if someone else edited it
+since), `export` writes copies and never moves the file you have open, a
+Word `read` is the text itself, and a verb an app does not have is refused
+with the list of the ones it does. `scripts/live-office-peak.ps1` drives
+every one of them through `mcpgate.exe` against real Office.
+
 ## Drive it from a terminal
 
 ```

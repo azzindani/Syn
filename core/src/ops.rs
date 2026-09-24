@@ -206,8 +206,19 @@ impl Call {
         }
     }
 
-    pub fn args_key(&self) -> String {
-        format!("{self:?}")
+    /// What the repeated-call gate compares: the call and the document it
+    /// is on. Without the handle, the same read of three different files
+    /// was "the same call three times" and the third was refused.
+    pub fn args_key(&self, handle: &str) -> String {
+        format!("{handle} {self:?}")
+    }
+
+    /// Whether the repeated-call gate counts this call. `undo` three times
+    /// running is three different changes taken back, never a loop; the
+    /// helper's own stack bounds it. It resets the count instead: the same
+    /// read before and after an undo is looking at a different document.
+    pub fn gated(&self) -> bool {
+        !matches!(self, Call::Undo)
     }
 }
 
@@ -215,7 +226,11 @@ impl Call {
 pub fn execute(relay: &mut Relay, session: &str, handle: &str, call: Call) -> Result<OpOut> {
     let op = call.op();
     relay.emit(session, "step.start", handle, format!("{op:?}"))?;
-    relay.gate(session, &format!("{op:?}"), &call.args_key())?;
+    if call.gated() {
+        relay.gate(session, &format!("{op:?}"), &call.args_key(handle))?;
+    } else {
+        relay.forget_calls(session);
+    }
     if !relay.registry(session)?.contains(&handle.to_string()) {
         return Err(Error::UnknownHandle(handle.into()));
     }

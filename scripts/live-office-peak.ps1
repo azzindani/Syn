@@ -139,6 +139,9 @@ Step 'hide Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; a
 Step 'show Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'show' } | Out-Null
 Step 'delete Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'delete' } | Out-Null
 Step '  Again is gone' 'read' @{ handle = $x; selector = 'Again!A1' } -Fails -Expect 'no sheet named' | Out-Null
+Step 'undo: the deleted sheet comes back' 'undo' @{ handle = $x } -Expect 'undid' | Out-Null
+Step '  Again is back, table and all' 'read' @{ handle = $x; selector = 'Again!B2' } -Expect '= Region' | Out-Null
+Step 'delete Again for good' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'delete' } | Out-Null
 Step 'drop-down on D2:D5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!D2:D5'; rule = 'list=Yes,No,Maybe' } | Out-Null
 Step 'whole numbers 1..10 on E2:E5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!E2:E5'; rule = 'whole=1..10' } | Out-Null
 Step 'a two-line note on A1' 'struct' @{ handle = $x; verb = 'comment'; selector = 'Sheet1!A1'; text = "first line`nsecond line" } | Out-Null
@@ -155,6 +158,29 @@ if ($png) {
 } else { Skip 'picture on a sheet' 'no chart png was exported to place' }
 Step 'page setup: landscape, one page wide' 'struct' @{ handle = $x; verb = 'pageSetup'; selector = 'Sheet1'; style = 'orientation=landscape;paper=A4;fitWide=1;fitTall=0' } | Out-Null
 Step 'replace North with Nord' 'struct' @{ handle = $x; verb = 'replace'; selector = 'Sheet1'; text = 'North'; with = 'Nord' } -Expect 'in 1 cell' | Out-Null
+Step 'undo the replace' 'undo' @{ handle = $x } -Expect 'undid the replace' | Out-Null
+Step '  North is back' 'struct' @{ handle = $x; verb = 'find'; selector = 'Sheet1'; text = 'North' } -Expect 'Sheet1!A' | Out-Null
+Step 'write G1:G2, then undo it' 'write' @{ handle = $x; selector = 'Sheet1!G1:G2'; values = 'temp;=1+1' } | Out-Null
+Step '  undo the write' 'undo' @{ handle = $x } -Expect 'undid the write' | Out-Null
+Step '  G1:G2 are empty again' 'read' @{ handle = $x; selector = 'Sheet1!G1:G2' } -Expect '2x1 = ;\s*<' | Out-Null
+Step 'format A2:C2 bold on fill, then undo' 'format' @{ handle = $x; selector = 'Sheet1!A2:C2'; style = 'bold=1;fill=#FFFF00;merge=1' } | Out-Null
+Step '  undo the format (merge included)' 'undo' @{ handle = $x } -Expect 'undid the format' | Out-Null
+Step 'insert rows 3:4, then undo' 'struct' @{ handle = $x; verb = 'insert'; selector = 'Sheet1!3:4' } | Out-Null
+Step '  undo the insert' 'undo' @{ handle = $x } -Expect 'undid the insert' | Out-Null
+Step '  row 3 has data again' 'read' @{ handle = $x; selector = 'Sheet1!A3' } -Expect '= \w' | Out-Null
+Step 'delete row 2, then undo' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Sheet1!2:2' } | Out-Null
+Step '  undo the delete' 'undo' @{ handle = $x } -Expect 'undid the delete' | Out-Null
+Step 'a chart, then undo it' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Sheet1!A1:B5'; at = 'Copied!F34:M48'; title = 'Undo me' } | Out-Null
+Step '  undo the chart' 'undo' @{ handle = $x } -Expect 'undid the chart' | Out-Null
+Step 'addSheet Temp, then undo' 'struct' @{ handle = $x; verb = 'addSheet'; name = 'Temp' } | Out-Null
+Step '  undo the addSheet' 'undo' @{ handle = $x } -Expect 'undid the addSheet' | Out-Null
+Step '  Temp is gone' 'read' @{ handle = $x; selector = 'Temp!A1' } -Fails -Expect 'no sheet named' | Out-Null
+Step 'a footer on Sheet1' 'struct' @{ handle = $x; verb = 'header'; name = 'footer'; selector = 'Sheet1'; text = 'Plan & forecast' } -Expect '1 sheet' | Out-Null
+Step 'page numbers on every sheet' 'struct' @{ handle = $x; verb = 'pageNumbers'; text = 'Plan' } -Expect 'sheet' | Out-Null
+Step 'createSlide on a workbook is refused, with the list' 'struct' @{ handle = $x; verb = 'createSlide'; title = 'x' } -Fails -Expect 'PowerPoint only.*addSheet' | Out-Null
+Step 'export summary' 'export' @{ handle = $x; format = 'summary' } -Expect 'Sheet1 A1' | Out-Null
+Step 'export csv of Sheet1' 'export' @{ handle = $x; format = 'csv'; sheet = 'Sheet1'; path = (Join-Path $out 'peak-sheet1.csv') } -Expect 'Sheet1' | Out-Null
+Step 'export pdf (footer and page numbers show)' 'export' @{ handle = $x; format = 'pdf'; path = (Join-Path $out 'peak-plan.pdf') } | Out-Null
 if ($Vba) {
     $code = "Sub SynPeak()`r`n    Worksheets(""Sheet1"").Range(""H1"").Value = ""from VBA""`r`nEnd Sub"
     Step 'macro: write a multi-line module' 'struct' @{ handle = $x; verb = 'macro'; action = 'write'; name = 'SynPeak'; code = $code } | Out-Null
@@ -162,10 +188,13 @@ if ($Vba) {
     Step '  it wrote H1' 'read' @{ handle = $x; selector = 'Sheet1!H1' } -Expect 'from VBA' | Out-Null
 } else { Skip 'macro write, run, read' 'pass -Vba to include it' }
 Step 'export xlsx' 'export' @{ handle = $x; format = 'xlsx'; path = (Join-Path $out 'peak.xlsx') } | Out-Null
+Step '  the open workbook is still plan.xlsx' 'read' @{ handle = $x; selector = 'Sheet1!A1' } -Expect '= Region' | Out-Null
 
 # =============================================================== Word
 Write-Host "`n-- Word --" -ForegroundColor Cyan
 Step 'open report.docx' 'open' @{ app = 'word'; path = (Join-Path $docs 'report.docx') } | Out-Null
+Step 'read body: the text, numbered' 'read' @{ handle = $w; selector = 'body' } -Expect 'paras=\d+ \| p0' | Out-Null
+Step 'read p0:p1' 'read' @{ handle = $w; selector = 'p0:p1' } -Expect 'p1' | Out-Null
 Step 'insert a paragraph before p1' 'struct' @{ handle = $w; verb = 'insertParagraph'; text = 'Inserted before the body'; at = 'p1' } | Out-Null
 Step '  it is p1' 'read' @{ handle = $w; selector = 'p1' } -Expect 'Inserted before the body' | Out-Null
 Step '  the body moved to p2' 'read' @{ handle = $w; selector = 'p2' } -Expect 'Placeholder' | Out-Null
@@ -173,6 +202,10 @@ Step 'delete p1' 'struct' @{ handle = $w; verb = 'delete'; selector = 'p1' } | O
 Step '  the body is p1 again' 'read' @{ handle = $w; selector = 'p1' } -Expect 'Placeholder' | Out-Null
 Step 'a bullet (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Bullet'; text = 'first point' } -Expect '\[List Bullet\]' | Out-Null
 Step 'a numbered item (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Number'; text = 'step one' } -Expect '\[List Number\]' | Out-Null
+Step 'a paragraph to undo' 'struct' @{ handle = $w; verb = 'insertParagraph'; text = 'undo me please' } | Out-Null
+Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid the insertParagraph' | Out-Null
+Step '  it is gone, step one is not' 'read' @{ handle = $w; selector = 'body' } -Expect '^(?![\s\S]*undo me please)[\s\S]*step one' | Out-Null
+Step 'sort on a document is refused, with the list' 'struct' @{ handle = $w; verb = 'sort'; selector = 'p1'; name = 'x' } -Fails -Expect 'Excel only.*insertParagraph' | Out-Null
 Step 'a table before p1' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Site|Score;North|3;South|4'; at = 'p1' } | Out-Null
 Step 'find Placeholder' 'struct' @{ handle = $w; verb = 'find'; text = 'Placeholder' } -Expect 'paragraph' | Out-Null
 Step 'replace Placeholder with Draft' 'struct' @{ handle = $w; verb = 'replace'; text = 'Placeholder'; with = 'Draft' } -Expect '1 time' | Out-Null
@@ -183,7 +216,9 @@ Step 'footer' 'struct' @{ handle = $w; verb = 'header'; name = 'footer'; text = 
 Step 'page numbers after the footer' 'struct' @{ handle = $w; verb = 'pageNumbers'; text = 'Page' } | Out-Null
 Step 'page setup: landscape, 0.75in' 'struct' @{ handle = $w; verb = 'pageSetup'; style = 'orientation=landscape;margin=0.75' } | Out-Null
 Step 'format keys on p0' 'format' @{ handle = $w; selector = 'p0'; style = 'underline=1;highlight=yellow;spaceAfter=12;lineSpacing=1.5' } | Out-Null
+Step 'export summary' 'export' @{ handle = $w; format = 'summary' } -Expect 'paras=' | Out-Null
 Step 'export docx' 'export' @{ handle = $w; format = 'docx'; path = (Join-Path $out 'peak.docx') } | Out-Null
+Step '  the open document is still report.docx' 'read' @{ handle = $w; selector = 'p0' } -Expect 'para 0' | Out-Null
 Step 'export pdf' 'export' @{ handle = $w; format = 'pdf'; path = (Join-Path $out 'peak-report.pdf') } | Out-Null
 
 # ========================================================= PowerPoint
@@ -200,10 +235,24 @@ Step 'find alpha' 'struct' @{ handle = $p; verb = 'find'; text = 'alpha' } -Expe
 Step 'replace beta with gamma' 'struct' @{ handle = $p; verb = 'replace'; text = 'beta'; with = 'gamma' } -Expect 'time' | Out-Null
 Step 'delete s1' 'struct' @{ handle = $p; verb = 'delete'; selector = 's1' } | Out-Null
 Step '  two slides' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=2' | Out-Null
+Step 'undo the delete: the slide comes back' 'undo' @{ handle = $p } -Expect 'undid the delete' | Out-Null
+Step '  three slides again' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=3' | Out-Null
+Step 'rewrite a title, then undo' 'write' @{ handle = $p; selector = 's2'; values = 'Temporary title' } | Out-Null
+Step '  undo the write' 'undo' @{ handle = $p } -Expect 'undid the write' | Out-Null
+Step '  the title is back' 'read' @{ handle = $p; selector = 'deck' } -Expect '^(?![\s\S]*Temporary title)' | Out-Null
+Step 'a slide to undo' 'struct' @{ handle = $p; verb = 'createSlide'; title = 'Undo me'; bullets = 'x' } | Out-Null
+Step '  undo the createSlide' 'undo' @{ handle = $p } -Expect 'undid the createSlide' | Out-Null
+Step '  three slides still' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=3' | Out-Null
+Step 'slide size 4:3' 'struct' @{ handle = $p; verb = 'pageSetup'; style = 'size=4:3' } -Expect '720x540' | Out-Null
+Step '  undo it: widescreen again' 'undo' @{ handle = $p } -Expect 'undid the pageSetup' | Out-Null
+Step 'sort on a deck is refused, with the list' 'struct' @{ handle = $p; verb = 'sort'; selector = 's1'; name = 'x' } -Fails -Expect 'Excel only.*createSlide' | Out-Null
+Step 'export summary' 'export' @{ handle = $p; format = 'summary' } -Expect 'slides=3' | Out-Null
+Step 'export png: every slide' 'export' @{ handle = $p; format = 'png'; path = (Join-Path $out 'peak-slide.png') } -Expect '3 slide' | Out-Null
 if ($Theme) {
     Step 'apply a theme' 'struct' @{ handle = $p; verb = 'theme'; text = $Theme } | Out-Null
 } else { Skip 'apply a theme' 'pass -Theme <file.thmx or .potx> to include it' }
 Step 'export pptx' 'export' @{ handle = $p; format = 'pptx'; path = (Join-Path $out 'peak.pptx') } | Out-Null
+Step '  the open deck is still deck.pptx' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=' | Out-Null
 Step 'export pdf' 'export' @{ handle = $p; format = 'pdf'; path = (Join-Path $out 'peak-deck.pdf') } | Out-Null
 
 # ============================================================== done

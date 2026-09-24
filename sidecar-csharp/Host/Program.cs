@@ -141,6 +141,9 @@ namespace Syn.Sidecar
             }
             finally
             {
+                // The scratch workbook and the deck copies are this helper's
+                // own; the user's documents are left exactly as they are.
+                try { DropAllUndo(); } catch { }
                 try { Marshal.FinalReleaseComObject(app); } catch { /* detach only, never kill user app */ }
             }
         }
@@ -313,13 +316,18 @@ namespace Syn.Sidecar
                 {
                     return OpenDocument(app, JsonField(JsonField(line, "args"), "path"));
                 }
-                return _app switch
+                // Undo answers from this helper's own record of what it
+                // changed (Undo.cs); every other call that changes a
+                // document is recorded on its way through.
+                if (method == "undo") return UndoLast((object)app, handle);
+                object appO = app;
+                return WithUndo(appO, method, handle, line, selector, () => _app switch
                 {
-                    "word" => WordDispatch(app, method, handle, line, selector),
-                    "excel" => ExcelDispatch(app, method, handle, line, selector),
-                    "powerpoint" => PptDispatch(app, method, handle, line, selector),
+                    "word" => WordDispatch(appO, method, handle, line, selector),
+                    "excel" => ExcelDispatch(appO, method, handle, line, selector),
+                    "powerpoint" => PptDispatch(appO, method, handle, line, selector),
                     _ => Fail("unknown app"),
-                };
+                });
             }
             catch (Exception e)
             {
@@ -393,10 +401,7 @@ namespace Syn.Sidecar
                 var args = JsonField(line, "args");
                 return method switch
                 {
-                    "read" when selector is "body" or "" =>
-                        Ok($"paras={doc.Paragraphs.Count}"),
-                    "read" when selector.StartsWith("p") && int.TryParse(selector[1..], out var n) =>
-                        Ok($"para {n}: {Trunc((string)doc.Paragraphs[n + 1].Range.Text)}"),
+                    "read" => Ok(WordRead((object)doc, selector)),
                     "write" when selector.StartsWith("p") && int.TryParse(selector[1..], out var m) =>
                         WriteWordPara(doc, handle, m, JsonField(line, "payload")),
                     "export" => ExportWord(doc, handle, JsonField(line, "format"), JsonField(line, "path")),
@@ -422,6 +427,58 @@ namespace Syn.Sidecar
                     _ => throw new InvalidOperationException($"unsupported word.{method} sel={selector}"),
                 };
             });
+
+        /// <summary>Paragraphs a read may return before it stops and says
+        /// where to carry on.</summary>
+        private const int ReadParaCap = 60, ReadCharCap = 6000;
+
+        // `body` used to answer with a count and nothing else, and a
+        // paragraph at a time was the only way to see the words: a memo of
+        // thirty paragraphs was thirty calls. Now body (or p3:p9) is the
+        // text itself, numbered the way every other Word selector counts,
+        // up to a cap past which it names the range to read next.
+        private static string WordRead(object docO, string selector)
+        {
+            dynamic doc = docO;
+            int total = doc.Paragraphs.Count;
+            var sel = selector.Trim();
+            int from = 0, to = total - 1;
+            if (sel is not ("" or "body"))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(sel, @"^p(\d+)(?::p?(\d+))?$");
+                if (!m.Success)
+                    throw new InvalidOperationException($"word selector {selector}: use body, p3 for one paragraph or p3:p9 for several; p0 is the first");
+                from = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                to = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) : from;
+                if (from > to) (from, to) = (to, from);
+                if (from >= total)
+                    throw new InvalidOperationException($"p{from} does not exist: the document has {total} paragraph(s), p0 to p{total - 1}");
+                to = Math.Min(to, total - 1);
+                if (from == to)
+                    return $"para {from}: {Trunc((string)doc.Paragraphs[from + 1].Range.Text, 4000)}";
+            }
+            var sb = new StringBuilder($"paras={total}");
+            var chars = 0;
+            for (var i = from; i <= to; i++)
+            {
+                if (i - from >= ReadParaCap || chars >= ReadCharCap)
+                {
+                    sb.Append($" | ... p{i} to p{to} not shown: read p{i}:p{Math.Min(to, i + ReadParaCap - 1)} next");
+                    break;
+                }
+                dynamic p = doc.Paragraphs[i + 1];
+                var text = ((string)p.Range.Text).TrimEnd('\r', '\a', '\n');
+                string style = "";
+                try { style = (string)p.Style.NameLocal; } catch { }
+                var tag = style is "" or "Normal" ? "" : $" [{style}]";
+                // Whole paragraphs where they fit: 120 characters cut most
+                // of a real paragraph off, which is not reading it.
+                var shown = Trunc(text, 1500);
+                chars += shown.Length;
+                sb.Append($" | p{i}{tag}: {shown}");
+            }
+            return sb.ToString();
+        }
 
         private static dynamic? FindWordDoc(dynamic app, string handle)
         {
@@ -736,13 +793,65 @@ namespace Syn.Sidecar
             return Ok($"formatted {selector}: {string.Join(", ", did)}");
         }
 
+        // A copy, never SaveAs2: that moves the open document to the export's
+        // path, so the user's own file stops being the one on screen and the
+        // handle stops finding it.
         private static string ExportWord(dynamic doc, string handle, string format, string path)
         {
-            Snapshot(handle);
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(WordSummary((object)doc));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
+            var full = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
             RefreshFields(doc);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
-            doc.SaveAs2(path, format.ToLowerInvariant() == "pdf" ? 17 : 16); // wdFormatPDF/docx
-            return Ok($"exported {path}");
+            switch (f)
+            {
+                case "pdf":
+                    doc.ExportAsFixedFormat(full, 17); // wdExportFormatPDF
+                    return Ok($"exported {full}");
+                case "docx":
+                {
+                    // Word has no SaveCopyAs. A document with nothing unsaved
+                    // is its file, so the file is copied as it is; otherwise
+                    // the whole document (styles, sections, headers) goes into
+                    // a hidden new one this helper makes, saves and closes.
+                    string on = "";
+                    try { on = doc.FullName; } catch { }
+                    if ((bool)doc.Saved && File.Exists(on) && Path.GetExtension(on).Equals(".docx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Copy(on, full, overwrite: true);
+                        return Ok($"exported {full}");
+                    }
+                    dynamic app = doc.Application;
+                    dynamic copy = app.Documents.Add(Visible: false);
+                    try
+                    {
+                        copy.Content.InsertXML((string)doc.WordOpenXML);
+                        copy.SaveAs2(full, 16); // wdFormatDocumentDefault
+                    }
+                    finally { try { copy.Close(0); } catch { } }
+                    return Ok($"exported {full}");
+                }
+                default:
+                    throw new InvalidOperationException($"Word exports docx, pdf or summary, not {format}");
+            }
+        }
+
+        private static string WordSummary(object docO)
+        {
+            dynamic doc = docO;
+            int n = doc.Paragraphs.Count;
+            var heads = new List<string>();
+            for (var i = 1; i <= n && heads.Count < 30; i++)
+            {
+                dynamic p = doc.Paragraphs[i];
+                int level = 10;
+                try { level = (int)p.OutlineLevel; } catch { }
+                if (level <= 3) heads.Add($"p{i - 1} {Trunc(((string)p.Range.Text).Trim())}");
+            }
+            int tables = 0;
+            try { tables = doc.Tables.Count; } catch { }
+            return $"{(string)doc.Name}: paras={n}, tables={tables}" + (heads.Count > 0 ? "; headings: " + string.Join(" | ", heads) : "");
         }
 
         /// Calls VBA has no business making on this project's behalf.
@@ -895,7 +1004,7 @@ namespace Syn.Sidecar
                 {
                     "read" => Ok(ReadRange(wb, selector)),
                     "write" => WriteRange(wb, handle, selector, JsonField(line, "payload")),
-                    "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path")),
+                    "export" => ExportWb(wb, handle, JsonField(line, "format"), JsonField(line, "path"), JsonField(line, "sheet")),
                     "format" => FormatRange(wb, handle, selector, JsonField(line, "payload")),
                     "macro" => Macro(wb, JsonField(args, "action"), JsonField(args, "name"),
                                      JsonField(args, "title"), JsonField(line, "payload")),
@@ -921,6 +1030,8 @@ namespace Syn.Sidecar
                     "comment" => ExcelComment(wb, handle, selector, JsonField(line, "payload")),
                     "link" => ExcelLink(wb, handle, selector, JsonField(args, "text"), JsonField(args, "title")),
                     "pageSetup" => ExcelPageSetup(wb, handle, selector, JsonField(args, "style")),
+                    "header" => ExcelHeader(wb, handle, selector, JsonField(args, "name"), JsonField(line, "payload")),
+                    "pageNumbers" => ExcelPageNumbers(wb, handle, selector, JsonField(args, "text")),
                     "picture" => SheetPicture(wb, handle, selector, JsonField(args, "text")),
                     "find" => ExcelFind(wb, selector, JsonField(args, "text")),
                     "replace" => ExcelReplace(wb, handle, selector, JsonField(args, "text"), JsonField(args, "with")),
@@ -941,6 +1052,9 @@ namespace Syn.Sidecar
                 dynamic w = app.Workbooks[i];
                 string name = w.Name;
                 Trace($"FindWorkbook: [{i}] {name}");
+                // The hidden workbook undo keeps its copies in is nobody's
+                // document, whatever a handle happens to contain.
+                if (IsScratch(name)) continue;
                 if (handle.Contains(name)) return w;
             }
             return null;
@@ -1467,22 +1581,89 @@ namespace Syn.Sidecar
             }
         }
 
-        private static string ExportWb(dynamic wb, string handle, string format, string path)
+        // Every export writes a COPY. Workbook.SaveAs was used for xlsx, and
+        // SaveAs moves the open workbook to the new path: the user's own
+        // file stopped being the one on screen, and every later call on the
+        // handle failed with "workbook not open", because its name had
+        // changed to the export's.
+        private static string ExportWb(dynamic wb, string handle, string format, string path, string sheet)
         {
-            Snapshot(handle);
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(WorkbookSummary((object)wb));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
             var full = Path.GetFullPath(path);
             Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
-            switch (format.ToLowerInvariant())
+            switch (f)
             {
                 case "pdf":
                     wb.ExportAsFixedFormat(0, full);
                     return Ok($"exported {full}");
                 case "png":
                     return ExportCharts(wb, full);
-                default:
-                    wb.SaveAs(full, 51); // xlOpenXMLWorkbook
+                case "csv":
+                {
+                    // One sheet: CSV has no others. Copy() with no target
+                    // makes a new workbook holding just that sheet; this
+                    // helper made it, so this helper closes it.
+                    dynamic ws = sheet == "" ? wb.Worksheets[1] : Sheet(wb, SplitRange(sheet).sheet);
+                    dynamic app = wb.Application;
+                    ws.Copy();
+                    dynamic tmp = app.ActiveWorkbook;
+                    bool alerts = app.DisplayAlerts;
+                    app.DisplayAlerts = false;
+                    try { tmp.SaveAs(full, 6); } // xlCSV
+                    finally
+                    {
+                        try { tmp.Close(false); } catch { }
+                        app.DisplayAlerts = alerts;
+                    }
+                    return Ok($"exported sheet {(string)ws.Name} to {full}");
+                }
+                case "xlsx":
+                {
+                    if ((int)wb.FileFormat == 51)
+                    {
+                        wb.SaveCopyAs(full);
+                        return Ok($"exported {full}");
+                    }
+                    // SaveCopyAs keeps the workbook's own format (xlsm, xls),
+                    // which a .xlsx name would misdescribe. Copy, open the
+                    // copy, save that as xlsx, close it: all three are ours.
+                    var tmpPath = Path.Combine(Path.GetTempPath(), $"syn-{Guid.NewGuid():N}{Path.GetExtension((string)wb.Name)}");
+                    wb.SaveCopyAs(tmpPath);
+                    dynamic app = wb.Application;
+                    bool alerts = app.DisplayAlerts;
+                    app.DisplayAlerts = false;
+                    dynamic tmp = app.Workbooks.Open(tmpPath);
+                    try { tmp.SaveAs(full, 51); }
+                    finally
+                    {
+                        try { tmp.Close(false); } catch { }
+                        app.DisplayAlerts = alerts;
+                        try { File.Delete(tmpPath); } catch { }
+                    }
                     return Ok($"exported {full}");
+                }
+                default:
+                    throw new InvalidOperationException($"Excel exports xlsx, csv, pdf, png (its charts) or summary, not {format}");
             }
+        }
+
+        private static string WorkbookSummary(object wbO)
+        {
+            dynamic wb = wbO;
+            var parts = new List<string>();
+            int n = wb.Worksheets.Count;
+            for (var i = 1; i <= n; i++)
+            {
+                dynamic ws = wb.Worksheets[i];
+                string used = "empty";
+                try { used = ws.UsedRange.Address(false, false); } catch { }
+                int charts = 0;
+                try { charts = ws.ChartObjects().Count; } catch { }
+                parts.Add($"{SheetRef((string)ws.Name)} {used}" + (charts > 0 ? $" ({charts} chart(s))" : "") + ((int)ws.Visible != -1 ? " (hidden)" : ""));
+            }
+            return $"{(string)wb.Name}: {n} sheet(s): {string.Join("; ", parts)}";
         }
 
         // A chart only becomes a picture a report can carry once it is a file
@@ -1556,6 +1737,7 @@ namespace Syn.Sidecar
                     "textBox" => SlideTextBox(pres, handle, selector, JsonField(args, "name"),
                                               JsonField(line, "payload"), JsonField(args, "style")),
                     "theme" => DeckTheme(pres, handle, JsonField(args, "text")),
+                    "pageSetup" => SlidePageSetup(pres, handle, JsonField(args, "style")),
                     "find" => DeckFind(pres, JsonField(args, "text")),
                     "replace" => DeckReplace(pres, handle, JsonField(args, "text"), JsonField(args, "with")),
                     _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
@@ -1828,10 +2010,11 @@ namespace Syn.Sidecar
         {
             Snapshot(handle);
             dynamic hf = pres.SlideMaster.HeadersFooters;
-            hf.SlideNumber.Visible = true;
+            // MsoTriState: msoTrue is -1, not a boolean (see CLAUDE.md).
+            hf.SlideNumber.Visible = -1;
             if (!string.IsNullOrWhiteSpace(text))
             {
-                hf.Footer.Visible = true;
+                hf.Footer.Visible = -1;
                 hf.Footer.Text = text;
             }
             // The master governs new slides; the ones already placed each
@@ -1843,8 +2026,8 @@ namespace Syn.Sidecar
                 try
                 {
                     dynamic sf = pres.Slides[i].HeadersFooters;
-                    sf.SlideNumber.Visible = true;
-                    if (!string.IsNullOrWhiteSpace(text)) { sf.Footer.Visible = true; sf.Footer.Text = text; }
+                    sf.SlideNumber.Visible = -1;
+                    if (!string.IsNullOrWhiteSpace(text)) { sf.Footer.Visible = -1; sf.Footer.Text = text; }
                     done++;
                 }
                 catch { }
@@ -1896,13 +2079,34 @@ namespace Syn.Sidecar
         }
 
 
+        // A copy, never SaveAs, which moves the open deck to the new path.
         private static string ExportPres(dynamic pres, string handle, string format, string path)
         {
-            Snapshot(handle);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
-            if (format.ToLowerInvariant() == "pdf") pres.ExportAsFixedFormat(path, 2);
-            else pres.SaveAs(path);
-            return Ok($"exported {path}");
+            var f = format.ToLowerInvariant();
+            if (f is "summary" or "preview") return Ok(ReadDeck(pres));
+            if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException($"export {f} needs a path to write to");
+            var full = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full) ?? ".");
+            switch (f)
+            {
+                case "pdf":
+                    pres.ExportAsFixedFormat(full, 2); // ppFixedFormatTypePDF
+                    return Ok($"exported {full}");
+                case "pptx":
+                    pres.SaveCopyAs(full);
+                    return Ok($"exported {full}");
+                case "png":
+                {
+                    // Every slide, as a picture a document or a page can carry.
+                    var dir = Path.GetDirectoryName(full) ?? ".";
+                    var stem = Path.GetFileNameWithoutExtension(full);
+                    int n = pres.Slides.Count;
+                    for (var i = 1; i <= n; i++) pres.Slides[i].Export(Path.Combine(dir, $"{stem}-s{i}.png"), "PNG");
+                    return Ok($"exported {n} slide(s) to {dir}: {stem}-s1.png ... {stem}-s{n}.png");
+                }
+                default:
+                    throw new InvalidOperationException($"PowerPoint exports pptx, pdf, png (every slide) or summary, not {format}");
+            }
         }
 
         // ---- helpers ----

@@ -173,3 +173,48 @@ fn the_sidecars_are_where_the_test_thinks_they_are() {
         assert!(n >= 4, "{p} parsed as only {n} handled methods");
     }
 }
+
+/// Every method `sidecar-lo/lo_host.py` handles: the keys of its dispatch
+/// tables (`"read": lambda ...`, `"write": word_write`) and the two it
+/// tests for by name (`method == "open"`).
+fn methods_the_libreoffice_helper_handles() -> Vec<String> {
+    let src = source("sidecar-lo/lo_host.py");
+    let mut found = Vec::new();
+    for (i, _) in src.match_indices("\": ") {
+        let after = &src[i + 3..];
+        if !(after.starts_with("lambda") || after.starts_with("word_")) {
+            continue;
+        }
+        let before = &src[..i];
+        if let Some(q) = before.rfind('"') {
+            let name = &before[q + 1..];
+            if is_word(name) {
+                found.push(name.to_string());
+            }
+        }
+    }
+    for (i, _) in src.match_indices("method == \"") {
+        let rest = &src[i + 11..];
+        if let Some(j) = rest.find('"') {
+            found.push(rest[..j].to_string());
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+#[test]
+fn the_libreoffice_helper_handles_only_what_rust_sends_and_the_core_of_it() {
+    // The Linux helper is a subset of office-host by design (no pivots, no
+    // VBA). What it must not do is answer a method nothing sends -- a
+    // misspelt verb that is dead on arrival -- or lose one of the core ops
+    // the live tests in tests/test_lo_live.py rely on.
+    let sent = methods_rust_can_send();
+    let handled = methods_the_libreoffice_helper_handles();
+    let dead: Vec<&String> = handled.iter().filter(|m| !sent.contains(m)).collect();
+    assert!(dead.is_empty(), "sidecar-lo/lo_host.py handles {dead:?}, which core/src/hand.rs never sends");
+    for core in ["open", "read", "write", "format", "export", "addSheet", "chart", "insertParagraph", "insertTable", "createSlide"] {
+        assert!(handled.iter().any(|m| m == core), "sidecar-lo/lo_host.py no longer handles {core}: {handled:?}");
+    }
+}

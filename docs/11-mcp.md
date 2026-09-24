@@ -138,6 +138,37 @@ tool name.
 
 ## What is verified, and what is not
 
+**Live, against a real office engine (tier 2½), 2026-09-24.** On Linux,
+with `sidecar-lo/lo_host.py` standing in for office-host.exe: a model (the
+session's own, acting as the MCP client, deciding each call from the last
+answer) drove the real `mcpgate` through a full job. `status` → `open` (which
+started the helper, which started LibreOffice, 2.1s) → the suggested `read`,
+copied exactly → a revenue column filled down 24 rows by one formula → a
+`Summary` sheet of `SUMIF`s written as nested arrays against a prefix-less
+handle → formatting → two charts → a Word memo with a heading and a table →
+a slide with a sub-bullet and speaker notes → export of all three. The
+exported files were then checked by unzipping them, with the expected
+numbers recomputed from the fixture's own data: every formula was in the
+file as a formula, every value matched. The mistakes a small model makes
+(a selector with no sheet, an invented field, a repeated call, a file in the
+wrong app, a path outside `AGENT_MCP_ROOTS`) each came back with the fix in
+the message. Closing the client stopped all six helper processes. The Syn
+console, open beside it, showed every call as it happened.
+
+That run found three real bugs, all fixed:
+
+- Excel's `SplitRange` kept the quotes of `'Q3 sales'!A1`, so the selector
+  the guidance tells models to write for a sheet with a space would have
+  failed on real Excel. Fixed in the C# (unverified there) and in the
+  LibreOffice helper (verified).
+- The guidance said `p1, p2 ...` for Word paragraphs; both helpers count
+  from `p0`. A model following it skipped the first paragraph. It now says
+  p0 is the first.
+- A label ending in "…" got a full stop after it.
+
+`tests/test_lo_live.py` repeats that job automatically, and CI's
+`libreoffice` job runs it on every push with LibreOffice installed.
+
 Verified here (Linux, tier 1): 36 new tests. They cover the protocol in
 both eras, the surface generated from `tools::TOOLS` with a drift check,
 every gate on the MCP path, the small-model repairs and refusals, `open`
@@ -145,9 +176,9 @@ against fake hands (connect, launch, open, bind, sheet discovery,
 refusals before launch), and the real binary over stdio. The crate also
 type-checks and passes clippy for the Windows target.
 
-**Not verified: any of it against real Office.** The helper launch
-(`EnvConnector`), the handle-inheritance fix on Windows, the
-sheet-name probe against live Excel, and opening a file through the
+**Not verified: any of it against Microsoft Office.** The Windows launch
+of office-host.exe, the handle-inheritance fix, the quote fix in the C#,
+the sheet-name probe against live Excel, and opening a file through the C#
 sidecar all need tier 3. To check on the desk:
 
 1. Build the sidecar (`dotnet build -c Release sidecar-csharp\Host`) and

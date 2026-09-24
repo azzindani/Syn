@@ -436,7 +436,7 @@ pub fn next_step(d: &Doc) -> String {
             let quoted = if sheet.contains(' ') { format!("'{sheet}'") } else { sheet.to_string() };
             format!("{} to see the top of the first sheet. Every Excel selector names its sheet.", call(&format!("{quoted}!A1:H20")))
         }
-        "word" => format!("{} for the paragraph count, then p1, p2 ... for the text.", call("body")),
+        "word" => format!("{} for the paragraph count, then p0 (the first), p1 ... for the text.", call("body")),
         "ppt" => format!("{} for the slides, then s1, s2 ... for one slide.", call("deck")),
         "web" => format!("{} -- selectors on a page are CSS.", call("h1")),
         _ => format!("{} for the window's controls, then struct invoke to press one by id.", call(":tree")),
@@ -485,42 +485,65 @@ impl EnvConnector {
         if app == "ui" { "uia" } else { app }
     }
 
-    /// The helper executable for an app: an env override, else the
-    /// repository's own Release build, found from the working directory or
-    /// from where this binary lives.
-    fn helper(app: &str) -> Option<PathBuf> {
+    /// How to start an app's helper, as a command line, or None when this
+    /// machine has no helper for it.
+    ///
+    /// Windows: office-host.exe or uia-host.exe, driving Office through COM
+    /// and windows through UI Automation. Anywhere else: `lo_host.py`,
+    /// which speaks the same `office-rpc/1` but drives LibreOffice -- so a
+    /// Linux or macOS machine can run the whole stack against a real office
+    /// engine. There is no UI Automation off Windows, and no helper for it.
+    ///
+    /// Each comes from an env override or the repository's own files, found
+    /// from the working directory or from where this binary lives.
+    fn helper(app: &str) -> Option<Vec<std::ffi::OsString>> {
         let (var, rel) = match app {
-            "excel" | "word" | "ppt" => ("AGENT_OFFICE_HOST", "sidecar-csharp/Host/bin/Release/net8.0-windows/office-host.exe"),
-            "ui" => ("AGENT_UIA_HOST", "sidecar-csharp/Uia/bin/Release/net8.0-windows/uia-host.exe"),
+            "excel" | "word" | "ppt" if cfg!(windows) => {
+                ("AGENT_OFFICE_HOST", "sidecar-csharp/Host/bin/Release/net8.0-windows/office-host.exe")
+            }
+            "excel" | "word" | "ppt" => ("AGENT_OFFICE_HOST", "sidecar-lo/lo_host.py"),
+            "ui" if cfg!(windows) => ("AGENT_UIA_HOST", "sidecar-csharp/Uia/bin/Release/net8.0-windows/uia-host.exe"),
             _ => return None,
         };
-        if let Ok(p) = std::env::var(var)
-            && !p.trim().is_empty()
-        {
-            let p = PathBuf::from(p.trim());
-            return p.is_file().then_some(p);
+        let found = match std::env::var(var) {
+            Ok(p) if !p.trim().is_empty() => Some(PathBuf::from(p.trim())).filter(|p| p.is_file()),
+            _ => {
+                let mut starts = vec![];
+                if let Ok(c) = std::env::current_dir() {
+                    starts.push(c);
+                }
+                if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+                    starts.push(d);
+                }
+                starts.iter().flat_map(|s| s.ancestors()).map(|a| a.join(rel)).find(|p| p.is_file())
+            }
+        }?;
+        // A script runs under the interpreter that has LibreOffice's bridge.
+        if found.extension().is_some_and(|e| e == "py") {
+            let python = std::env::var("AGENT_PYTHON").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "python3".into());
+            return Some(vec![python.into(), found.into()]);
         }
-        let mut starts = vec![];
-        if let Ok(c) = std::env::current_dir() {
-            starts.push(c);
-        }
-        if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
-            starts.push(d);
-        }
-        starts.iter().flat_map(|s| s.ancestors()).map(|a| a.join(rel)).find(|p| p.is_file())
+        Some(vec![found.into()])
     }
 
     fn start(&mut self, app: &str, pipe: &str) -> Result<(), String> {
-        let exe = Self::helper(app).ok_or_else(|| {
-            format!(
-                "{}'s helper is not running and its program was not found. Build it (dotnet build -c Release sidecar-csharp/{}) or set {}",
-                app_name(app),
-                if app == "ui" { "Uia" } else { "Host" },
-                if app == "ui" { "AGENT_UIA_HOST" } else { "AGENT_OFFICE_HOST" }
-            )
+        let argv = Self::helper(app).ok_or_else(|| {
+            if cfg!(windows) {
+                format!(
+                    "{}'s helper is not running and its program was not found. Build it (dotnet build -c Release sidecar-csharp/{}) or set {}",
+                    app_name(app),
+                    if app == "ui" { "Uia" } else { "Host" },
+                    if app == "ui" { "AGENT_UIA_HOST" } else { "AGENT_OFFICE_HOST" }
+                )
+            } else {
+                format!(
+                    "{}'s helper is not running and sidecar-lo/lo_host.py was not found (it needs LibreOffice and python3-uno); set AGENT_OFFICE_HOST to it",
+                    app_name(app)
+                )
+            }
         })?;
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.arg("--pipe").arg(pipe);
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]).arg("--pipe").arg(pipe);
         if app != "ui" {
             cmd.arg("--app").arg(if app == "ppt" { "powerpoint" } else { app });
         }
@@ -530,7 +553,7 @@ impl EnvConnector {
         // for Start-Process -Redirect.
         cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         no_inherit::prepare(&mut cmd);
-        let child = cmd.spawn().map_err(|e| format!("could not start {}: {e}", exe.display()))?;
+        let child = cmd.spawn().map_err(|e| format!("could not start {}: {e}", argv[0].to_string_lossy()))?;
         self.started.push(child);
         Ok(())
     }
@@ -542,7 +565,7 @@ impl Connector for EnvConnector {
     }
 
     fn can_launch(&self, app: &str) -> bool {
-        self.launch && cfg!(windows) && app != "web" && self.wired(app).is_some() && Self::helper(app).is_some()
+        self.launch && app != "web" && self.wired(app).is_some() && Self::helper(app).is_some()
     }
 
     fn connect(&mut self, app: &str) -> Result<Connected, String> {
@@ -554,8 +577,8 @@ impl Connector for EnvConnector {
                 .map_err(|e| format!("cannot reach the browser at {addr}: {e}. Is it running with --remote-debugging-port?"))?;
             return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
         }
-        if !cfg!(windows) {
-            return Err(format!("{} runs on Windows; this server is not on Windows", app_name(app)));
+        if app == "ui" && !cfg!(windows) {
+            return Err("windows are driven through UI Automation, which only Windows has".into());
         }
         let pipe = self.wired(app).ok_or_else(|| {
             format!("no helper is wired for {}: the human sets {} in .env", app_name(app), crate::config::pipe_env_key(Self::pipe_key(app)))
@@ -568,9 +591,10 @@ impl Connector for EnvConnector {
             return Err(format!("{first}. Starting helpers is off (AGENT_MCP_LAUNCH=0): the human starts it."));
         }
         self.start(app, &pipe)?;
-        // Excel can take several seconds to start cold; the helper opens its
-        // pipe only once it has the application.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        // Excel can take several seconds to start cold, LibreOffice longer on
+        // a first run while it builds a profile; the helper opens its pipe
+        // only once it has the application.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         loop {
             if let Ok(h) = Hand::connect(&pipe) {
                 return Ok(Connected { name: pipe, apps: vec![app.into()], hand: Box::new(h), launched: true });
@@ -579,7 +603,7 @@ impl Connector for EnvConnector {
                 return Err(format!("{}'s helper exited ({st}) before it was ready", app_name(app)));
             }
             if std::time::Instant::now() > deadline {
-                return Err(format!("{}'s helper did not open {pipe} within 45s", app_name(app)));
+                return Err(format!("{}'s helper did not open {pipe} within 90s", app_name(app)));
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
@@ -592,6 +616,17 @@ impl Drop for EnvConnector {
     /// documents stay exactly where they are.
     fn drop(&mut self) {
         for c in &mut self.started {
+            // Asked first, told second. The LibreOffice helper stops its
+            // office on SIGTERM; SIGKILL would leave that office orphaned.
+            if no_inherit::ask_to_stop(c) {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+                while std::time::Instant::now() < until {
+                    if let Ok(Some(_)) = c.try_wait() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -622,11 +657,29 @@ mod no_inherit {
         }
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+
+    /// Windows has no SIGTERM to send; the helper is terminated outright,
+    /// and it holds nothing that terminating it would lose.
+    pub fn ask_to_stop(_c: &std::process::Child) -> bool {
+        false
+    }
 }
 
 #[cfg(not(windows))]
 mod no_inherit {
+    /// Rust's own spawn marks its pipes close-on-exec, and this server's
+    /// stdio is replaced by /dev/null for the child: nothing leaks here.
     pub fn prepare(_cmd: &mut std::process::Command) {}
+
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+
+    /// SIGTERM: the polite stop, which a helper can clean up after.
+    pub fn ask_to_stop(c: &std::process::Child) -> bool {
+        // SAFETY: signalling a child this process started and still holds.
+        unsafe { kill(c.id() as i32, 15) == 0 }
+    }
 }
 
 #[cfg(test)]

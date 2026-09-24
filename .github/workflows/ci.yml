@@ -24,6 +24,29 @@ jobs:
           python-version: "3.12"
       - run: python3 -m unittest discover -s tests
 
+  # The whole stack against a real office engine: an MCP client drives the
+  # real mcpgate, which starts sidecar-lo/lo_host.py, which starts
+  # LibreOffice on real .xlsx/.docx/.pptx files. Everything above the C#
+  # helper is exercised live; the C# itself still needs Windows + Office.
+  # SYN_REQUIRE_LO=1 turns "skipped, LibreOffice missing" into a failure,
+  # so this job cannot pass by checking nothing.
+  libreoffice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install LibreOffice and its Python bridge
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-writer libreoffice-impress python3-uno
+      - run: cargo build --bins
+        working-directory: core
+      - name: live test through mcpgate against LibreOffice
+        run: /usr/bin/python3 -m unittest discover -s tests -p test_lo_live.py -v
+        env:
+          AGENT_PYTHON: /usr/bin/python3
+          SYN_REQUIRE_LO: "1"
+
   # The C# side drives Office through late-bound COM, so almost none of it
   # can run without Office installed -- but all of it has to compile, and
   # until now none of it was built here at all. Every break this project

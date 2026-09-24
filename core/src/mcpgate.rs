@@ -70,7 +70,7 @@ HOW TO WORK
 HANDLES AND SELECTORS
 - A handle is app:file:unit, e.g. excel:sales.xlsx:workbook. Copy it exactly from `status` or `open`.
 - Excel selectors ALWAYS name the sheet: Sheet1!A1:D10. A sheet name with spaces goes in single quotes: 'Q3 sales'!A1:B5.
-- Word: body (the paragraph count), p1, p2 ... for one paragraph. PowerPoint: deck, s1, s2 ... for one slide, s2.notes for its speaker notes.
+- Word: body (the paragraph count), then p0, p1, p2 ... for one paragraph; p0 is the FIRST. PowerPoint: deck, then s1, s2 ... for one slide; s1 is the first. s2.notes is slide 2's speaker notes.
 
 VALUES
 - Several cells: cells joined by | and rows by ; e.g. Name|Total;North|120;South|80. One column is a;b;c.
@@ -180,7 +180,7 @@ fn example_of(description: &str) -> Option<String> {
 fn selector_hint(app: &str) -> &'static str {
     match app {
         "excel" => "Excel selectors name the sheet: Sheet1!A1:D10, or 'Q3 sales'!B2 when the name has a space.",
-        "word" => "Word selectors are body, or p1, p2 ... for one paragraph.",
+        "word" => "Word selectors are body, or p0, p1 ... for one paragraph; p0 is the first.",
         "ppt" => "PowerPoint selectors are deck, or s1, s2 ... for one slide, s2.notes for its notes.",
         "web" => "Selectors on a web page are CSS: h1, #total, table tr:nth-child(2).",
         "ui" => "Window selectors are :tree for the control list, or id=..., name=..., type=... joined by commas.",
@@ -497,7 +497,7 @@ impl Server {
                     ),
                     _ => String::new(),
                 };
-                text_result(&format!("{said}.\n{}{check}", fenced(&detail)), false)
+                text_result(&format!("{}\n{}{check}", sentence_end(&said), fenced(&detail)), false)
             }
             outcome => {
                 let (why, status) = match outcome {
@@ -552,6 +552,12 @@ impl Server {
         ]);
         (self.mirror)(&format!("RECEIPT step {}", line.to_json()));
     }
+}
+
+/// A label as a sentence: a full stop, unless it already ends in one or in
+/// the ellipsis a truncated label carries ("…." read as a typo).
+fn sentence_end(said: &str) -> String {
+    if said.ends_with(['.', '…', '!', '?']) { said.to_string() } else { format!("{said}.") }
 }
 
 fn status_name(s: Status) -> &'static str {

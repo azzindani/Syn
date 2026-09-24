@@ -17,6 +17,7 @@ exactly one step for the machine with Office on it.
 |---|---|---|
 | 1 | nothing | the loop, the parser, the schemas, and that both sides of the wire agree |
 | 2 | an API key | how a model behaves over a long run, against in-memory documents |
+| 2½ | LibreOffice + python3-uno, any OS | the whole stack live — MCP, desk, gates, the wire, the guidance — against a real office engine that calculates, on real .xlsx/.docx/.pptx |
 | 3 | Windows + Office | that the COM call is right and the document ends up correct |
 
 Tier 1 is `cargo test` on any platform — Linux, macOS, a cloud sandbox. It is
@@ -29,6 +30,14 @@ work there with no Office at all. What you lose is formula evaluation and
 the Office-only verbs (pivot, chart, slicer, conditional, picture), so tier 2
 answers "does the model drive this sensibly for three hundred steps" and
 never "is the number right".
+
+Tier 2½ is `sidecar-lo/lo_host.py`: a helper that speaks the same
+`office-rpc/1` as office-host.exe but drives LibreOffice, so everything above
+the C# layer runs for real on Linux — formulas calculate, charts land, files
+come out right — in `tests/test_lo_live.py` and in CI's `libreoffice` job. It
+is the place to prove a new verb's wire shape and its guidance before the
+desk. What it cannot prove is the C#: a verb working on LibreOffice says
+nothing about the COM call behind it on Windows.
 
 Tier 3 is the only step that needs the desk.
 

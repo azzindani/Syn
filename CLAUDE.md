@@ -38,6 +38,10 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
 - `sidecar-csharp/Host`: the Office COM sidecar (STA). `sidecar-csharp/Uia`:
   the UI Automation sidecar (MTA). Both need Windows and .NET 8 to build,
   and Office to run.
+- `sidecar-lo/lo_host.py`: the same `office-rpc/1`, driving LibreOffice over
+  a Unix socket. Off Windows, `mcpgate` and the REPL start it instead of
+  office-host. Keep its replies worded like office-host's; a verb it does
+  not implement is refused, never faked.
 - `relay/`: the original Python proof of concept, stdlib only.
 - `protocol/`: the rpc catalog and the default-deny security policy (JSON).
 - `widget/index.html`: the whole console UI, one file, no dependencies,
@@ -78,6 +82,12 @@ There are three tiers (`docs/10-adding-tools-remotely.md`):
 2. An API key plus an in-memory document (`attach` without `live`). This
    shows how a model behaves over a long run, but has no formulas and no
    Office-only verbs.
+   2½. LibreOffice, live: `tests/test_lo_live.py` runs the real `mcpgate`
+   against real files through `sidecar-lo` (this sandbox can install
+   `libreoffice-calc libreoffice-writer libreoffice-impress`, and has
+   `python3-uno`; run it with `/usr/bin/python3`). It proves everything
+   above the C#, formulas included. Use it for any change to MCP, the desk,
+   the wire or the guidance.
 3. Windows with Office installed, the only way to prove a COM call is
    right.
 

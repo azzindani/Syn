@@ -1350,10 +1350,19 @@ namespace Syn.Sidecar
             return Ok($"exported {made.Count} chart(s) to {dir}: {string.Join(", ", made)}");
         }
 
+        // A sheet name with a space is written the way Excel writes it,
+        // 'Q3 sales'!A1, and the MCP guidance tells models to write it so.
+        // The quotes are syntax, not part of the name: left on, the lookup
+        // asked for a sheet called 'Q3 sales' with the quotes and found none.
+        // Found by the LibreOffice helper's live test (sidecar-lo), which
+        // handles it the same way; a doubled quote inside is one quote.
         private static (string sheet, string addr) SplitRange(string selector)
         {
             var i = selector.IndexOf('!');
-            return i < 0 ? (selector, "") : (selector[..i], selector[(i + 1)..]);
+            var (sheet, addr) = i < 0 ? (selector, "") : (selector[..i], selector[(i + 1)..]);
+            if (sheet.Length >= 2 && sheet[0] == '\'' && sheet[^1] == '\'')
+                sheet = sheet[1..^1].Replace("''", "'");
+            return (sheet, addr);
         }
 
         // ---- PowerPoint ----

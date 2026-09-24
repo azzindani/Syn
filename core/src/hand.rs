@@ -385,13 +385,32 @@ impl<S: Read + Write + std::fmt::Debug> LiveHand for Hand<S> {
     }
 }
 
-/// Windows named pipe path for a sidecar name.
+/// Where a helper named `name` listens.
+///
+/// Windows: a named pipe, which is what office-host.exe and uia-host.exe
+/// serve. Elsewhere: a Unix socket in `$XDG_RUNTIME_DIR` (else `/tmp`),
+/// which is what `sidecar-lo/lo_host.py` serves -- it computes the same
+/// path, so the two sides meet without either being told the other's.
 pub fn pipe_path(name: &str) -> String {
-    format!(r"\\.\pipe\{name}")
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\{name}")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_RUNTIME_DIR").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "/tmp".into());
+        format!("{}/syn-pipe-{name}.sock", base.trim_end_matches('/'))
+    }
 }
 
-impl Hand<std::fs::File> {
-    /// Connect to a running sidecar by pipe name.
+/// The stream a helper is reached over on this platform.
+#[cfg(windows)]
+pub type Pipe = std::fs::File;
+#[cfg(not(windows))]
+pub type Pipe = std::os::unix::net::UnixStream;
+
+impl Hand<Pipe> {
+    /// Connect to a running helper by name.
     ///
     /// A Windows named pipe opens like any other file once the server is
     /// listening. The server accepts a single client, so a second connect
@@ -399,13 +418,19 @@ impl Hand<std::fs::File> {
     /// this client's, and the error says so.
     pub fn connect(name: &str) -> std::io::Result<Self> {
         let path = pipe_path(name);
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("cannot open {path}: {e}. Is office-host running with --pipe {name}, and free?"),
-            )
+        #[cfg(windows)]
+        let stream = std::fs::OpenOptions::new().read(true).write(true).open(&path);
+        // A Unix socket can be given a deadline, and is: a helper whose
+        // office has wedged must surface as an error, not a hung session.
+        #[cfg(not(windows))]
+        let stream = std::os::unix::net::UnixStream::connect(&path).and_then(|s| {
+            s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+            Ok(s)
+        });
+        let stream = stream.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot open {path}: {e}. Is its helper running with --pipe {name}, and free?"))
         })?;
-        Ok(Self::new(file))
+        Ok(Self::new(stream))
     }
 }
 
@@ -631,8 +656,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn pipe_path_is_the_windows_form() {
         assert_eq!(pipe_path("hand-excel"), r"\\.\pipe\hand-excel");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn pipe_path_elsewhere_is_the_socket_the_libreoffice_helper_serves() {
+        // sidecar-lo/lo_host.py's socket_path() computes the same thing.
+        let p = pipe_path("hand-excel");
+        assert!(p.ends_with("/syn-pipe-hand-excel.sock"), "{p}");
     }
 
     #[test]

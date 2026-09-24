@@ -51,6 +51,10 @@ software hands (Office first) in one live session, any model via OpenRouter.
   office-rpc/1 wire, so core reaches it through the same `Hand`. MTA, not
   STA — a UIA client must not be STA or it can deadlock against an STA
   provider, which is the opposite of what the Office sidecar needs.
+- `sidecar-lo/` — the helper for machines without Microsoft Office: the same
+  `office-rpc/1` as the COM sidecar, driving LibreOffice (Calc, Writer,
+  Impress) over a Unix socket. It lets the whole stack run live on Linux and
+  in CI; it does not test the C#. See `sidecar-lo/README.md`.
 - `office-pane/` — Office.js task pane (Mac/Web hand), sideload to verify.
 - `scripts/` — Windows bring-up: `new-testbed-docs.ps1` (fixtures via COM),
   `live-excel-smoke.ps1` (M1/M2 acceptance vs real Excel), `pipe-client.ps1`,
@@ -83,6 +87,8 @@ cd core && cargo clippy --all-targets -- -D warnings && cargo test
 cargo build --release && cargo run --example demo
 ./target/release/cli < ../tests/e2e_script.txt
 ./target/release/cli < ../tests/e2e_safety.txt   # allow/kill/journal/replay/sessions
+# live, against LibreOffice (needs libreoffice-calc/-writer/-impress + python3-uno):
+cd .. && /usr/bin/python3 -m unittest discover -s tests -p test_lo_live.py -v
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cargo run -q --bin mcpgate
 ```
 ## Run on Windows (live Office)

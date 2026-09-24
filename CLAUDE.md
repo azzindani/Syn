@@ -124,6 +124,11 @@ recipe is in `docs/10`.
   and a program not on it is refused before anyone is asked. VBA (`struct`
   `macro`) is off unless `AGENT_VBA=1`, and that gate lives in
   `Runner::pump`.
+- **Real control is COM.** On Windows every document op goes Rust →
+  named pipe → C# helper → COM (or UI Automation) into the running app.
+  Python appears only in `sidecar-lo` (LibreOffice, for testing off
+  Windows) and the `relay/` prototype; never on the Windows control path,
+  and never Python office-file libraries (openpyxl, python-docx, ...).
 - **The sidecar never closes or saves what it did not open.** Office COM
   servers are single-instance per user, so quitting one can close the
   user's own work. Read the lessons in `docs/runbook-windows.md` §0 before

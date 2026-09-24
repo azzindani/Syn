@@ -1,0 +1,24 @@
+hand hand-excel excel
+hand hand-word word
+attach excel solar.xlsx data
+attach word solar-memo.docx
+live excel:solar.xlsx:data
+live word:solar-memo.docx:body
+export excel:solar.xlsx:data png D:\Github\Syn\testbed\out\chart.png
+para word:solar-memo.docx:body Title Calgary Solar Estate: Quarterly Performance Review
+para word:solar-memo.docx:body Subtitle Prepared for the Infrastructure Committee
+pagebreak word:solar-memo.docx:body page
+contents word:solar-memo.docx:body Contents
+pagebreak word:solar-memo.docx:body page
+para word:solar-memo.docx:body Heading_1 Executive summary
+para word:solar-memo.docx:body . Bearspaw Water Treatment Plant produced 3,082,638 kWh over the period, 31.3% of the 9,835,518 kWh generated across the estate and more than the bottom eight sites combined.
+para word:solar-memo.docx:body Heading_2 Estate performance
+wtable word:solar-memo.docx:body . Site|Total kWh|Share;Bearspaw Water Treatment Plant|3,082,638|31.3%;Whitehorn Multi-Service Centre|2,558,803|26.0%;Glenmore Water Treatment Plant|1,551,178|15.8%
+para word:solar-memo.docx:body . The three largest sites carry 73% of all generation.
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\chart-Dashboard-1.png 420
+para word:solar-memo.docx:body Heading_2 Seasonal pattern
+para word:solar-memo.docx:body . Summer generation reaches 4,040,022 kWh against 607,481 kWh in winter, a factor of 6.7. At the monthly level the swing is sharper still.
+picture word:solar-memo.docx:body D:\Github\Syn\testbed\out\chart-Dashboard-2.png 420
+pagenumbers word:solar-memo.docx:body Calgary Solar Estate
+format word:solar-memo.docx:body p7 align=justify
+read word:solar-memo.docx:body body

@@ -1,13 +1,9 @@
 [package]
-name = "harness-widget"
+name = "widget"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-harness-core = { path = "../../harness-core" }
+core = { path = "../../core" }
 # Windows build adds: tauri = { version = "2", features = [] }, tauri-plugin-shell = "2"
 # Sidecar: office-host.exe via tauri externalBin + shell:allow-spawn (see docs).
-
-[lib]
-name = "harness_widget"
-crate-type = ["staticlib"]

@@ -2,7 +2,7 @@
 
 ## Dual backends everywhere (ai-office-mcp, MIT README) — ADOPT as live/headless duality
 - Excel: `excel_com.py` (live GetActiveObject-style, pivots/slicers/VBA/charts/screenshots/window mgmt) vs `openpyxl_backend.py` (headless, 67 tools cross-platform). Same tool names, capability degrades by platform.
-- `SnapshotUndo`: per-workbook stack, disk-persisted index with orphan pruning (survives restarts), `push(wb)->snap_id`; `undo_last/list/clear`. UPGRADE over Syn in-memory snapshots: persist index + prune orphans.
+- `SnapshotUndo`: per-workbook stack, disk-persisted index with orphan pruning (survives restarts), `push(wb)->snap_id`; `undo_last/list/clear`. UPGRADE over the agent in-memory snapshots: persist index + prune orphans.
 - Word-live: open-doc editing, native track-changes, threaded comments, per-action Ctrl+Z, layout diagnostics, `MCP_AUTHOR` attribution.
 - PPT skill: PDF/DOCX/URL -> native DrawingML (never rasterized slides), example-driven (22 projects/309pp).
 
@@ -18,7 +18,7 @@
 - gawirable 47 tools; `architecture.md` authority; LibreOffice headless export; mammoth docx->html; Windows `.COM`-shim hang trap (prefer .exe, set explicit soffice path). Adopt as no-Office fallback.
 - hinora (WPS/Outlook/WhatsApp-CDP/exe builds), OfficeMCP (`RunPython(Officer.*)` god-tool): NO license -> shapes only.
 
-## Syn deltas queued from this layer
+## Desktop Agent deltas queued from this layer
 1. hello/snapshot handshake (documentId+tools+host) into attach.
 2. VFS verbs + CLI strip-images hygiene + unsafe-eval dev-only.
 3. Session paths idle|streaming|editing + watchdogs + circuit breaker.
@@ -29,7 +29,7 @@
 8. Follow-mode selection tracking into live feed.
 
 ## Implementation status (loop D3, verified)
-All 8 deltas now live in `harness-core` (zero-dep, clippy -D clean, 30 tests):
+All 8 deltas now live in `core` (zero-dep, clippy -D clean, 30 tests):
 1. `bus.attach_with_snapshot` + `follow/selection` (hello: document_id/tools/host; follow events in feed).
 2. `paths.rs`: SessionPath idle|streaming|editing + breaker (trips at 3, human reset).
 3. `stream.rs`: stream_start/block/end with 20k block cap + counts.

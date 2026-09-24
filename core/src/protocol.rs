@@ -46,11 +46,12 @@ pub enum StructVerb {
     WriteRange,
     CreateSlide,
     Transfer,
+    Invoke,
 }
 
 /// Closed error taxonomy: every failure names its class for model rewrite.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HarnessError {
+pub enum Error {
     UnknownSession(String),
     UnknownHandle(String),
     BadSelector(String),
@@ -61,13 +62,17 @@ pub enum HarnessError {
     DoomLoop(String),
     AppDenied(String),
     Killed,
+    Transport(String),
+    Live(String),
+    NoHand(String),
 }
 
-impl fmt::Display for HarnessError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownSession(s) => write!(f, "unknown session {s}: handshake first"),
             Self::UnknownHandle(h) => write!(f, "handle not open: {h}: list registry first"),
+            Self::NoHand(a) => write!(f, "no hand claims app {a}: attach one that does"),
             Self::BadSelector(s) => write!(f, "bad selector {s:?}: rewrite it for the handle kind"),
             Self::ClosedSchema(d) => write!(f, "schema violation: {d}"),
             Self::OverBulkCap => write!(f, "over bulk cap: narrow the selector, refusing not truncating"),
@@ -76,13 +81,15 @@ impl fmt::Display for HarnessError {
             Self::DoomLoop(op) => write!(f, "same op+args 3x ({op}): human confirm required"),
             Self::AppDenied(a) => write!(f, "app {a:?} not on allowlist: refusing dispatch"),
             Self::Killed => write!(f, "kill switch latched: dispatch stopped, fresh guard required"),
+            Self::Transport(d) => write!(f, "live hand transport failed: {d}: reconnect the sidecar"),
+            Self::Live(d) => write!(f, "live app refused the op: {d}"),
         }
     }
 }
 
-impl std::error::Error for HarnessError {}
+impl std::error::Error for Error {}
 
-pub type Result<T> = std::result::Result<T, HarnessError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Canonical handle shape: `app:file:unit`.
 pub fn new_handle(app: &str, file: &str, unit: &str) -> String {
@@ -95,16 +102,18 @@ mod cover_tests {
 
     #[test]
     fn error_display_guides_rewrite() {
-        assert!(HarnessError::UnknownHandle("h".into()).to_string().contains("registry"));
-        assert!(HarnessError::OverBulkCap.to_string().contains("narrow"));
-        assert!(HarnessError::DoomLoop("op".into()).to_string().contains("confirm"));
-        assert!(HarnessError::Killed.to_string().contains("kill switch"));
-        assert!(HarnessError::AppDenied("x".into()).to_string().contains("allowlist"));
-        assert!(HarnessError::EmptyUndo("h".into()).to_string().contains("nothing to undo"));
-        assert!(HarnessError::Denied("x".into()).to_string().contains("denied"));
-        assert!(HarnessError::BadSelector("s".into()).to_string().contains("rewrite"));
-        assert!(HarnessError::ClosedSchema("d".into()).to_string().contains("schema"));
-        assert!(HarnessError::UnknownSession("s".into()).to_string().contains("handshake"));
+        assert!(Error::UnknownHandle("h".into()).to_string().contains("registry"));
+        assert!(Error::OverBulkCap.to_string().contains("narrow"));
+        assert!(Error::DoomLoop("op".into()).to_string().contains("confirm"));
+        assert!(Error::Killed.to_string().contains("kill switch"));
+        assert!(Error::AppDenied("x".into()).to_string().contains("allowlist"));
+        assert!(Error::Transport("eof".into()).to_string().contains("reconnect"));
+        assert!(Error::Live("busy".into()).to_string().contains("live app"));
+        assert!(Error::EmptyUndo("h".into()).to_string().contains("nothing to undo"));
+        assert!(Error::Denied("x".into()).to_string().contains("denied"));
+        assert!(Error::BadSelector("s".into()).to_string().contains("rewrite"));
+        assert!(Error::ClosedSchema("d".into()).to_string().contains("schema"));
+        assert!(Error::UnknownSession("s".into()).to_string().contains("handshake"));
     }
 
     #[test]

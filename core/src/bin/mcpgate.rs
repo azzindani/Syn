@@ -5,10 +5,10 @@
 //!   {"tool":"registry","session":"s"}
 //! Reads run live against an in-process Relay; mutating tools return the
 //! queued office-rpc/1 envelope until a live hand attaches. Attach files
-//! first via the harness CLI; this bridge shares no state across processes.
+//! first via the cli binary; this bridge shares no state across processes.
 
-use harness_core::bus::Relay;
-use harness_core::mcpgate;
+use core::bus::Relay;
+use core::mcpgate;
 use std::io::BufRead;
 
 fn get(field: &str, line: &str) -> String {

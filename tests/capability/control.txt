@@ -1,0 +1,29 @@
+hand hand-excel excel
+hand hand-word word
+attach excel solar.xlsx data
+attach word solar-memo.docx
+live excel:solar.xlsx:data
+live word:solar-memo.docx:body
+sheet excel:solar.xlsx:data Summary
+sheet excel:solar.xlsx:data Dashboard
+write excel:solar.xlsx:data Summary!A1 Site|Total kWh|Mean Hourly kWh|Peak Hourly kWh|Readings
+write excel:solar.xlsx:data Summary!A2 Bearspaw Water Treatment Plant;Whitehorn Multi-Service Centre;Glenmore Water Treatment Plant;Southland Leisure Centre;City of Calgary North Corporate Warehouse;Hillhurst Sunnyside Community Association;Manchester Building M;CFD Firehall #7;Calgary Fire Hall Headquarters;Richmond - Knob Hill Community Hall;Telus Spark
+write excel:solar.xlsx:data Summary!B2 =SUMIF(data!$A$2:$A$258424,$A2,data!$E$2:$E$258424)|=IFERROR(B2/E2,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A2)|=COUNTIF(data!$A$2:$A$258424,$A2);=SUMIF(data!$A$2:$A$258424,$A3,data!$E$2:$E$258424)|=IFERROR(B3/E3,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A3)|=COUNTIF(data!$A$2:$A$258424,$A3);=SUMIF(data!$A$2:$A$258424,$A4,data!$E$2:$E$258424)|=IFERROR(B4/E4,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A4)|=COUNTIF(data!$A$2:$A$258424,$A4);=SUMIF(data!$A$2:$A$258424,$A5,data!$E$2:$E$258424)|=IFERROR(B5/E5,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A5)|=COUNTIF(data!$A$2:$A$258424,$A5);=SUMIF(data!$A$2:$A$258424,$A6,data!$E$2:$E$258424)|=IFERROR(B6/E6,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A6)|=COUNTIF(data!$A$2:$A$258424,$A6);=SUMIF(data!$A$2:$A$258424,$A7,data!$E$2:$E$258424)|=IFERROR(B7/E7,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A7)|=COUNTIF(data!$A$2:$A$258424,$A7);=SUMIF(data!$A$2:$A$258424,$A8,data!$E$2:$E$258424)|=IFERROR(B8/E8,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A8)|=COUNTIF(data!$A$2:$A$258424,$A8);=SUMIF(data!$A$2:$A$258424,$A9,data!$E$2:$E$258424)|=IFERROR(B9/E9,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A9)|=COUNTIF(data!$A$2:$A$258424,$A9);=SUMIF(data!$A$2:$A$258424,$A10,data!$E$2:$E$258424)|=IFERROR(B10/E10,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A10)|=COUNTIF(data!$A$2:$A$258424,$A10);=SUMIF(data!$A$2:$A$258424,$A11,data!$E$2:$E$258424)|=IFERROR(B11/E11,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A11)|=COUNTIF(data!$A$2:$A$258424,$A11);=SUMIF(data!$A$2:$A$258424,$A12,data!$E$2:$E$258424)|=IFERROR(B12/E12,"")|=MAXIFS(data!$E$2:$E$258424,data!$A$2:$A$258424,$A12)|=COUNTIF(data!$A$2:$A$258424,$A12)
+format excel:solar.xlsx:data Summary!A1:E1 bold=1
+format excel:solar.xlsx:data Summary!B2:D12 numberFormat=#,##0.0
+format excel:solar.xlsx:data Summary!E2:E12 numberFormat=#,##0
+format excel:solar.xlsx:data Summary!A:A width=34
+write excel:solar.xlsx:data Dashboard!A1 Month|Total kWh
+write excel:solar.xlsx:data Dashboard!A2 Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec
+write excel:solar.xlsx:data Dashboard!B2 =SUMPRODUCT((MONTH(data!$D$2:$D$258424)=1)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=2)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=3)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=4)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=5)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=6)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=7)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=8)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=9)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=10)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=11)*data!$E$2:$E$258424);=SUMPRODUCT((MONTH(data!$D$2:$D$258424)=12)*data!$E$2:$E$258424)
+format excel:solar.xlsx:data Dashboard!A1:B1 bold=1
+format excel:solar.xlsx:data Dashboard!B2:B13 numberFormat=#,##0
+chart excel:solar.xlsx:data line Dashboard!A1:B13 Dashboard!D1 Monthly output
+chart excel:solar.xlsx:data column Summary!A1:B12 Dashboard!D18 Total by site
+pivot excel:solar.xlsx:data data!A1:H258424 name kWh Dashboard!M1
+write word:solar-memo.docx:body p1 Bearspaw Water Treatment Plant dominates the estate, producing 3,082,638 kWh over the period - 31% of the 9,835,518 kWh total, and more than the bottom eight sites combined.
+write word:solar-memo.docx:body p2 Whitehorn Multi-Service Centre (2,558,803 kWh) and Glenmore Water Treatment Plant (1,551,178 kWh) follow. The three together account for 73% of all generation.
+write word:solar-memo.docx:body p3 Output swings hard with the season. July is the peak month at 1,444,872 kWh; December is the trough at 93,541 kWh, a factor of fifteen. April through August carry roughly two thirds of annual output.
+write word:solar-memo.docx:body p4 For the facilities team: the winter trough is steeper than irradiance alone explains, which points at snow cover on the arrays. Clearing after heavy snowfall is likely the cheapest marginal kWh available.
+write word:solar-memo.docx:body p5 Reading counts differ by site (22,533 to 31,590), so the fleet was commissioned in stages and per-site totals are not like-for-like. Compare mean hourly output rather than totals when ranking performance.
+write word:solar-memo.docx:body p6 All figures are live formulas over the 258,423-row data sheet and will recalculate if the data is refreshed.

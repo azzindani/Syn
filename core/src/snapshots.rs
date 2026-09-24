@@ -92,7 +92,7 @@ mod tests {
     use super::*;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("harness-test-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("snap-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -127,7 +127,7 @@ mod cover_tests {
     use super::*;
 
     fn tmpdir2(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("harness-cover-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("snap-cover-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

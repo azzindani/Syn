@@ -9,3 +9,31 @@ __pycache__/
 bin/
 obj/
 !core/src/bin/
+
+# Deployment config: real keys live here, template is .env.example
+.env
+.env.*
+!.env.example
+
+# Live Office testbed: generated documents, run logs, journals, exports.
+# Everything a real Windows+Office run touches stays here and stays local.
+testbed/*
+!testbed/README.md
+
+# Rust build output (core has its own; the widget crate now builds too)
+target/
+
+# Saved conversations: the user's, not the project's. `.agent` is the
+# default; `.syn` is what an AGENT_HOME set to the product's own name
+# gives, and this machine has run under both.
+.agent/
+.syn/
+
+# Playwright: installed browsers and node_modules are machine-local
+tests/ui/node_modules/
+tests/ui/.console.json
+tests/ui/.console-url.txt
+
+# The capability fixture: 52MB of City of Calgary open data, not ours to
+# vendor. tests/capability/setup.ps1 names the path it expects.
+samples/

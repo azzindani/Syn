@@ -1,4 +1,4 @@
-"""Rig security: default-deny policy, workspace fence, untrusted-content fencing. Stdlib only."""
+"""Security: default-deny policy, workspace fence, untrusted-content fencing. Stdlib only."""
 import json
 import os
 import re

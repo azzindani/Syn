@@ -1,124 +1,1565 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Syn — one brain, many hands</title>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syn</title>
 <style>
-:root{--bg:#141311;--panel:#1e1c19;--line:#35322c;--txt:#ece7dd;--mut:#a49d90;--acc:#e0a63c;--ok:#7fb069;--err:#d1604f}
-body{font:13px/1.45 system-ui;background:var(--bg);color:var(--txt);margin:0;padding:10px;max-width:560px}
-header{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-select,input,button{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
-button{cursor:pointer}button:hover{border-color:var(--acc)}
-#kill{border-color:var(--err);color:var(--err)}
-#feed{height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0;background:#100f0e}
-.ev{margin:0 0 6px}.ev .t{color:var(--mut);font-size:11px}
-.ev.done{border-left:3px solid var(--ok);padding-left:6px}
-.ev.start{border-left:3px solid var(--acc);padding-left:6px}
-.ev.err{border-left:3px solid var(--err);padding-left:6px}
-.ev.chat{border-left:3px solid #6f9fd8;padding-left:6px;white-space:pre-wrap}
-#box{width:100%;box-sizing:border-box}
-#budgetbar{height:4px;background:var(--line);border-radius:2px;margin-top:6px}
-#budgetfill{height:100%;width:0;background:var(--acc);border-radius:2px}
-.row{display:flex;gap:6px;margin-top:6px}
-.row input{flex:1}
-small{color:var(--mut)}
+/* Tokens lifted from t3code's apps/web/src/index.css, not invented: a zinc
+   neutral scale with one blue primary. See docs/DIGEST-05-t3code-ui.md.
+   The names are theirs too, so everything below reads as semantics rather
+   than colours. */
+/* ---------------- tokens, in three layers ----------------
+   t3code's system, not a palette. See docs/DIGEST-08 section 8.
+
+   1. `--raw-*` is the theme: the colour someone picked.
+   2. `--foreground`, `--border`, ... are DERIVED from the raw layer by
+      one pair of numbers. Below 100 they fade toward the background;
+      above 100 they are pushed toward black in light mode and white in
+      dark. Borders get a quarter of the push so they firm up instead of
+      turning into hard lines.
+   3. Everything downstream uses the derived names and knows nothing
+      about any of this.
+
+   One slider drives contrast across the whole app and no component is
+   aware of it. `setContrast(140)` in the console, or the control in the
+   status menu. Mixing is in oklab for text (perceptually even) and srgb
+   for borders, which is what t3code does and for the same reason. */
+:root{
+  color-scheme:light;
+
+  /* --- geometry, named so it cannot quietly drift apart --- */
+  --radius:0.625rem;              /* 10px, the app-wide corner */
+  --control-radius:0.5rem;        /* 8px, buttons and inputs */
+  --composer-radius:22px;         /* their composer card */
+  --topbar:52px;
+  --sidebar-w:16rem;
+  --row-h:26px;                   /* one tool row */
+  --gutter:4.5rem;                /* the minimap strip lives here */
+  --content-w:48rem;
+
+  /* --- the contrast dial --- */
+  --contrast-base:100%;
+  --contrast-boost:0%;
+  --contrast-border-boost:0%;
+  --contrast-target:black;
+
+  /* --- layer 1: the theme --- */
+  --raw-background:oklch(99.2% 0 0);
+  --raw-foreground:#27272a;
+  --raw-muted-foreground:#71717a;
+  --raw-border:#e4e4e7;
+  --raw-input:#d4d4d8;
+  --raw-placeholder:#a1a1aa;
+  --card:#fff;
+  --accent:#f4f4f5;
+  --primary:oklch(0.488 0.217 264);
+  --primary-foreground:#fff;
+  --message-surface:var(--accent);
+  --surface-raised:#fff;
+  --sidebar:#fafafa;
+  --sidebar-row-hover:oklch(99.2% 0 0);
+  --sidebar-row-selected:#fff;
+  --error-foreground:oklch(0.505 0.213 27.518);
+  --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 8%, transparent);
+  --warning-foreground:oklch(0.555 0.163 48.998);
+  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 8%, transparent);
+  --info-foreground:oklch(0.52 0.15 250);
+  --info-surface:color-mix(in srgb, oklch(0.62 0.18 250) 8%, transparent);
+  --ok:oklch(0.696 0.17 162.48);
+  --composer-highlight:transparent;
+
+  /* --- layer 2: derived. Nothing below this line names a raw token --- */
+  --background:var(--raw-background);
+  --foreground:color-mix(in oklab,
+    color-mix(in oklab, var(--raw-foreground) var(--contrast-base), var(--raw-background)),
+    var(--contrast-target) var(--contrast-boost));
+  --muted-foreground:color-mix(in oklab,
+    color-mix(in oklab, var(--raw-muted-foreground) var(--contrast-base), var(--raw-background)),
+    var(--contrast-target) var(--contrast-boost));
+  --placeholder:color-mix(in oklab,
+    color-mix(in oklab, var(--raw-placeholder) var(--contrast-base), var(--raw-background)),
+    var(--contrast-target) var(--contrast-boost));
+  --border:color-mix(in srgb,
+    color-mix(in srgb, var(--raw-border) var(--contrast-base), transparent),
+    var(--raw-foreground) var(--contrast-border-boost));
+  --input:color-mix(in srgb,
+    color-mix(in srgb, var(--raw-input) var(--contrast-base), transparent),
+    var(--raw-foreground) var(--contrast-border-boost));
+  --ring:color-mix(in srgb, var(--primary) 55%, transparent);
+}
+@media (prefers-color-scheme:dark){:root{
+  color-scheme:dark;
+  --contrast-target:white;
+  --raw-background:#0a0a0a;
+  --raw-foreground:#f5f5f5;
+  --raw-muted-foreground:#a1a1aa;
+  --raw-border:rgb(255 255 255/6%);
+  --raw-input:rgb(255 255 255/10%);
+  --raw-placeholder:#71717a;
+  --card:color-mix(in srgb, var(--raw-background) 97%, #fff);
+  --accent:rgb(255 255 255/4%);
+  --primary:oklch(0.571 0.21 264);
+  --surface-raised:color-mix(in srgb, var(--raw-background) 94%, #fff);
+  --sidebar:var(--card);
+  --sidebar-row-hover:rgb(255 255 255/3%);
+  --sidebar-row-selected:rgb(255 255 255/6%);
+  --error-foreground:oklch(0.704 0.191 22.216);
+  --warning-foreground:oklch(0.828 0.189 84.429);
+  --info-foreground:oklch(0.72 0.14 250);
+  /* The inset top highlight that makes the composer read as a raised
+     card rather than a hole. Dark mode only: in light it is invisible
+     and in dark it is most of the effect. */
+  --composer-highlight:rgb(255 255 255/7%);
+}}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;display:flex;overflow:hidden;background:var(--background);color:var(--foreground);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+button,input,textarea,select{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:rgb(0 0 0/12%);border-radius:3px}
+@media (prefers-color-scheme:dark){::-webkit-scrollbar-thumb{background:rgb(255 255 255/8%)}}
+
+/* ---------------- sidebar ---------------- */
+#side{width:var(--sidebar-w);flex:none;height:100dvh;display:flex;flex-direction:column;
+  background:var(--sidebar);border-right:1px solid var(--border)}
+#brand{height:var(--topbar);flex:none;display:flex;align-items:center;gap:8px;padding:0 15px;
+  font-weight:600}
+#brand i{width:7px;height:7px;border-radius:50%;background:var(--primary)}
+#new{margin:0 8px 8px;height:32px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;
+  border:1px solid var(--border);border-radius:var(--control-radius);background:var(--card);
+  transition:border-color .12s}
+#new:hover{border-color:var(--input)}
+#chats{flex:1;overflow-y:auto;padding:0 8px}
+.grouplabel{padding:10px 10px 4px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+/* One line, 32px, truncated: the row shape every app in this class uses. A
+   second line of metadata turns a thread list into a feed reader. */
+.chat{position:relative;display:flex;align-items:center;height:32px;padding:0 10px;
+  border-radius:var(--control-radius);cursor:pointer;white-space:nowrap;overflow:hidden;
+  transition:background .1s}
+/* Inactive rows recede to secondary-label/70 and brighten on hover; only the
+   active thread is full-strength. Rendering every row at --foreground is what
+   makes a thread list read as a flat wall of equally loud text. */
+.chat span{overflow:hidden;text-overflow:ellipsis;
+  color:color-mix(in srgb, var(--muted-foreground) 70%, transparent);transition:color .1s}
+.chat:hover{background:var(--sidebar-row-hover)}
+.chat:hover span{color:var(--foreground)}
+.chat.on{background:var(--sidebar-row-selected);box-shadow:0 0 0 1px var(--border)}
+.chat.on span{color:var(--foreground);font-weight:500}
+.chat .del{position:absolute;right:4px;top:4px;width:24px;height:24px;border-radius:6px;
+  display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
+.chat:hover .del{display:grid}
+.chat .del:hover{background:var(--accent);color:var(--error-foreground)}
+#chats{padding-bottom:10px}
+/* Everything that is machinery rather than conversation lives behind one
+   status control. A sidebar with three jobs reads as a debug console; this
+   one has exactly one, which is the threads. */
+#statuswrap{position:relative;flex:none}
+#pop{display:none;position:absolute;right:0;top:32px;z-index:20;width:232px;padding:9px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
+  box-shadow:0 1px 2px rgb(0 0 0/5%),0 16px 32px -12px rgb(0 0 0/35%)}
+#pop.on{display:block}
+#pop h4{margin:0 0 7px;padding:0 3px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
+#pop hr{margin:9px -9px;border:0;border-top:1px solid var(--border)}
+#wire{display:flex;flex-wrap:wrap;gap:4px;padding:0 3px}
+#wire button{height:24px;padding:0 9px;border:1px solid var(--border);border-radius:99px;
+  font-size:12px;color:var(--muted-foreground);white-space:nowrap}
+#wire button:hover{border-color:var(--input);color:var(--foreground)}
+.hint{display:block;padding:8px 3px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
+.popitem{display:flex;align-items:center;width:100%;height:30px;padding:0 8px;
+  border-radius:var(--control-radius);font-size:13px;color:var(--foreground)}
+.popitem:hover{background:var(--accent)}
+.popitem.danger{color:var(--error-foreground)}
+
+/* ---------------- main ---------------- */
+main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
+#top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;
+  border-bottom:1px solid var(--border)}
+#title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hands{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
+  border:1px solid transparent;border-radius:99px;font-size:12px;color:var(--muted-foreground)}
+#hands:hover{border-color:var(--border);color:var(--foreground)}
+#hands i{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}
+#hands.live i{background:var(--ok)}
+#scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+#tl{width:100%;max-width:48rem;margin:0 auto;padding:28px 24px 14px;flex:1;
+  display:flex;flex-direction:column;gap:22px}
+#tl.blank{justify-content:center;padding-bottom:12vh}
+
+.you{align-self:flex-end;max-width:80%;background:var(--message-surface);
+  border-radius:var(--radius);padding:9px 13px;white-space:pre-wrap;word-break:break-word}
+/* Prose from the model. `pre-wrap` is gone: the renderer emits real
+   blocks now, and keeping it collapsed every list and table back into a
+   wall of preformatted text. */
+.bot{word-break:break-word;line-height:1.7}
+.bot > :first-child{margin-top:0}
+.bot > :last-child{margin-bottom:0}
+.bot p{margin:0 0 .85em}
+.bot h2,.bot h3,.bot h4{margin:1.4em 0 .5em;line-height:1.35;font-weight:600}
+.bot h2{font-size:1.15em}
+.bot h3{font-size:1.05em}
+.bot h4{font-size:1em;color:var(--muted-foreground)}
+.bot ul,.bot ol{margin:0 0 .85em;padding-left:1.35em}
+.bot li{margin:.2em 0}
+.bot li::marker{color:var(--muted-foreground)}
+.bot ul ul,.bot ol ol{margin:.2em 0}
+.bot a{color:var(--primary);text-decoration:underline;text-underline-offset:2px}
+.bot blockquote{margin:0 0 .85em;padding:.1em 0 .1em .9em;
+  border-left:2px solid var(--border);color:var(--muted-foreground)}
+.bot hr{margin:1.3em 0;border:0;border-top:1px solid var(--border)}
+/* A model that has just built a table usually answers with one. Showing
+   that as `|---|---|` is the single ugliest thing this page did. */
+.bot table{margin:0 0 .95em;border-collapse:collapse;font-size:13px;
+  display:block;max-width:100%;overflow-x:auto;width:max-content}
+.bot th,.bot td{padding:6px 11px;border:1px solid var(--border);text-align:left;vertical-align:top}
+.bot th{background:var(--accent);font-weight:600;white-space:nowrap}
+.bot tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--accent) 45%,transparent)}
+.bot td code{white-space:nowrap}
+.bot code{padding:1px 5px;border-radius:5px;background:var(--accent);
+  font:12.5px ui-monospace,SFMono-Regular,Consolas,monospace}
+.bot pre{margin:10px 0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--accent);overflow-x:auto;white-space:pre;
+  font:12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+.bot strong{font-weight:600}
+
+/* Tool calls: a thin list, never a stack of bubbles. A dozen of them must
+   still read as one quiet paragraph of activity. */
+/* The calls of one turn, grouped. Loose rows floating in the column read
+   as a debug log; a rail and a little inset say "this is the working,
+   the answer is below it" without shouting. */
+.acts{display:flex;flex-direction:column;gap:1px;margin:2px 0;padding:2px 0 2px 11px;
+  border-left:2px solid var(--border)}
+.act{display:flex;align-items:center;gap:7px;width:100%;height:26px;padding:0 6px;
+  border-radius:6px;font-size:13px;color:var(--muted-foreground);text-align:left;
+  transition:background .1s}
+.act:hover{background:var(--accent);color:var(--foreground)}
+.act .tw{flex:none;width:9px;font-size:9px;transition:transform .12s}
+.act.open .tw{transform:rotate(90deg)}
+/* The sentence is the row. It truncates rather than wrapping, because a
+   two-line tool row turns a list of twelve calls back into a wall. */
+.act .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--foreground);font-weight:500}
+.act .bad{flex:none;font-size:11px;padding:0 5px;border-radius:4px;text-transform:lowercase}
+/* Three registers, not two. A refusal is the application saying no and the
+   model can try again; a stop is the run being over. Colouring them alike
+   is the conflation docs/DIGEST-08 §3 is about. */
+.act[data-status="refused"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
+.act[data-status="failed"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
+.act[data-status="stopped"] .bad{color:var(--error-foreground);background:var(--error-surface)}
+.act[data-status="running"] .nm{color:var(--muted-foreground)}
+.act[data-status="running"] .tw{animation:pulse 1.4s steps(4) infinite}
+@keyframes pulse{0%,40%{opacity:1}50%,90%{opacity:.4}100%{opacity:1}}
+/* What the whole run did, in one sentence, once it is over. */
+.did{align-self:flex-start;margin-top:2px;font-size:12px;color:var(--muted-foreground)}
+.body{margin:0 0 6px 16px;padding:6px 10px;border-left:2px solid var(--border);
+  font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted-foreground);
+  white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
+
+.note{align-self:center;font-size:12px;color:var(--muted-foreground)}
+.fail{font-size:13px;color:var(--error-foreground);background:var(--error-surface);
+  border-radius:var(--radius);padding:10px 13px}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  margin:0 auto;max-width:28rem;text-align:center;text-wrap:balance}
+/* Their EmptyMedia "icon" variant: a small bordered card holding a glyph,
+   which is what stops an empty screen reading as a loading failure. */
+.empty .badge{display:grid;place-items:center;width:36px;height:36px;margin-bottom:24px;
+  border:1px solid var(--border);border-radius:var(--control-radius);background:var(--card);
+  box-shadow:0 1px 2px rgb(0 0 0/4%)}
+.empty h2{margin:0 0 8px;font-size:20px;font-weight:600}
+.empty p{margin:0;color:var(--muted-foreground)}
+
+/* ---------------- composer ---------------- */
+#dock{flex:none;padding:0 24px 16px}
+#comp{max-width:48rem;margin:0 auto;background:var(--card);border:1px solid var(--border);
+  border-radius:16px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
+  transition:border-color .12s}
+#comp:focus-within{border-color:var(--input)}
+/* The approval attaches to the composer, where attention already is, and so
+   cannot scroll away the way a message can. */
+#ask{display:none;padding:11px 16px 12px;border-bottom:1px solid var(--border);
+  background:var(--warning-surface);border-radius:17px 17px 0 0}
+#ask.on{display:block}
+#ask{border-radius:15px 15px 0 0}
+#ask .hd{margin-bottom:6px;font-size:11px;font-weight:600;color:var(--warning-foreground)}
+/* Focusable and scrollable: a long command has to be readable before it
+   is approved, and a keyboard user cannot scroll a box they cannot
+   reach. `whitespace:pre` so nothing is silently re-wrapped into a
+   different command than the one that will run. */
+#ask .cmd{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;
+  word-break:normal;max-height:5rem;overflow:auto;scrollbar-width:thin}
+#ask .cmd:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+#ask .wy{margin-top:6px;font-size:12px;color:var(--muted-foreground)}
+#ask .btns{display:flex;gap:8px;margin-top:10px}
+.btn{height:32px;padding:0 12px;border:1px solid var(--border);border-radius:var(--control-radius);
+  background:var(--card);font-size:13px;font-weight:500;transition:.12s}
+.btn:hover{border-color:var(--input)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground);
+  box-shadow:inset 0 1px rgb(255 255 255/16%)}
+.btn.primary:hover{filter:brightness(1.08)}
+#no:hover{color:var(--error-foreground);border-color:var(--error-foreground)}
+#box{width:100%;padding:11px 24px 1px;border:0;outline:0;resize:none;background:none;
+  min-height:24px;max-height:40vh;line-height:1.55}
+#box::placeholder{color:var(--muted-foreground)}
+#bar{display:flex;align-items:center;gap:8px;padding:0 16px 9px 21px}
+#task{height:26px;max-width:16rem;padding:0 6px;border:1px solid transparent;
+  border-radius:var(--control-radius);background:none;font-size:12px;color:var(--muted-foreground)}
+#task:hover{border-color:var(--border)}
+#send{margin-left:auto;display:grid;place-items:center;width:28px;height:28px;
+  border-radius:var(--control-radius);background:var(--primary);color:var(--primary-foreground);
+  font-size:15px;box-shadow:inset 0 1px rgb(255 255 255/16%);transition:.12s}
+#send:hover:not(:disabled){filter:brightness(1.08)}
+#send:disabled{opacity:.4;box-shadow:none}
+#hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
+  font-size:11px;color:var(--muted-foreground)}
+body.blank-chat #hint,body.busy #hint{display:block}
+/* A run in progress is drawn as the same activity rows a finished one
+   leaves behind, so watching it happen and reading it afterwards look
+   like the same thing. The pulse marks the step being worked on now. */
+.live .act .nm{color:var(--foreground)}
+.live-head{align-self:center;font-size:12px;color:var(--muted-foreground);
+  display:flex;align-items:center;gap:7px;margin:4px 0}
+.live-head .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);
+  animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+.spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
+  border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+@keyframes sp{to{transform:rotate(360deg)}}
+/* Offcanvas, not display:none, so it slides rather than blinking out. */
+#side{transition:margin-left .16s ease}
+body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
+#toggle{flex:none;display:grid;place-items:center;width:28px;height:28px;margin-left:-6px;
+  border-radius:var(--control-radius);color:var(--muted-foreground)}
+#toggle:hover{background:var(--accent);color:var(--foreground)}
+@media(max-width:780px){:root{--sidebar-w:15rem}
+  #side{position:fixed;z-index:9;margin-left:calc(var(--sidebar-w) * -1)}
+  body:not(.hidden-side) #side{margin-left:0}
+  #tl,#comp,#hint{max-width:none}#dock{padding:0 14px 14px}}
+
+/* ---------------- the timeline minimap ----------------
+   docs/DIGEST-08 section 5. One tick per user turn in the left gutter,
+   invisible until the pointer is near, tapering by distance from the
+   cursor, with a preview card and full keyboard navigation.
+
+   A three-hundred-step run is unreadable by scrolling. This is the
+   affordance that makes it navigable and it costs one absolutely
+   positioned strip. Gated on a fine pointer and on there actually being
+   a gutter: with no room outside the centred column it goes inert
+   rather than overlaying the text. */
+#map{position:absolute;inset-block:0;left:0;width:var(--gutter);z-index:4;
+  opacity:0;transition:opacity .15s;pointer-events:none}
+#map.ready{pointer-events:auto}
+#map:hover,#map:focus-within{opacity:1}
+@media (pointer:coarse){#map{display:none}}
+/* The strip spans the scroll area, and each tick sits at the fraction of
+   the timeline its turn actually occupies. Evenly spacing them would be a
+   table of contents, not a map: the ticks have to line up with the thing
+   they point at or following one is a surprise. */
+#mapstrip{position:absolute;inset-block:14px;left:14px;width:34px;background:none}
+#mapstrip:focus-visible{outline:2px solid var(--ring);outline-offset:3px;border-radius:6px}
+.tick{position:absolute;left:0;height:2px;width:8px;border-radius:99px;
+  background:var(--muted-foreground);opacity:.35;transform:translateY(-50%);
+  transition:width .15s,opacity .15s}
+.tick[data-near="0"]{width:24px;opacity:.85}
+.tick[data-near="1"]{width:16px;opacity:.6}
+.tick[data-near="2"]{width:10px;opacity:.45}
+.tick.here{background:var(--foreground);opacity:.9}
+#mappeek{position:absolute;left:44px;width:min(19rem, calc(var(--peek-room, 19rem)));padding:10px 12px;border-radius:12px;
+  background:var(--surface-raised);border:1px solid var(--border);
+  box-shadow:0 1px 2px rgb(0 0 0/5%),0 16px 32px -14px rgb(0 0 0/40%);
+  font-size:12.5px;line-height:1.5;pointer-events:none;display:none}
+#mappeek.on{display:block}
+#mappeek .n{display:block;margin-bottom:3px;font-size:10.5px;font-weight:600;
+  letter-spacing:.03em;text-transform:uppercase;color:var(--muted-foreground)}
+#mappeek .t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+  overflow:hidden;color:var(--foreground)}
+
+/* ---------------- the banner stack ----------------
+   docs/DIGEST-08 section 6. Everything the run needs to say at once,
+   in priority order, with only the front one shown.
+
+   "Activity stays attached. Urgency and severity only order the notices
+   behind it." What is happening right now outranks what went wrong,
+   because the thing that went wrong is usually why it is happening. */
+#banners{display:flex;flex-direction:column;gap:6px;padding:9px 14px 0}
+#banners:empty{display:none}
+.bn{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:12px;
+  border:1px solid var(--border);background:var(--card);font-size:12.5px;line-height:1.5}
+.bn[data-variant="activity"]{background:var(--accent);border-color:transparent}
+.bn[data-variant="error"]{background:var(--error-surface);border-color:transparent;
+  color:var(--error-foreground)}
+.bn[data-variant="warning"]{background:var(--warning-surface);border-color:transparent;
+  color:var(--warning-foreground)}
+.bn[data-variant="info"]{background:var(--info-surface);border-color:transparent}
+.bn .ic{flex:none;margin-top:1px;width:14px;display:grid;place-items:center}
+.bn .bd{flex:1;min-width:0}
+.bn .ti{font-weight:500}
+.bn .ds{color:var(--muted-foreground)}
+.bn .xx{flex:none;width:20px;height:20px;border-radius:6px;color:var(--muted-foreground);
+  display:grid;place-items:center;font-size:14px;line-height:1}
+.bn .xx:hover{background:var(--accent);color:var(--foreground)}
+#peek{align-self:flex-start;height:22px;padding:0 9px;border-radius:99px;
+  border:1px solid var(--border);font-size:11.5px;color:var(--muted-foreground)}
+#peek:hover{border-color:var(--input);color:var(--foreground)}
+
+/* ---------------- a long pasted message folds away ----------------
+   docs/DIGEST-08 section 9. A pasted log must not push the conversation
+   off the screen. Mask rather than a hard cut, so it reads as more
+   text rather than as a bug. */
+.you.tall{max-height:11rem;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 70%,transparent);
+  mask-image:linear-gradient(#000 70%,transparent)}
+.you.tall.open{max-height:none;-webkit-mask-image:none;mask-image:none}
+.morebtn{align-self:flex-end;margin-top:-14px;height:24px;padding:0 10px;border-radius:99px;
+  border:1px solid var(--border);background:var(--card);font-size:11.5px;
+  color:var(--muted-foreground)}
+.morebtn:hover{border-color:var(--input);color:var(--foreground)}
+
+/* ---------------- the seam where history was summarised ----------------
+   The conversation visibly has a join, rather than the early part
+   silently disappearing. */
+.seam{display:flex;align-items:center;gap:12px;margin:2px 0;
+  font-size:11.5px;color:var(--muted-foreground)}
+.seam::before,.seam::after{content:"";flex:1;height:1px;background:var(--border)}
+
+/* ---------------- the budget meter ----------------
+   docs/DIGEST-08 section 7. It says what will happen, not just where
+   you are, and its slot is reserved while the number loads so the
+   controls beside it do not jump. */
+#meter{display:flex;align-items:center;gap:7px;min-height:18px;font-size:11px;
+  color:var(--muted-foreground)}
+#meter .track{width:56px;height:3px;border-radius:99px;background:var(--border);overflow:hidden}
+#meter .fill{height:100%;width:0;border-radius:99px;background:var(--muted-foreground);
+  transition:width .3s}
+#meter[data-near="1"] .fill{background:var(--warning-foreground)}
+#meter[data-near="1"]{color:var(--warning-foreground)}
+/* The slot is reserved by width as well as by visibility: hiding an
+   empty span still collapses it, and the send button beside it jumps
+   when the number finally lands. `ch` so it holds for any plausible
+   count without hard-coding pixels. */
+#meter .nums{min-width:14ch;text-align:right;font-variant-numeric:tabular-nums}
+#meter.holding{visibility:hidden}
+
+/* The composer as a raised card: t3code's 22px corner, a hairline
+   outline, and in dark mode an inset top highlight. That single card is
+   most of why these apps feel like apps. */
+#comp{border-radius:var(--composer-radius);background:var(--surface-raised);
+  box-shadow:0 1px 2px rgb(0 0 0/5%),0 18px 36px -20px rgb(0 0 0/35%),
+    inset 0 1px 0 var(--composer-highlight)}
+#comp:focus-within{border-color:var(--input)}
+#ask{border-radius:21px 21px 0 0}
+
+/* A message typed while the agent is still working: queued, visibly, in
+   the place it will appear. Not a disabled input. */
+.queued{align-self:flex-end;max-width:80%;padding:9px 13px;border-radius:var(--radius);
+  border:1px dashed var(--border);color:var(--muted-foreground);white-space:pre-wrap}
+.queued .qh{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px}
+
+#scroll{position:relative}
 </style></head>
+
 <body>
-<header>
-  <b>Syn</b>
-  <select id="sess"><option value="cli">cli</option></select>
-  <select id="model">
-    <option value="auto">Auto (router)</option>
-    <option value="openai/gpt-5.6-luna">Luna (skim)</option>
-    <option value="openai/gpt-5.6-terra">Terra (routine)</option>
-    <option value="openai/gpt-5.6-sol">Sol (code)</option>
-    <option value="openai/gpt-6-astra">Astra (vision/deep)</option>
-  </select>
-  <button id="pause">Pause</button>
-  <button id="resume">Resume</button>
-  <button id="kill">Kill</button>
-</header>
-<div id="feed"></div>
-<div class="row"><input id="box" placeholder="chat — Enter sends to model, streams back here"></div>
-<div class="row"><input id="key" type="password" placeholder="OpenRouter key (memory only, never stored)"><input id="cap" type="number" value="40" style="max-width:90px" title="session cost-rank budget"></div>
-<div id="budgetbar"><div id="budgetfill"></div></div>
-<small id="spent">spent 0 / cap 40</small>
+<aside id="side">
+  <div id="brand"><i></i>Syn</div>
+  <button id="new">＋&nbsp;New chat</button>
+  <div id="chats"></div>
+</aside>
+
+<main>
+  <div id="top">
+    <button id="toggle" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+    </button>
+    <div id="title">New chat</div>
+    <span style="flex:1"></span>
+    <div id="statuswrap">
+      <button id="hands" aria-haspopup="menu" aria-expanded="false"><i></i><span>no hands</span></button>
+      <div id="pop" role="menu">
+        <h4>Connect a hand</h4>
+        <div id="wire"></div>
+        <span class="hint" id="wirehint">Reading your .env…</span>
+        <hr>
+        <button class="popitem" id="handsbtn">Attached hands</button>
+        <button class="popitem" id="evbtn">Recent events</button>
+        <button class="popitem danger" id="killbtn">Stop everything</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="scroll">
+    <nav id="map" aria-label="Jump to a turn">
+      <div id="mapstrip" tabindex="0" role="listbox" aria-label="Turns in this conversation"></div>
+      <div id="mappeek" aria-hidden="true"><span class="n"></span><span class="t"></span></div>
+    </nav>
+    <div id="tl"></div>
+  </div>
+
+  <div id="dock">
+    <div id="comp">
+      <div id="banners"></div>
+      <div id="ask">
+        <div class="hd">Command approval</div>
+        <div class="cmd" id="askcmd" tabindex="0" aria-label="The command awaiting approval"></div>
+        <div class="wy" id="askwhy"></div>
+        <div class="btns">
+          <button id="ok" class="btn primary">Approve</button>
+          <button id="no" class="btn">Deny</button>
+        </div>
+      </div>
+      <textarea id="box" rows="1" placeholder="Ask Syn to do something with your open apps…"></textarea>
+      <div id="bar">
+        <select id="task" title="Which model to think with"></select>
+        <div id="meter" class="holding" title="Step budget for this turn">
+          <span class="track"><span class="fill"></span></span>
+          <span class="nums"></span>
+        </div>
+        <button id="send" title="Send">↑</button>
+      </div>
+    </div>
+    <div id="hint">Enter sends · Shift+Enter for a new line</div>
+  </div>
+</main>
+
 <script>
 "use strict";
-// Syn widget: chat + live orchestration feed + model picker + budget + kill.
-// Bridge: window.__SYN__ (Tauri invoke harness_op/harness_event) when hosted;
-// otherwise DEMO bus with the exact core event shapes, so the UI is testable
-// in any browser. Streaming parse mirrors core provider::parse_sse_text.
-const $=id=>document.getElementById(id);
-const feed=$("feed"), box=$("box"), sess=$("sess"), model=$("model"), key=$("key"), cap=$("cap");
-let spent=0, paused=false;
-const COST={luna:1,terra:2,sol:3,astra:4};
+// The page holds no logic of its own: it posts a command line to the local
+// server, which types it into a real `cli` process, and renders what the CLI
+// printed. It can only do what the CLI can do.
+const $ = id => document.getElementById(id);
+const tl = $("tl"), box = $("box"), scroll = $("scroll");
+let busy = false, current = null, pending = null;
 
-function ev(cls,title,body){
-  const d=document.createElement("div");d.className="ev "+cls;
-  d.innerHTML="<div class=t></div><div class=b></div>";
-  d.querySelector(".t").textContent=title;
-  d.querySelector(".b").textContent=body||"";
-  feed.appendChild(d);feed.scrollTop=feed.scrollHeight;
+async function cli(line) {
+  const r = await fetch("/cmd", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: line,
+  });
+  if (!r.ok) throw new Error(r.status + " " + (await r.text()));
+  return (await r.json()).out || "";
 }
-// Core event shape: {session, t:"step.start"|"step.done"|"receipt"|"error", handle, detail}
-function onCoreEvent(e){ 
-  const cls=e.t==="step.done"||e.t==="receipt"?"done":e.t==="error"?"err":"start";
-  ev(cls,`[${e.session}] ${e.t} ${e.handle||""}`,e.detail||"");
-}
-const Bus={
-  async op(name,args){
-    if(window.__SYN__&&window.__SYN__.invoke) return window.__SYN__.invoke("harness_op",{name,...args});
-    onCoreEvent({session:sess.value,t:"step.start",handle:args.handle||"",detail:name+" "+JSON.stringify(args)});
-    await new Promise(r=>setTimeout(r,150));
-    const out={session:sess.value,t:"step.done",handle:args.handle||"",detail:"demo-ok (no Tauri bridge; hosted widget runs this live)"};
-    onCoreEvent(out);return out;
-  },
-  onEvent(fn){ if(window.__SYN__&&window.__SYN__.listen) window.__SYN__.listen("syn-event",fn); }
-};
-Bus.onEvent(onCoreEvent);
 
-function routeTask(prompt){
-  if(/look|see|screenshot|pixel|ui gap/i.test(prompt)) return "astra";
-  if(/code|script|function|regex/i.test(prompt)) return "sol";
-  if(/summar|skim|list/i.test(prompt)) return "luna";
-  return "terra";
+// Receipts are line-prefixed; pull out the ones carrying JSON.
+function tagged(out, tag) {
+  return out.split("\n")
+    .filter(l => l.startsWith(tag + " "))
+    .map(l => { try { return JSON.parse(l.slice(tag.length + 1)); } catch { return null; } })
+    .filter(Boolean);
 }
-function spend(rank){
-  spent+=rank;const c=+cap.value||40;
-  $("budgetfill").style.width=Math.min(100,100*spent/c)+"%";
-  $("spent").textContent=`spent ${spent} / cap ${c}${spent>=c?" — BUDGET HIT, auto-paused":""}`;
-  if(spent>=c){paused=true;ev("err","budget","cap reached — queue auto-paused. Raise cap or start a new session.");}
+
+// A turn that recovered on another slot is a success, not an error: showing
+// the 429 it walked past would teach the reader to distrust a good answer.
+function verdict(out) {
+  const lines = out.split("\n");
+  return {
+    answered: lines.some(l => l.startsWith("ANSWER") || l.startsWith("CONFIRM")),
+    retried: (out.match(/^RECEIPT retry model=(\S+)/m) || [])[1],
+    failure: lines.filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"))
+      .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, "")).pop(),
+  };
 }
-async function send(){
-  const prompt=box.value.trim();if(!prompt)return;box.value="";
-  ev("chat","you",prompt);
-  const fam=model.value==="auto"?routeTask(prompt):model.value.split("/")[1].split("-")[2];
-  if(paused){ev("err","queue","paused — Resume first.");return;}
-  const k=key.value.trim();
-  if(!k){ // no key: route through core demo path so orchestration still works
-    await Bus.op("chat",{prompt,model:fam});spend(COST[fam]||2);return;
+
+// Minimal markdown. Escaping runs FIRST and everything after it operates on
+// text that can no longer contain markup, so a model that emits
+// `<img onerror=...>` renders as characters rather than executing. Nothing
+// here creates a link: model output is untrusted, and a clickable URL in it
+// is a phishing surface the reader did not ask for.
+/* ---------------- markdown ----------------
+   Block level first, then inline. The version before this one was five
+   regexes over the whole string: a table came out as literal `|---|---|`
+   on the page, a list came out as bullet characters with no indent, and
+   a heading came out as bold text in the middle of a paragraph.
+
+   A model answering with a table is the normal case here — it has just
+   built one — and rendering that as pipes is the difference between an
+   application and a log viewer.
+
+   Deliberately small: no dependency, and only the subset a model
+   actually emits. Everything is escaped before anything is parsed, so
+   nothing a model writes can put markup on the page. */
+function md(src) {
+  // `>` is deliberately left alone. Escaping it here is what silently
+  // killed blockquotes: by the time the block loop looked for a `>` at the
+  // start of a line, every one of them had already become `&gt;`. With `<`
+  // escaped there is no context left in which a lone `>` can open or close
+  // anything, so as text it is inert.
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  // Fenced code first, so nothing inside it is parsed as anything else.
+  const fences = [];
+  let text = esc(src).replace(/```([a-z0-9+-]*)\n?([\s\S]*?)```/gi, (_, lang, body) => {
+    fences.push({ lang, body: body.replace(/\n$/, "") });
+    return "\u0000F" + (fences.length - 1) + "\u0000";
+  });
+
+  const inline = t =>
+    t
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>')
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+
+  const cells = row => row.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
+  const isRule = row => row.includes("-") && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(row);
+
+  const lines = text.split("\n");
+  const out = [];
+  let para = [];
+  const flush = () => {
+    if (para.length) out.push("<p>" + inline(para.join("\n")) + "</p>");
+    para = [];
+  };
+  const fence = k => {
+    const f = fences[Number(k)];
+    return "<pre" + (f.lang ? ' data-lang="' + f.lang + '"' : "") + ">" + f.body + "</pre>";
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    let m = line.match(/^\u0000F(\d+)\u0000$/);
+    if (m) { flush(); out.push(fence(m[1])); continue; }
+
+    if (!line.trim()) { flush(); continue; }
+
+    // A table: a header row, a rule, then body rows.
+    if (line.includes("|") && isRule(lines[i + 1] ?? "")) {
+      flush();
+      const head = cells(line);
+      const body = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim()) body.push(cells(lines[j++]));
+      i = j - 1;
+      out.push(
+        "<table><thead><tr>" + head.map(c => "<th>" + inline(c) + "</th>").join("") +
+        "</tr></thead><tbody>" +
+        body.map(r => "<tr>" + head.map((_, k) => "<td>" + inline(r[k] ?? "") + "</td>").join("") + "</tr>").join("") +
+        "</tbody></table>",
+      );
+      continue;
+    }
+
+    m = line.match(/^(#{1,6})\s+(.+)$/);
+    if (m) {
+      flush();
+      // `#` and `##` both become h2: h1 belongs to the page, and a model
+      // writing `##` as its top heading is the common case, so that must
+      // be the largest heading inside a message rather than the second.
+      const lvl = Math.min(4, Math.max(2, m[1].length));
+      out.push("<h" + lvl + ">" + inline(m[2]) + "</h" + lvl + ">");
+      continue;
+    }
+
+    if (/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(line)) { flush(); out.push("<hr>"); continue; }
+
+    // Lists, nested by indent so a sub-bullet reads as one.
+    m = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+    if (m) {
+      flush();
+      const ordered = /\d/.test(m[2]);
+      const items = [];
+      let j = i;
+      while (j < lines.length) {
+        const im = lines[j].match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+        if (!im || /\d/.test(im[2]) !== ordered) break;
+        items.push({ depth: Math.min(2, Math.floor(im[1].length / 2)), text: im[3] });
+        j++;
+      }
+      i = j - 1;
+      const tag = ordered ? "ol" : "ul";
+      let html = "<" + tag + ">";
+      let depth = 0;
+      // A sub-list goes *inside* the item above it. A list that puts one
+      // beside the item instead still looks nested on screen, so the item
+      // is left open until something at its own level or shallower arrives.
+      let open = false;
+      const shut = () => { if (open) { html += "</li>"; open = false; } };
+      for (const it of items) {
+        while (it.depth > depth) { html += "<" + tag + ">"; depth++; open = false; }
+        while (it.depth < depth) { shut(); html += "</" + tag + ">"; depth--; open = true; shut(); }
+        shut();
+        html += "<li>" + inline(it.text);
+        open = true;
+      }
+      while (depth > 0) { shut(); html += "</" + tag + ">"; depth--; open = true; shut(); }
+      shut();
+      out.push(html + "</" + tag + ">");
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      flush();
+      out.push("<blockquote>" + inline(line.replace(/^\s*>\s?/, "")) + "</blockquote>");
+      continue;
+    }
+
+    para.push(line);
   }
-  const id=model.value==="auto"?{luna:"openai/gpt-5.6-luna",terra:"openai/gpt-5.6-terra",sol:"openai/gpt-5.6-sol",astra:"openai/gpt-6-astra"}[fam]:model.value;
-  const res=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",
-    headers:{"Content-Type":"application/json","Authorization":"Bearer "+k},
-    body:JSON.stringify({model:id,stream:true,messages:[{role:"user",content:prompt}]})});
-  if(!res.ok){ev("err","model",`HTTP ${res.status}`);return;}
-  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",full="";
-  const div=document.createElement("div");div.className="ev chat";
-  div.innerHTML="<div class=t>model · "+fam+"</div><div class=b></div>";
-  feed.appendChild(div);const b=div.querySelector(".b");
-  for(;;){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
-    const parts=buf.split("\n\n");buf=parts.pop();
-    for(const p of parts)for(const line of p.split("\n")){
-      const t=line.trim();if(!t.startsWith("data:"))continue;
-      const pay=t.slice(5).trim();if(pay==="[DONE]")continue;
-      try{const j=JSON.parse(pay);const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content||"";
-        full+=d;b.textContent=full;feed.scrollTop=feed.scrollHeight;}catch(e){/* skip partial */}
-    }}
-  spend(COST[fam]||2);
+  flush();
+
+  // Any fence that ended up inside a paragraph rather than alone.
+  return out.join("").replace(/\u0000F(\d+)\u0000/g, (_, k) => fence(k));
 }
-box.addEventListener("keydown",e=>{if(e.key==="Enter")send();});
-$("pause").onclick=()=>{paused=true;Bus.op("pause",{session:sess.value});ev("start","queue","paused — files stay open.")};
-$("resume").onclick=()=>{paused=false;Bus.op("resume",{session:sess.value});ev("done","queue","resumed — handles revalidated.")};
-$("kill").onclick=()=>{if(confirm("Latch the kill switch? Dispatch stops now.")){Bus.op("kill",{session:sess.value});ev("err","kill","latched. Fresh session required to re-arm.");}};
-ev("done","syn","widget ready. session=cli · pick a model or Auto · key stays in memory.");
+
+const el = (t, cls, txt) => {
+  const e = document.createElement(t);
+  if (cls) e.className = cls;
+  if (txt != null) e.textContent = txt;
+  return e;
+};
+
+// Terse, the way their timestampFormat.ts writes it: "just now", "5m ago".
+const ago = s => {
+  const d = Math.max(0, Math.floor(Date.now() / 1000) - s);
+  if (d < 60) return "just now";
+  if (d < 3600) return Math.floor(d / 60) + "m ago";
+  if (d < 86400) return Math.floor(d / 3600) + "h ago";
+  return Math.floor(d / 86400) + "d ago";
+};
+
+// Whole LOCAL CALENDAR days, not 24-hour windows. A 24-hour window files a
+// message from 11pm last night under "Today" until 11pm tonight, which is not
+// what the label claims. Rounding keeps 23- and 25-hour DST days whole.
+const dayDiff = (s, now = new Date()) => {
+  const d = new Date(s * 1000);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfThen = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((startOfToday - startOfThen) / 86400000);
+};
+const band = s => {
+  const d = dayDiff(s);
+  return d <= 0 ? "Today" : d === 1 ? "Yesterday" : d < 7 ? "This week" : "Earlier";
+};
+
+/* ---------- what this deployment has ----------
+   The picker and the hand buttons are built from what the CLI reports, not
+   from names written into this page: a model swapped in .env appears here
+   untouched, and a hand nobody wired is not offered as a dead button. */
+async function loadSlots() {
+  const sel = $("task"), out = await cli("slots");
+  const cur = (out.match(/current=(\S+)/) || [])[1];
+  sel.textContent = "";
+  for (const s of tagged(out, "SLOT")) {
+    const o = document.createElement("option");
+    o.value = s.task;
+    // The slot name is what a human picks by; the full id is the tooltip.
+    o.textContent = s.slot + " · " + s.task;
+    o.title = s.model || "";
+    if (s.task === cur) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+async function loadWiring() {
+  const out = await cli("wiring"), wires = tagged(out, "WIRE"), host = $("wire");
+  host.textContent = "";
+  for (const w of wires) {
+    const cmd = w.kind === "cdp" ? `cdp ${w.at} ${w.app}` : `hand ${w.at} ${w.app}`;
+    const b = el("button", null, w.kind === "cdp" ? "Browser" : w.app);
+    b.title = cmd;
+    b.onclick = () => { closePop(); run(cmd); };
+    host.appendChild(b);
+  }
+  $("wirehint").textContent = wires.length
+    ? "Each needs its sidecar running."
+    : "Nothing wired: set AGENT_PIPE_* or AGENT_CDP in .env.";
+}
+
+// Run one command and show what it said, for the buttons above.
+async function run(cmd) {
+  const out = await cli(cmd);
+  tl.appendChild(el("div", "bot", out.trim() || "(no output)"));
+  scroll.scrollTop = scroll.scrollHeight;
+  await hands();
+}
+
+/* ---------------- threads ---------------- */
+async function openChat(id) {
+  await cli("chat open " + id);
+  current = id;
+  if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+  await loadChats();
+  await refresh();
+}
+
+async function loadChats() {
+  const out = await cli("chat list");
+  const cur = (out.match(/current=(\S+)/) || [])[1];
+  if (cur) current = cur;
+  if (current) history.replaceState(null, "", "#" + current);
+  const list = $("chats");
+  list.textContent = "";
+  let lastBand = null;
+  for (const c of tagged(out, "CHAT")) {
+    const b = band(c.updated);
+    if (b !== lastBand) { list.appendChild(el("div", "grouplabel", b)); lastBand = b; }
+    const row = el("div", "chat" + (c.id === current ? " on" : ""));
+    row.title = (c.title || "New chat") + " · " + ago(c.updated);
+    row.appendChild(el("span", null, c.title || "New chat"));
+    const x = el("button", "del", "×");
+    x.title = "Delete";
+    x.onclick = async e => {
+      e.stopPropagation();
+      await cli("chat del " + c.id);
+      await loadChats();
+      if (c.id === current) await refresh();
+    };
+    row.appendChild(x);
+    row.onclick = () => { if (!busy) void openChat(c.id); };
+    list.appendChild(row);
+  }
+}
+
+/* ---------------- timeline ---------------- */
+// One quiet row per tool call.
+//
+// The text is the sentence core built in `labels.rs`. The page never sees
+// a tool name or a JSON blob, and never builds a label itself: a second
+// copy of that table in JavaScript would drift from the tool surface the
+// moment a verb was added, and it would sit outside the Rust tests that
+// stop a new verb reaching a human as raw JSON.
+//
+// `status` is core's too — "done" | "failed" | "refused" | "stopped" |
+// "running". A refusal is not a broken run and the two must not look the
+// same; conflating them is the mistake the capability grader made for
+// four experiments running.
+function activity(label, status, body, app) {
+  const wrap = el("div");
+  const b = el("button", "act");
+  if (status) b.dataset.status = status;
+  if (app) b.dataset.app = app;
+  b.appendChild(el("span", "tw", "▶"));
+  b.appendChild(el("span", "nm", label));
+  if (status && status !== "done" && status !== "running") {
+    b.appendChild(el("span", "bad", status));
+  }
+  const pre = el("div", "body", body || "(no output)");
+  pre.style.display = "none";
+  b.onclick = () => {
+    const open = pre.style.display === "none";
+    pre.style.display = open ? "block" : "none";
+    b.classList.toggle("open", open);
+  };
+  wrap.append(b, pre);
+  return wrap;
+}
+
+function render(msgs, labels) {
+  labels = labels || {};
+  // Repainting from the saved transcript detaches whatever the live view
+  // had appended, so its handles have to go with it or the next step is
+  // written into a node that is no longer on the page.
+  liveClose();
+  tl.textContent = "";
+  turns = [];
+  tl.classList.toggle("blank", !msgs.length);
+  document.body.classList.toggle("blank-chat", !msgs.length);
+  if (!msgs.length) {
+    const e = el("div", "empty");
+    const badge = el("div", "badge");
+    badge.innerHTML =
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 14l2 2 4-4"/></svg>';
+    e.appendChild(badge);
+    e.appendChild(el("h2", null, "What should Syn do?"));
+    e.appendChild(el("p", null,
+      "It drives the apps you already have open — Office, a browser, any window."));
+    tl.appendChild(e);
+    drawMap();
+    return;
+  }
+  const results = {};
+  for (const m of msgs) if (m.role === "tool") results[m.id] = m.text;
+
+  let acts = null;
+  for (const m of msgs) {
+    if (m.role === "system" || m.role === "tool") continue;
+    if (m.role === "calls") {
+      let calls = [];
+      try { calls = JSON.parse(m.text); } catch {}
+      if (!acts) { acts = el("div", "acts"); tl.appendChild(acts); }
+      for (const c of calls) {
+        const fn = c.function || {};
+        const out = results[c.id] || "";
+        // Keyed by call id, so a coalesced call -- two ids, one run --
+        // still gets its own row saying what it asked for.
+        const lb = labels[c.id];
+        acts.appendChild(activity(
+          lb ? lb.text : (fn.name || "tool"),
+          lb ? lb.status : "done",
+          "arguments: " + (fn.arguments || "{}") + "\n\n" + out,
+          lb && lb.app));
+      }
+      continue;
+    }
+    acts = null;
+    if (m.role === "user") {
+      // The summariser's own question, which is a seam in the history
+      // rather than something the human said.
+      if (m.text === "What have we done so far?") {
+        tl.appendChild(el("div", "seam", "earlier turns summarised"));
+        continue;
+      }
+      const you = el("div", "you", m.text);
+      tl.appendChild(you);
+      foldIfLong(you);
+      turns.push({ text: m.text, node: you });
+    } else {
+      const d = el("div", "bot");
+      d.innerHTML = md(m.text);
+      tl.appendChild(d);
+    }
+  }
+  drawMap();
+}
+
+function showAsk(p) {
+  pending = p;
+  $("ask").classList.toggle("on", !!p);
+  if (!p) return;
+  $("askcmd").textContent = p.preview;
+  // The model's stated reason is untrusted text: shown as a quote beside the
+  // command it argues for, never as an instruction.
+  $("askwhy").textContent = p.why ? "reason given: " + p.why : "";
+}
+
+let refresh = async function refresh() {
+  const out = await cli("chat msgs");
+  const cur = (out.match(/chat=(\S+)/) || [])[1];
+  if (cur) current = cur;
+  const msgs = tagged(out, "MSG");
+  // One LABEL per tool call, built by core. Keyed by call id so `render`
+  // can hand each row the sentence that belongs to it.
+  const labels = {};
+  for (const l of tagged(out, "LABEL")) labels[l.id] = l;
+  render(msgs, labels);
+  showAsk(tagged(out, "PENDING")[0] || null);
+  const first = msgs.find(m => m.role === "user");
+  $("title").textContent = first ? first.text.split("\n")[0].slice(0, 80) : "New chat";
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+// The console prints a RECEIPT per operation as it goes. /events hands
+// those over while the turn is still running, so the page can show the run
+// happening instead of a spinner and a guess.
+let tailAt = 0, tailTimer = null;
+
+let tailSrc = null, liveBlock = null, liveActs = null;
+
+// The console prints one line per turn of the loop. Drawn as raw text it
+// is a log; drawn as the activity rows the finished transcript uses, it is
+// the run happening. Same shape either way, so watching and reading back
+// do not look like two different things.
+function liveOpen(label) {
+  liveClose();
+  liveBlock = el("div", "live");
+  const head = el("div", "live-head");
+  head.appendChild(el("span", "dot"));
+  head.appendChild(el("span", null, label));
+  liveBlock.appendChild(head);
+  liveActs = el("div", "acts");
+  liveBlock.appendChild(liveActs);
+  tl.appendChild(liveBlock);
+}
+
+function liveClose() {
+  liveBlock = null;
+  liveActs = null;
+}
+
+function liveRow(node) {
+  if (!liveBlock) liveOpen("working");
+  liveBlock.appendChild(node);
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+function liveStep(line) {
+  // RECEIPT say model=X open=N -- a turn is starting.
+  let m = line.match(/^RECEIPT say model=(\S+)/);
+  if (m) {
+    setBanner("retry", null);
+    setBanner("run", null);
+    setBanner("busy", { variant: "activity", priority: "activity", title: "Working on " + m[1], dismiss: false });
+    return void liveOpen("running on " + m[1]);
+  }
+
+  // RECEIPT step {"label","tool","app","status","detail"} -- one call,
+  // finished. This is the only shape the live view parses. `STEP` and
+  // `REFUSED` beside it are prose for the terminal, and are deliberately
+  // ignored here: scraping them is what broke this view the moment their
+  // wording changed, and a console that breaks when a message is reworded
+  // is a console nobody can safely improve.
+  m = line.match(/^RECEIPT step (\{[\s\S]*\})$/);
+  if (m) {
+    let d = null;
+    try { d = JSON.parse(m[1]); } catch { return; }
+    if (!liveActs) liveOpen("working");
+    liveActs.appendChild(activity(d.label, d.status, d.detail || "(no output)", d.app));
+    scroll.scrollTop = scroll.scrollHeight;
+    return;
+  }
+  // RECEIPT did {"text"} -- what the whole run did, in one sentence.
+  m = line.match(/^RECEIPT did (\{[\s\S]*\})$/);
+  if (m) {
+    let d = null;
+    try { d = JSON.parse(m[1]); } catch { return; }
+    if (d.text) liveRow(el("div", "did", d.text));
+    return;
+  }
+  if (/^(STEP|REFUSED|DID) /.test(line)) return;
+  m = line.match(/^ANSWER ([\s\S]*)$/);
+  if (m) {
+    setBanner("busy", null);
+    const d = el("div", "bot");
+    d.innerHTML = md(m[1]);
+    liveRow(d);
+    return void liveClose();
+  }
+  m = line.match(/^STOPPED (.*)$/);
+  if (m) {
+    setBanner("busy", null);
+    setBanner("run", { variant: "error", priority: "urgent", title: "The run stopped", description: m[1] });
+    liveRow(el("div", "fail", m[1]));
+    return void liveClose();
+  }
+  m = line.match(/^ERROR (.*)$/);
+  if (m) return void liveRow(el("div", "fail", m[1]));
+  // A retry says something about the provider, not about a document, so
+  // it belongs in the banner stack and not as a row in the work log.
+  m = line.match(/^RECEIPT retry model=(\S+)/);
+  if (m) {
+    setBanner("retry", {
+      variant: "warning",
+      priority: "urgent",
+      title: "That model was busy",
+      description: "Retrying with " + m[1] + ".",
+    });
+    return;
+  }
+  // RECEIPT budget {"step","max"} -- what the model is told about its own
+  // budget, told to the human too.
+  m = line.match(/^RECEIPT budget (\{[\s\S]*\})$/);
+  if (m) {
+    let d = null;
+    try { d = JSON.parse(m[1]); } catch { return; }
+    setBudget(d.step, d.max);
+    return;
+  }
+}
+
+// A run that has stopped printing leaves its steps on screen but stops
+// claiming to be in progress.
+function liveState(running) {
+  if (!running) setBanner("busy", null);
+  if (!running && liveBlock) {
+    liveBlock.querySelector(".live-head .dot")?.remove();
+    liveClose();
+  }
+}
+
+// A different run took over. Start it from the top rather than splicing it
+// onto the tail of the last one.
+function liveSource(name) {
+  tailSrc = name;
+  tailAt = 0;
+  setBanner("run", null);
+  if (liveBlock) liveBlock.remove();
+  liveClose();
+}
+
+/* ---------------- the run, pushed ----------------
+   Polling /events every 700ms made a fast step look slow: a read that took
+   40ms could sit invisible for most of a second, and a turn that asked for
+   eight tools at once arrived as one clump instead of eight rows appearing
+   one after another. The server pushes now.
+
+   The poller stays as a fallback and nothing else. EventSource is refused
+   by some corporate proxies and by any future non-browser client, and a
+   console that shows nothing at all in that case is worse than one that is
+   a little behind. `sseOK` decides which is running, so the two can never
+   both be appending to the same timeline. */
+let es = null, sseOK = false;
+
+function streamOpen() {
+  if (es || typeof EventSource !== "function") return false;
+  try { es = new EventSource("/stream?since=" + tailAt); } catch { return false; }
+
+  es.onopen = () => {
+    sseOK = true;
+    // Belt and braces: the fallback must not keep appending underneath a
+    // stream that has just come up.
+    clearInterval(tailTimer);
+    tailTimer = null;
+  };
+  es.onmessage = (e) => {
+    let d = null;
+    try { d = JSON.parse(e.data); } catch { return; }
+    if (typeof d.line === "string") liveStep(d.line);
+  };
+  es.addEventListener("source", (e) => {
+    let d = null;
+    try { d = JSON.parse(e.data); } catch { return; }
+    // Only when it is genuinely a different run. The stream names its
+    // source on connect as well as on a change, and wiping on the
+    // connect threw away what the first poll had already drawn -- then
+    // the replay drew it again underneath. Every step twice.
+    if (d.source === tailSrc) {
+      if (typeof d.since === "number") tailAt = d.since;
+      return;
+    }
+    liveSource(d.source);
+  });
+  es.addEventListener("state", (e) => {
+    let d = null;
+    try { d = JSON.parse(e.data); } catch { return; }
+    liveState(!!d.running);
+  });
+  es.onerror = () => {
+    // EventSource reconnects by itself, and would replay from `since=0`
+    // on a URL we cannot change after the fact. One failure is enough:
+    // close it for good and let the poller carry the page.
+    streamClose();
+    if (!tailTimer) tailTimer = setInterval(tail, 1000);
+  };
+  return true;
+}
+
+function streamClose() {
+  if (es) es.close();
+  es = null;
+  sseOK = false;
+}
+
+async function tail() {
+  // Whichever transport is live owns the timeline. Two of them writing to
+  // it means every row twice.
+  if (sseOK) return;
+  try {
+    const r = await fetch("/events?since=" + tailAt);
+    if (!r.ok) return;
+    const d = await r.json();
+    // The first look at a log is a catch-up, not a replay. The saved
+    // transcript already has everything that finished, and `refresh()`
+    // has just drawn it; redrawing the same steps out of the progress
+    // log put the whole run on screen twice, which is exactly what a
+    // page reopened after a run looked like. Adopt the cursor, draw
+    // nothing, and show what happens from here.
+    if (tailSrc === null) {
+      tailSrc = d.source;
+      tailAt = d.n;
+      liveState(d.running);
+      return;
+    }
+    if (d.source !== tailSrc) {
+      // A different run took over. That one IS worth seeing from its
+      // beginning, because no transcript of it has been drawn.
+      liveSource(d.source);
+      if (!d.source) return;
+      // Awaited, not fired and forgotten: `void tail()` resolved the
+      // outer call before the inner one had set the cursor, so the
+      // bootstrap opened the stream at since=0 while the first poll was
+      // still drawing, and the stream replayed what the poll had drawn.
+      return await tail();
+    }
+    tailAt = d.n;
+    for (const line of d.lines || []) liveStep(line);
+    liveState(d.running);
+  } catch { /* a dropped poll is not worth a message; the next one retries */ }
+}
+
+function thinking(on) {
+  busy = on;
+  document.body.classList.toggle("busy", on);
+  $("send").disabled = on;
+  $("hint").innerHTML = on ? '<span class="spin"></span> working…'
+    : "Enter sends · Shift+Enter for a new line";
+  // Nothing to pace when the stream is up: the server pushes, and the
+  // pace is whatever the run is doing.
+  if (sseOK) return;
+  clearInterval(tailTimer);
+  tailTimer = setInterval(tail, on ? 700 : 2000);
+  void tail();
+}
+
+async function send() {
+  const v = box.value.trim();
+  if (!v || busy) return;
+  box.value = ""; box.style.height = "auto";
+  // Paint the turn at once: a chat that goes blank while the model thinks
+  // feels broken even when it is working.
+  tl.appendChild(el("div", "you", v));
+  scroll.scrollTop = scroll.scrollHeight;
+  thinking(true);
+  try {
+    const r = verdict(await cli("say " + v.replace(/\n/g, " ")));
+    await refresh();
+    if (r.answered && r.retried) {
+      tl.appendChild(el("div", "note", "that model was busy — answered with " + r.retried));
+    } else if (!r.answered && r.failure) {
+      tl.appendChild(el("div", "fail", r.failure));
+    }
+    await loadChats();
+  } catch (e) {
+    tl.appendChild(el("div", "fail", "Console unreachable: " + e.message));
+  } finally {
+    thinking(false);
+    // A turn can attach or lose a hand, so the pill is only honest if it is
+    // re-read afterwards rather than left as it was at boot.
+    await hands();
+    scroll.scrollTop = scroll.scrollHeight;
+    box.focus();
+  }
+}
+
+async function decide(yes) {
+  if (!pending || busy) return;
+  showAsk(null);
+  thinking(true);
+  try { await cli(yes ? "approve" : "deny not now"); await refresh(); }
+  finally { thinking(false); }
+}
+
+async function hands() {
+  try {
+    const n = (await cli("hands")).split("\n").filter(l => l.startsWith("HAND ")).length;
+    const p = $("hands");
+    p.classList.toggle("live", n > 0);
+    p.lastChild.textContent = n ? n + (n === 1 ? " hand" : " hands") : "no hands";
+  } catch {}
+}
+
+box.addEventListener("input", () => {
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + "px";
+});
+box.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$("send").onclick = send;
+$("ok").onclick = () => decide(true);
+$("no").onclick = () => decide(false);
+$("task").onchange = e => cli("task " + e.target.value);
+$("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); box.focus(); };
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (id && id !== current && !busy) void openChat(id);
+});
+const pop = $("pop");
+function closePop() { pop.classList.remove("on"); $("hands").setAttribute("aria-expanded", "false"); }
+$("hands").onclick = e => {
+  e.stopPropagation();
+  const open = !pop.classList.contains("on");
+  pop.classList.toggle("on", open);
+  $("hands").setAttribute("aria-expanded", String(open));
+};
+document.addEventListener("click", e => { if (!pop.contains(e.target)) closePop(); });
+window.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+$("killbtn").onclick = () => { closePop(); run("kill"); };
+$("handsbtn").onclick = () => { closePop(); run("hands"); };
+$("evbtn").onclick = () => { closePop(); run("events"); };
+// Collapsed state is a per-viewer convenience, so localStorage is the right
+// home for it — and it must survive the accessor throwing in a private window.
+function setSide(hidden) {
+  document.body.classList.toggle("hidden-side", hidden);
+  try { localStorage.setItem("syn.side", hidden ? "0" : "1"); } catch {}
+}
+$("toggle").onclick = () => setSide(!document.body.classList.contains("hidden-side"));
+try {
+  if (localStorage.getItem("syn.side") === "0") document.body.classList.add("hidden-side");
+} catch {}
+if (window.innerWidth <= 780) document.body.classList.add("hidden-side");
+window.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    setSide(!document.body.classList.contains("hidden-side"));
+  }
+});
+
+(async () => {
+  try {
+    // Read the requested thread before loadChats() rewrites the hash to
+    // whatever the CLI considers current.
+    const want = location.hash.slice(1);
+    await loadSlots(); await loadWiring(); await loadChats();
+    if (want && want !== current) await openChat(want); else await refresh();
+    await hands();
+  }
+  catch (e) { tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message)); }
+  box.focus();
+  // Watch from the moment the page opens: whatever run is printing now is
+  // the one worth showing, whoever started it. Last, because it touches
+  // bindings declared further down and `let` has no hoisting to lean on.
+  //
+  // Both are started. The stream takes over on its `open` and stops the
+  // poller; if it never opens, the poller is already carrying the page and
+  // nobody sees a gap.
+  wireMap();
+  tailTimer = setInterval(tail, 2000);
+  // Await the first poll so `tailSrc` and `tailAt` are set before the
+  // stream connects: otherwise the stream's opening `source` frame names
+  // a run the page does not think it is following, and it starts over.
+  await tail();
+  streamOpen();
+})();
+
+/* ---------------- the contrast dial ----------------
+   docs/DIGEST-08 section 8. One function, three custom properties, and
+   every colour in the app moves. No component knows it exists. */
+function setContrast(v) {
+  const n = Math.max(0, Math.min(200, Number(v) || 100));
+  const r = document.documentElement.style;
+  r.setProperty("--contrast-base", Math.min(n, 100) + "%");
+  r.setProperty("--contrast-boost", Math.max(n - 100, 0) + "%");
+  r.setProperty("--contrast-border-boost", Math.max(n - 100, 0) / 4 + "%");
+  try { localStorage.setItem("contrast", String(n)); } catch { /* private window */ }
+  return n;
+}
+try { const c = localStorage.getItem("contrast"); if (c) setContrast(c); } catch { /* fine */ }
+
+/* ---------------- the banner stack ----------------
+   Activity outranks urgency outranks notice, only the front one shows,
+   the rest collapse behind a count. docs/DIGEST-08 section 6. */
+const banners = new Map();
+let bannersOpen = false;
+
+function bannerRank(b) {
+  if (b.priority === "activity") return 0;
+  if (b.priority === "urgent" || b.variant === "error" || b.variant === "warning") return 1;
+  return 2;
+}
+
+function setBanner(id, b) {
+  if (!b) banners.delete(id); else banners.set(id, { id, ...b });
+  drawBanners();
+}
+
+function drawBanners() {
+  const host = $("banners");
+  if (!host) return;
+  host.textContent = "";
+  const all = [...banners.values()].sort((a, b) => bannerRank(a) - bannerRank(b));
+  if (!all.length) { bannersOpen = false; return; }
+  const shown = bannersOpen ? all : all.slice(0, 1);
+  for (const b of shown) host.appendChild(bannerRow(b));
+  if (all.length > 1) {
+    const more = el("button", null, bannersOpen ? "Show less" : `${all.length - 1} more`);
+    more.id = "peek";
+    more.type = "button";
+    more.setAttribute("aria-expanded", String(bannersOpen));
+    more.onclick = () => { bannersOpen = !bannersOpen; drawBanners(); };
+    host.appendChild(more);
+  }
+}
+
+function bannerRow(b) {
+  const row = el("div", "bn");
+  row.dataset.variant = b.variant || "info";
+  row.dataset.bannerId = b.id;
+  row.setAttribute("role", b.variant === "error" ? "alert" : "status");
+  const ic = el("span", "ic");
+  if (b.variant === "activity") ic.appendChild(el("span", "spin"));
+  else ic.textContent = b.variant === "error" ? "!" : b.variant === "warning" ? "!" : "i";
+  row.appendChild(ic);
+  const bd = el("div", "bd");
+  bd.appendChild(el("div", "ti", b.title));
+  if (b.description) bd.appendChild(el("div", "ds", b.description));
+  row.appendChild(bd);
+  if (b.dismiss !== false) {
+    const x = el("button", "xx", "×");
+    x.type = "button";
+    x.setAttribute("aria-label", "Dismiss");
+    x.onclick = () => setBanner(b.id, null);
+    row.appendChild(x);
+  }
+  return row;
+}
+
+/* ---------------- the step budget ----------------
+   Says what will happen, not only where you are. The slot is held while
+   the number is unknown so the send button beside it does not jump.
+   docs/DIGEST-08 section 7. */
+function setBudget(step, max) {
+  const m = $("meter");
+  if (!m) return;
+  if (!max) { m.classList.add("holding"); return; }
+  m.classList.remove("holding");
+  const left = Math.max(0, max - step);
+  const frac = Math.min(1, step / max);
+  m.querySelector(".fill").style.width = (frac * 100).toFixed(1) + "%";
+  m.querySelector(".nums").textContent = `${left} steps left`;
+  m.dataset.near = frac > 0.8 ? "1" : "0";
+  m.title = left === 0
+    ? "The budget is spent; the run will stop after a closing summary."
+    : `Step ${step} of ${max}. At ${max} the run stops and summarises what it did.`;
+}
+
+/* ---------------- the minimap ----------------
+   One tick per user turn, in the gutter, tapering by distance from the
+   pointer, with a preview and arrow-key navigation. Inert when the
+   window is too narrow for a gutter, rather than overlaying the text.
+   docs/DIGEST-08 section 5. */
+let turns = [];
+let mapAt = null;
+
+function drawMap() {
+  const strip = $("mapstrip");
+  const map = $("map");
+  if (!strip || !map) return;
+  strip.textContent = "";
+  // Two is the floor: a single tick says nothing a scrollbar does not.
+  const room = scroll.clientWidth - 768 > 110;
+  map.classList.toggle("ready", turns.length >= 2 && room);
+  if (turns.length < 2 || !room) return;
+  const span = Math.max(1, tl.scrollHeight);
+  turns.forEach((t, i) => {
+    const b = el("span", "tick");
+    b.dataset.i = String(i);
+    b.setAttribute("role", "option");
+    b.setAttribute("aria-label", t.text.slice(0, 80));
+    // Where this turn actually is, as a fraction of the whole
+    // conversation. Two turns a screen apart get ticks a screen apart.
+    const at = t.node ? t.node.offsetTop + t.node.offsetHeight / 2 : (i + 0.5) * (span / turns.length);
+    b.style.top = Math.min(99, Math.max(1, (at / span) * 100)).toFixed(2) + "%";
+    strip.appendChild(b);
+  });
+  // The preview must not sit on top of the conversation. Give it what is
+  // left of the gutter and no more.
+  const peekRoom = Math.max(160, (scroll.clientWidth - 768) / 2 - 20);
+  map.style.setProperty("--peek-room", peekRoom + "px");
+  markMap(mapAt);
+}
+
+function markMap(i) {
+  mapAt = i;
+  const ticks = [...$("mapstrip").children];
+  ticks.forEach((t, j) => {
+    const d = i === null ? 9 : Math.abs(j - i);
+    if (d <= 2) t.dataset.near = String(d); else delete t.dataset.near;
+    t.classList.toggle("here", i !== null && j === i);
+  });
+  const peek = $("mappeek");
+  if (i === null || !turns[i]) { peek.classList.remove("on"); return; }
+  peek.classList.add("on");
+  peek.querySelector(".n").textContent = `Turn ${i + 1} of ${turns.length}`;
+  peek.querySelector(".t").textContent = turns[i].text;
+  const tick = ticks[i];
+  if (tick) {
+    const strip = $("mapstrip");
+    const top = strip.offsetTop + (tick.offsetTop || 0);
+    peek.style.top = Math.max(8, Math.min(scroll.clientHeight - 110, top - 18)) + "px";
+  }
+}
+
+function jumpMap(i) {
+  const t = turns[i];
+  if (t && t.node) t.node.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function wireMap() {
+  const strip = $("mapstrip");
+  strip.addEventListener("mousemove", e => {
+    const ticks = [...strip.children];
+    if (!ticks.length) return;
+    let best = 0, bd = Infinity;
+    ticks.forEach((t, j) => {
+      const r = t.getBoundingClientRect();
+      const d = Math.abs(e.clientY - (r.top + r.height / 2));
+      if (d < bd) { bd = d; best = j; }
+    });
+    markMap(best);
+  });
+  strip.addEventListener("mouseleave", () => markMap(null));
+  strip.addEventListener("click", () => { if (mapAt !== null) jumpMap(mapAt); });
+  strip.addEventListener("focus", () => markMap(mapAt ?? 0));
+  strip.addEventListener("blur", () => markMap(null));
+  strip.addEventListener("keydown", e => {
+    const last = turns.length - 1;
+    const at = mapAt ?? 0;
+    if (e.key === "ArrowDown") { e.preventDefault(); markMap(Math.min(last, at + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); markMap(Math.max(0, at - 1)); }
+    else if (e.key === "Home") { e.preventDefault(); markMap(0); }
+    else if (e.key === "End") { e.preventDefault(); markMap(last); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (mapAt !== null) jumpMap(mapAt); }
+  });
+  addEventListener("resize", drawMap);
+}
+
+/* A pasted log must not push the conversation off the screen. */
+function foldIfLong(node) {
+  requestAnimationFrame(() => {
+    if (node.scrollHeight <= 176) return;
+    node.classList.add("tall");
+    const b = el("button", "morebtn", "Show full message");
+    b.type = "button";
+    b.onclick = () => {
+      const open = node.classList.toggle("open");
+      b.textContent = open ? "Show less" : "Show full message";
+    };
+    node.after(b);
+  });
+}
+
+/* ---------------- observation surface ----------------
+   Everything above is script-scoped. `let` and `const` do not create
+   properties on `window`, so none of it is reachable from the devtools
+   console or from a test — and a live view whose state cannot be observed
+   is one whose "it is real-time now" claim nobody can check. The first
+   version of the stream specs read `window.sseOK`, got `undefined`, and
+   failed for that reason alone.
+
+   Deliberately small, and deliberately read-mostly: the three writers are
+   the ones a test needs to force a transport, and each is something the
+   page already does to itself. */
+window.live = {
+  /** Is the server pushing, rather than the page asking? */
+  get sse() { return sseOK; },
+  get streaming() { return !!es && es.readyState === EventSource.OPEN; },
+  get polling() { return tailTimer !== null; },
+  get cursor() { return tailAt; },
+  get source() { return tailSrc; },
+  /** Rows currently on the timeline, as a human reads them. */
+  get rows() {
+    return [...document.querySelectorAll(".act")].map(e => ({
+      text: e.querySelector(".nm")?.textContent ?? "",
+      status: e.dataset.status ?? "",
+      app: e.dataset.app ?? "",
+    }));
+  },
+  /** Feed one CLI output line, exactly as a transport would. */
+  step: line => liveStep(line),
+  /** The minimap's ticks, one per user turn. */
+  get turns() { return turns.map(t => t.text); },
+  get mapReady() { return $("map").classList.contains("ready"); },
+  /** The banner stack, front first. */
+  get banners() {
+    return [...document.querySelectorAll("#banners .bn")].map(b => ({
+      variant: b.dataset.variant,
+      title: b.querySelector(".ti")?.textContent ?? "",
+    }));
+  },
+  banner: (id, b) => setBanner(id, b),
+  /** Repaint the timeline from a transcript, as `refresh()` does. */
+  render: (msgs, labels) => render(msgs, labels),
+  budget: (step, max) => setBudget(step, max),
+  contrast: v => setContrast(v),
+  fold: node => foldIfLong(node),
+  /** Drop to polling, the way a proxy that eats event-streams would. */
+  toPolling(ms) {
+    streamClose();
+    clearInterval(tailTimer);
+    tailTimer = setInterval(tail, ms || 300);
+  },
+  /** Stop both transports, so a test measures rendering and not timing. */
+  quiet() {
+    streamClose();
+    clearInterval(tailTimer);
+    tailTimer = null;
+    refresh = async () => {};
+  },
+};
 </script>
 </body></html>

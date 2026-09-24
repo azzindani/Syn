@@ -1,4 +1,4 @@
-"""Rig 6 primitive ops with per-tool embedded guidelines (opencode .txt pattern).
+"""The 6 primitive ops with per-tool embedded guidelines (opencode .txt pattern).
 File models (POC in-memory; COM/Office.js backends later):
   excel handle -> {"sheets": {name: [[cells]]}}
   word handle  -> {"paras": [str]}
@@ -7,7 +7,7 @@ Stdlib only."""
 import copy
 import json
 
-from .bus import DoomLoop, HarnessError
+from .bus import DoomLoop, Error
 from . import security
 
 
@@ -50,18 +50,18 @@ def _parse_range(sel):
     sheet, rng = sel.split("!", 1)
     m = __import__("re").match(r"([A-Z]+)(\d+):([A-Z]+)(\d+)$", rng.upper())
     if not m:
-        raise HarnessError("bad range selector %r" % sel)
+        raise Error("bad range selector %r" % sel)
     c0, r0, c1, r1 = m.groups()
     return sheet, (int(r0) - 1, _col_to_idx(c0), int(r1) - 1, _col_to_idx(c1))
 
 
 def execute(relay, session_id, handle, op, args):
     if op not in DESCRIPTIONS:
-        raise HarnessError("unknown op %r (want one of %s)" % (op, sorted(DESCRIPTIONS)))
+        raise Error("unknown op %r (want one of %s)" % (op, sorted(DESCRIPTIONS)))
     relay.gate(session_id, op, _args_key(op, dict(args, _h=handle)))
     files = relay.sessions[session_id]["files"]
     if handle not in files:
-        raise HarnessError("handle not open: %s (registry: %s)" % (handle, sorted(files)))
+        raise Error("handle not open: %s (registry: %s)" % (handle, sorted(files)))
     entry, content = files[handle], files[handle]["content"]
     mutating = op in ("write", "format", "struct")
     if mutating:
@@ -100,7 +100,7 @@ def _read(entry, args):
             return {"sheet": sheet, "grid": grid}
         r0, c0, r1, c1 = rng
         if (r1 - r0 + 1) * (c1 - c0 + 1) > security.POLICY.get("bulk_cap_rows", 1000):
-            raise HarnessError("range over bulk cap: refuse, narrow the selector")
+            raise Error("range over bulk cap: refuse, narrow the selector")
         return {"sheet": sheet, "range": sel, "grid": [row[c0:c1 + 1] for row in grid[r0:r1 + 1]]}
     if kind == "word":
         if sel == "body":
@@ -110,15 +110,15 @@ def _read(entry, args):
                     "injection_flag": security.scan_injection(text)}
         if sel.startswith("p"):
             return {"para": sel, "text": content["paras"][int(sel[1:])]}
-        raise HarnessError("bad word selector %r" % sel)
+        raise Error("bad word selector %r" % sel)
     if kind == "ppt":
         if sel == "deck":
             return {"slides": len(content["slides"]),
                     "titles": [s["title"] for s in content["slides"]]}
         if sel.startswith("slide"):
             return content["slides"][int(sel[5:]) - 1]
-        raise HarnessError("bad ppt selector %r" % sel)
-    raise HarnessError("unknown kind %r" % kind)
+        raise Error("bad ppt selector %r" % sel)
+    raise Error("unknown kind %r" % kind)
 
 
 def _write(entry, args):
@@ -127,9 +127,9 @@ def _write(entry, args):
     if kind == "excel":
         sheet, rng = _parse_range(sel)
         if rng is None:
-            raise HarnessError("write needs a range; use struct.addSheet for new sheets")
+            raise Error("write needs a range; use struct.addSheet for new sheets")
         if sheet not in content["sheets"]:
-            raise HarnessError("sheet not open: %r (sheets: %s)" % (sheet, sorted(content["sheets"])))
+            raise Error("sheet not open: %r (sheets: %s)" % (sheet, sorted(content["sheets"])))
         r0, c0, r1, c1 = rng
         grid = content["sheets"][sheet]
         for i, row in enumerate(values):
@@ -140,8 +140,8 @@ def _write(entry, args):
         if sel.startswith("p"):
             content["paras"][int(sel[1:])] = values
             return {"written": sel}
-        raise HarnessError("word write targets pN; use struct.insertParagraph to append")
-    raise HarnessError("write unsupported for kind %r (use struct)" % kind)
+        raise Error("word write targets pN; use struct.insertParagraph to append")
+    raise Error("write unsupported for kind %r (use struct)" % kind)
 
 
 def _format(entry, args):
@@ -149,14 +149,14 @@ def _format(entry, args):
     allowed = {"font", "fill", "bold", "size", "color"}
     unknown = set(style) - allowed
     if unknown:
-        raise HarnessError("unknown style keys %s (allowed %s)" % (sorted(unknown), sorted(allowed)))
+        raise Error("unknown style keys %s (allowed %s)" % (sorted(unknown), sorted(allowed)))
     entry.setdefault("styles", {})[args["selector"]] = style
     return {"formatted": args["selector"], "style": style}
 
 
 def _need_kind(entry, kind, verb):
     if entry["kind"] != kind:
-        raise HarnessError("%s needs a %s handle (got %s)" % (verb, kind, entry["kind"]))
+        raise Error("%s needs a %s handle (got %s)" % (verb, kind, entry["kind"]))
 
 
 def _struct(relay, session_id, handle, entry, args):
@@ -191,7 +191,7 @@ def _struct(relay, session_id, handle, entry, args):
         return {"slides": len(content["slides"])}
     if verb == "transfer":
         return _transfer(relay, session_id, handle, args)
-    raise HarnessError("unknown struct verb %r" % verb)
+    raise Error("unknown struct verb %r" % verb)
 
 
 def _transfer(relay, session_id, dst_handle, args):
@@ -199,7 +199,7 @@ def _transfer(relay, session_id, dst_handle, args):
     src = args["from"]
     files = relay.sessions[session_id]["files"]
     if src not in files:
-        raise HarnessError("transfer source not open: %s" % src)
+        raise Error("transfer source not open: %s" % src)
     data = _read(files[src], {"selector": args["selector"]})
     grid = data.get("grid", [])
     dst = files[dst_handle]
@@ -213,7 +213,7 @@ def _transfer(relay, session_id, dst_handle, args):
         dst["content"].setdefault("tables", []).append(grid)
         dst["content"].setdefault("provenance", []).append(prov)
     else:
-        raise HarnessError("transfer dst kind %r unsupported in POC" % dst["kind"])
+        raise Error("transfer dst kind %r unsupported in POC" % dst["kind"])
     relay.emit(session_id, {"t": "xfer", "from": src, "to": dst_handle, "rows": len(grid)})
     return {"to": dst_handle, "provenance": prov}
 
@@ -226,4 +226,4 @@ def _export(entry):
         return {"paras": len(content["paras"]), "head": content["paras"][:3]}
     if kind == "ppt":
         return {"slides": len(content["slides"]), "titles": [s["title"] for s in content["slides"]]}
-    raise HarnessError("unknown kind %r" % kind)
+    raise Error("unknown kind %r" % kind)

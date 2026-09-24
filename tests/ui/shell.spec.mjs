@@ -329,13 +329,9 @@ test("the theme can be pinned, and 'system' follows the machine", async ({ page 
   await page.evaluate(() => window.live.theme("system"));
 });
 
-test("the first screen offers things to try, and one goes into the composer", async ({ page }) => {
+test("the first screen says what Syn is, without a wall of example prompts", async ({ page }) => {
   await page.evaluate(() => window.live.render([], {}));
-  const ideas = page.locator(".empty .idea");
-  await expect(ideas).toHaveCount(4);
-  await ideas.first().click();
-  // Into the composer, not sent: the human still decides.
-  await expect(page.locator("#box")).not.toHaveValue("");
-  await expect(page.locator("#box")).toBeFocused();
-  await expect(page.locator("#tl .you")).toHaveCount(0);
+  await expect(page.locator(".empty h2")).toHaveText("What should Syn do?");
+  await expect(page.locator(".empty button")).toHaveCount(0);
+  await expect(page.locator("#box")).toHaveValue("");
 });

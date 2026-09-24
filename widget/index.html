@@ -181,8 +181,6 @@ kbd{display:inline-block;min-width:1.5em;padding:0 5px;border:1px solid var(--bo
 .tile[data-k="ui"]{--tc:var(--app-ui)}
 .tile[data-k="shell"]{--tc:var(--app-shell)}
 .tile[data-k="syn"]{background:linear-gradient(135deg,var(--brand-from),var(--brand-to))}
-.tile.lg{width:34px;height:34px;border-radius:10px;font-size:16px}
-.tile.lg svg{width:18px;height:18px}
 .tile.sm{width:16px;height:16px;border-radius:5px;font-size:9px}
 .tile.sm svg{width:10px;height:10px}
 /* Overlapping tiles, each ringed in the surface it sits on, so four apps
@@ -451,8 +449,9 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 
 /* ---------------- the first screen ----------------
    An empty conversation is the one screen everybody sees, so it earns more
-   than a line of grey text: what Syn is, what it can touch, and four
-   things to try that go straight into the composer. */
+   than a line of grey text: what Syn is and what it can touch. No example
+   prompts: the owner found four cards of them noisy, and the composer is
+   already where to start. */
 .empty{display:flex;flex-direction:column;align-items:center;margin:0 auto;width:100%;max-width:40rem;text-align:center}
 .hero{position:relative;display:grid;place-items:center;width:56px;height:56px;margin-bottom:22px;
   border-radius:17px;color:#fff;background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
@@ -462,13 +461,6 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
   background:radial-gradient(circle,color-mix(in srgb,var(--brand-from) 14%,transparent) 0,transparent 68%)}
 .empty h2{margin:0 0 10px;font-size:30px;line-height:1.15;font-weight:650;letter-spacing:-.025em;text-wrap:balance}
 .empty p{margin:0;max-width:30rem;color:var(--muted-foreground);font-size:15px;text-wrap:balance}
-.ideas{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;margin-top:30px}
-.idea{display:flex;align-items:flex-start;gap:12px;padding:13px 14px;border:1px solid var(--border);
-  border-radius:14px;background:var(--card);text-align:left;box-shadow:var(--shadow-sm);
-  transition:border-color .12s,transform .12s,box-shadow .12s}
-.idea:hover{border-color:var(--input);transform:translateY(-1px);box-shadow:var(--shadow-lg)}
-.idea b{display:block;font-size:13.5px;font-weight:600;line-height:1.35}
-.idea .sub{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--muted-foreground)}
 .works{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px 14px;margin-top:26px;
   font-size:12px;color:var(--muted-foreground)}
 .works .w{display:inline-flex;align-items:center;gap:6px}
@@ -603,7 +595,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   #tl{padding:22px 16px 12px}
   #comp,#hint{max-width:none}#dock{padding:0 12px 12px}
   .turn{padding-left:0}.turn::before,.turn::after{display:none}
-  .ideas{grid-template-columns:1fr}
   .empty h2{font-size:24px}
   #hands .lbl{display:none}
   .pill.model{display:none}
@@ -1578,17 +1569,6 @@ function clearBlank() {
   document.body.classList.remove("blank-chat");
 }
 
-const IDEAS = [
-  ["excel", "Summarise my spreadsheet", "Tell me what is in the open workbook.",
-    "Read the open workbook and tell me, in plain words, what it contains and what stands out."],
-  ["excel", "Chart the main numbers", "A titled chart on a sheet of its own.",
-    "Add a new sheet with a clear, titled chart of the main figures in the open workbook."],
-  ["word", "Draft a one-page memo", "From the numbers, into Word.",
-    "Write a one-page summary of the workbook's key findings into the open Word document, with headings."],
-  ["ppt", "Build a short deck", "A title slide and three that each make one point.",
-    "Build a title slide and three slides of key findings in the open PowerPoint deck, with speaker notes."],
-];
-
 function emptyState() {
   const e = el("div", "empty");
   const hero = el("div", "hero");
@@ -1597,22 +1577,6 @@ function emptyState() {
   e.appendChild(el("h2", null, "What should Syn do?"));
   e.appendChild(el("p", null,
     "It works in the apps you already have open — Excel, Word, PowerPoint, your browser, any window — and shows you every step."));
-  const ideas = el("div", "ideas");
-  for (const [k, title, sub, prompt] of IDEAS) {
-    const b = el("button", "idea");
-    b.type = "button";
-    const txt = el("div");
-    txt.append(el("b", null, title), el("span", "sub", sub));
-    b.append(tile(k, "lg"), txt);
-    b.onclick = () => {
-      box.value = prompt;
-      box.dispatchEvent(new Event("input"));
-      box.focus();
-      box.setSelectionRange(box.value.length, box.value.length);
-    };
-    ideas.appendChild(b);
-  }
-  e.appendChild(ideas);
   const works = el("div", "works");
   works.appendChild(el("span", null, "Works with"));
   for (const k of ["excel", "word", "ppt", "web", "ui"]) {

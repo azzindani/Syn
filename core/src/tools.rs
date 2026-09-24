@@ -101,7 +101,7 @@ fn esc(s: &str) -> String {
 /// keyword "maxLength"`. One harness across many models cannot lose a model
 /// to that, and the cap is worth more enforced here than declared there —
 /// `to_action` applies the same numbers to what actually comes back.
-fn wire_params(params: &str) -> String {
+pub(crate) fn wire_params(params: &str) -> String {
     let mut out = String::with_capacity(params.len());
     let mut rest = params;
     while let Some(i) = rest.find("\"maxLength\":") {

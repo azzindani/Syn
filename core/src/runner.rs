@@ -93,6 +93,19 @@ impl Runner {
         !self.hands.is_empty()
     }
 
+    /// Whether an attached hand would take this app's handles.
+    pub fn serves(&self, app: &str) -> bool {
+        self.route(app).is_some()
+    }
+
+    /// Would the gates let an op on this app through right now? Asked
+    /// before anything expensive -- connecting a pipe, launching a helper,
+    /// starting Excel -- so a refused app costs nothing to refuse.
+    pub fn permits(&self, app: &str) -> Result<()> {
+        self.guard.armed()?;
+        self.guard.check(app)
+    }
+
     /// Attached hands in routing order, as (name, claimed apps).
     pub fn hands(&self) -> Vec<(&str, &[String])> {
         self.hands.iter().map(|a| (a.name.as_str(), a.apps.as_slice())).collect()
@@ -215,6 +228,22 @@ impl Runner {
         let missing = self.queue.revalidate(&registry);
         self.queue.resume();
         Ok(missing)
+    }
+
+    /// Run one op now, through every gate. The one road to a document.
+    ///
+    /// The agent loop, the REPL and the MCP server all call this, so there
+    /// is no caller -- ours or someone else's model -- that reaches a
+    /// document without meeting the kill switch, the app allowlist, the VBA
+    /// gate, the doom-loop gate, the registry check and the event feed.
+    /// `mcpgate` used to be the exception: its writes built an envelope
+    /// and never met any of them (docs/09 section 4).
+    ///
+    /// `Ok(None)` means the queue is not running: paused, cancelled or
+    /// frozen by the doom-loop gate.
+    pub fn run(&mut self, relay: &mut Relay, handle: &str, summary: &str, call: Call) -> Result<Option<OpOut>> {
+        self.submit(Job { handle: handle.into(), summary: summary.into(), call });
+        self.pump(relay)
     }
 
     /// Execute the next queued job. DoomLoop auto-pauses the run.

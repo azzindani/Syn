@@ -36,6 +36,42 @@ pub struct OpenFile {
     pub styles: HashMap<String, Vec<(String, String)>>,
 }
 
+impl OpenFile {
+    /// An empty workbook with one 4x4 `Sheet1`: what `attach` registers
+    /// when no live hand is involved, so ops have a model to act on.
+    pub fn blank_excel() -> Self {
+        OpenFile {
+            kind: FileKind::Excel,
+            content: FileContent::Excel { sheets: HashMap::from([("Sheet1".into(), vec![vec![String::new(); 4]; 4])]) },
+            styles: HashMap::new(),
+        }
+    }
+
+    pub fn blank_word() -> Self {
+        OpenFile {
+            kind: FileKind::Word,
+            content: FileContent::Word { paras: vec![], tables: vec![], changes: vec![], comments: vec![] },
+            styles: HashMap::new(),
+        }
+    }
+
+    pub fn blank_ppt() -> Self {
+        OpenFile { kind: FileKind::Ppt, content: FileContent::Ppt { slides: vec![] }, styles: HashMap::new() }
+    }
+
+    /// The registry entry for a document a live hand holds. The model in
+    /// memory is never read for a live handle -- the hand is -- so it stays
+    /// empty, rather than filled with something an op could mistake for the
+    /// real document.
+    pub fn placeholder(app: &str) -> Self {
+        match app {
+            "excel" => Self::blank_excel(),
+            "ppt" => Self::blank_ppt(),
+            _ => Self::blank_word(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Event {
     pub t: String,
@@ -124,6 +160,15 @@ impl Relay {
 
     pub fn selection(&self, session: &str, handle: &str) -> Result<Option<String>> {
         Ok(self.session(session)?.follow.get(handle).cloned())
+    }
+
+    /// Forget one document. Its snapshots go with it: an undo stack for a
+    /// handle nobody can address is memory held for nothing.
+    pub fn detach(&mut self, session: &str, handle: &str) -> Result<()> {
+        let s = self.session_mut(session)?;
+        s.files.remove(handle);
+        s.snapshots.remove(handle);
+        Ok(())
     }
 
     pub fn registry(&self, session: &str) -> Result<Vec<String>> {

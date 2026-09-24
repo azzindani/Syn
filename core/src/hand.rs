@@ -1,6 +1,6 @@
 //! The hand: `office-rpc/1` transport from the Rust core to a live sidecar.
 //!
-//! This is the seam that was missing. `mcpgate::rpc_request` could already
+//! This is the seam that was missing. The old `mcpgate::rpc_request` could already
 //! build an envelope and nothing could send one, so the brain and the hands
 //! were two halves wired to the same protocol with nothing in between. A
 //! `Hand` is that in-between: one line of JSON out, one line of JSON back,

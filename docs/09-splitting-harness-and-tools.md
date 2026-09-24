@@ -87,11 +87,20 @@ expressible but is not what most clients render. Options, none free:
 Option 3 is honest and cheapest, and it should be stated as a limitation
 rather than discovered by a user.
 
+*As built, a fourth:* `mcpgate` writes each call to the live log the
+console already tails (`core::live`), so an outside model's run shows up
+in Syn's console with no second transport and nothing asked of the client.
+
 **Sessions and memory stay with the loop.** A session is a conversation. The
 server should be stateless about conversations and stateful only about
 documents.
 
 ## 4. What is actually in the way today
+
+> **Both fixed 2026-09-24** — see `11-mcp.md`. `mcpgate` is now a real MCP
+> server generated from `tools::TOOLS` with real schemas, and every caller
+> reaches a document through `Runner::run`. Kept below as the record of
+> why.
 
 Not architecture — two concrete defects.
 
@@ -125,10 +134,12 @@ Nothing here requires committing to the split.
 - **Phase 0 — done.** `tools` / `looptools` / `surface`: world tools apart
   from loop services, merged only at the wire, fingerprint over the world
   tools only.
-- **Phase 1 — one surface.** `mcpgate` generated from `tools::TOOLS`, with
-  real schemas. Closes the divergence above. *Useful on its own.*
-- **Phase 2 — one road.** Every op reaches a document through the same
-  gated dispatch, whoever called it. *Useful on its own.*
+- **Phase 1 — one surface. Done 2026-09-24.** `mcpgate` generated from
+  `tools::TOOLS`, with real schemas. Closes the divergence above.
+- **Phase 2 — one road. Done 2026-09-24.** Every op reaches a document
+  through `Runner::run`, whoever called it: the loop, the REPL, an MCP
+  client. `core::desk` adds what an outside model needed and this plan
+  missed: a way to open a document, not only to edit one.
 - **Phase 3 — one workspace, several crates.** `agent-ops`, `agent-hands`,
   `agent-mcp`, `agent-loop`, `agent-ui` in this repo. The compiler starts
   enforcing the seam; no release or packaging changes. Cheap, and trivially

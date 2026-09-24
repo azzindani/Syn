@@ -12,7 +12,13 @@ software hands (Office first) in one live session, any model via OpenRouter.
   - `memory` — session facts + cross-app transfer log + compaction (M2/M3).
   - `guard` — runtime allowlist + kill switch, enforced in `Runner::pump`.
   - `provider` — OpenRouter bodies, SSE streaming parse, Picker + budget.
-  - `mcpgate` — MCP gateway: 6 ops as MCP tools over stdio.
+  - `mcpgate` — MCP server: the six document ops generated from `tools`,
+    plus `status`, `open` and `manual`, for any MCP client
+    (`docs/11-mcp.md`). Every call goes through `Runner`.
+  - `desk` — how a session gets a document open: connect a hand, start its
+    helper if it is not running, open the file, bind the handle live.
+  - `json` — a small JSON parser, for the one component that speaks a
+    nested protocol.
   - `router/queue/runner/paths/stream/snapshots/acp/vfs/ooxml` — as before.
   - `agent` — the loop: a goal becomes tool calls, one per step, each
     dispatched through `Runner` so it meets every gate. `Brain` is a seam,
@@ -29,7 +35,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
   - `ws` — RFC 6455 client (handshake, masking, ping, continuation) in std,
     because `core` has no dependencies.
   - bins: `cli` (REPL: `do`/`approve`/`deny`, `hand`/`live`, `shellallow`),
-    `mcpgate` (stdio bridge).
+    `mcpgate` (MCP server on stdio), `ui` (the console).
 - `widget/index.html` — the chat app, served by the `ui` binary: thread list,
   conversation, composer. It posts one command line to a loopback server
   that types it into a real `cli` process, so the page can only do what the
@@ -56,7 +62,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
 - `tests/capability/` — the v0.1.0 capability test: brief, rubric, scorers,
   and every recorded run (`SPEC-v3.md`).
 - `tests/ui/` — Playwright specs that drive the real console.
-- `docs/` — 00→10, DIGEST-00→09, PRD, ideas, runbook-windows.
+- `docs/` — 00→11, DIGEST-00→09, PRD, ideas, runbook-windows.
 - `.tmp/repos/` — gitignored; local clones of the sources this was ported
   from (`docs/DIGEST-00-inventory.md`).
 
@@ -77,7 +83,7 @@ cd core && cargo clippy --all-targets -- -D warnings && cargo test
 cargo build --release && cargo run --example demo
 ./target/release/cli < ../tests/e2e_script.txt
 ./target/release/cli < ../tests/e2e_safety.txt   # allow/kill/journal/replay/sessions
-printf '{"tool":"list"}\n' | cargo run -q --bin mcpgate
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cargo run -q --bin mcpgate
 ```
 ## Run on Windows (live Office)
 ```
@@ -182,6 +188,22 @@ happen to visit cannot post commands to this port; preflights are refused
 too. See the header of `core/src/bin/ui.rs`.
 
 Stop it with `Get-Process ui, uia-host | Stop-Process`.
+
+## Drive it from any MCP client
+
+```
+cargo build --release          # core\target\release\mcpgate.exe
+```
+
+Point Claude Desktop, Claude Code, OpenCode or any MCP client at
+`mcpgate.exe`. The model gets `status`, `open`, the six document ops and
+`manual`. `open` starts Excel, Word or PowerPoint, and the helper that
+connects to it, when they are not running, then hands back the handle to
+use. Every call passes the same gates as Syn's own loop, results from
+documents come back fenced as untrusted, and each call appears live in
+Syn's console. The guidance is written so that small and mid-size models
+can follow it, not only frontier ones. Setup, settings and what is still
+unverified on real Office: `docs/11-mcp.md`.
 
 ## Drive it from a terminal
 

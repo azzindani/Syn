@@ -27,7 +27,7 @@
 //!   quit
 
 use core::agent::{Agent, Brain, CurlBrain, Step};
-use core::bus::{FileContent, FileKind, OpenFile};
+use core::bus::OpenFile;
 use core::config;
 use core::cdp::Cdp;
 use core::chats;
@@ -36,10 +36,9 @@ use core::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use core::protocol::new_handle;
 use core::provider;
 use core::router::{TaskKind, route};
-use core::runner::{Job, Runner};
+use core::runner::Runner;
 use core::shell::ShellPolicy;
 use core::Relay;
-use std::collections::HashMap;
 use std::io::BufRead;
 
 /// Print, and mirror to this run's live log so a console in another
@@ -55,15 +54,6 @@ macro_rules! pr {
     }};
 }
 
-fn blank_excel() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Excel,
-        content: FileContent::Excel {
-            sheets: HashMap::from([("Sheet1".into(), vec![vec![String::new(); 4]; 4])]),
-        },
-        styles: HashMap::new(),
-    }
-}
 
 /// Submit one op and run it.
 ///
@@ -73,27 +63,15 @@ fn blank_excel() -> OpenFile {
 /// quietly edit the in-memory model instead of the open document. The agent
 /// loop already holds this invariant; the REPL now holds it too.
 fn run_op(runner: &mut Runner, relay: &mut Relay, handle: &str, what: &str, call: Call) {
-    let id = runner.submit(Job { handle: handle.into(), summary: format!("cli-{what}"), call });
-    match runner.pump(relay) {
+    let id = format!("cli-{what}");
+    match runner.run(relay, handle, &id, call) {
         Ok(Some(o)) => pr!("RECEIPT {id} {what} {o:?}"),
         Ok(None) => pr!("ERROR {id} queue not running"),
         Err(e) => pr!("ERROR {id} {e}"),
     }
 }
 
-fn blank_word() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Word,
-        content: FileContent::Word { paras: vec![], tables: vec![], changes: vec![], comments: vec![] },
-        styles: HashMap::new(),
-    }
-}
 
-fn blank_ppt() -> OpenFile {
-    OpenFile {
-        kind: FileKind::Ppt, content: FileContent::Ppt { slides: vec![] }, styles: HashMap::new(),
-    }
-}
 
 /// Drive the loop until it finishes, stops, or stops for a human.
 /// The other model slots to try, in cost order, skipping the one that just
@@ -376,9 +354,9 @@ fn main() {
                     continue;
                 }
                 let (file, kind) = match a.as_slice() {
-                    ["excel", f, unit] => (blank_excel(), new_handle("excel", f, unit)),
-                    ["word", f] => (blank_word(), new_handle("word", f, "body")),
-                    ["ppt", f] => (blank_ppt(), new_handle("ppt", f, "deck")),
+                    ["excel", f, unit] => (OpenFile::blank_excel(), new_handle("excel", f, unit)),
+                    ["word", f] => (OpenFile::blank_word(), new_handle("word", f, "body")),
+                    ["ppt", f] => (OpenFile::blank_ppt(), new_handle("ppt", f, "deck")),
                     _ => {
                         pr!("ERROR usage: attach excel <file> <sheet> | attach word <file> | attach ppt <file>");
                         continue;
@@ -1058,7 +1036,7 @@ fn main() {
                     }
                 };
                 let h = new_handle(app, m, unit);
-                relay.attach(&session, h.clone(), blank_word());
+                relay.attach(&session, h.clone(), OpenFile::blank_word());
                 pr!("RECEIPT attached={h}");
             }
             "hands" => {

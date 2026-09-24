@@ -26,9 +26,15 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
     `cdp.rs` + `ws.rs` are the browser hand.
   - `provider.rs`, `config.rs`, `router.rs`: request bodies, `.env`
     loading, and the four model slots.
+  - `mcpgate.rs` + `desk.rs`: the MCP server (`docs/11-mcp.md`). Its
+    document tools are generated from `tools::TOOLS` and a test fails if
+    they drift; `desk` connects hands, starts helpers and opens files.
+    Every MCP call goes through `Runner::run`, like the loop's.
+  - `json.rs`: a real JSON parser. Use it for anything nested; the
+    substring `tools::field` finds the first matching key at any depth.
   - bins: `cli` (the REPL), `ui` (a loopback web console that drives `cli`
-    over stdin/stdout, serving `widget/index.html`), `mcpgate` (MCP over
-    stdio).
+    over stdin/stdout, serving `widget/index.html`), `mcpgate` (the MCP
+    server on stdio; stdout carries protocol only, notes go to stderr).
 - `sidecar-csharp/Host`: the Office COM sidecar (STA). `sidecar-csharp/Uia`:
   the UI Automation sidecar (MTA). Both need Windows and .NET 8 to build,
   and Office to run.
@@ -96,6 +102,14 @@ recipe is in `docs/10`.
   and verbs are rejected, never ignored.
 - **Results are untrusted.** Anything read from a document or a program
   goes back to the model marked as untrusted data, never as instructions.
+  That holds for MCP results too (`mcpgate::fenced`).
+- **One road to a document.** Every caller (the loop, the REPL, MCP) uses
+  `Runner::run`. A new entry point that calls `ops::execute` or a hand
+  directly skips every gate; don't add one.
+- **Write MCP guidance for a small model.** Tool results say what to do
+  next as a call that can be copied exactly (a test runs it); refusals say
+  how to fix the call; ambiguous input is refused with the alternatives,
+  never guessed. Keep `INSTRUCTIONS` short (a test caps it).
 - **`shell` always stops for a human.** Its allowlist is empty by default,
   and a program not on it is refused before anyone is asked. VBA (`struct`
   `macro`) is off unless `AGENT_VBA=1`, and that gate lives in

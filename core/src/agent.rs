@@ -26,7 +26,7 @@ use crate::labels;
 use crate::ops::OpOut;
 use crate::provider::{self, Msg};
 use crate::router::{Route, TaskKind};
-use crate::runner::{Job, Runner};
+use crate::runner::Runner;
 use crate::security;
 use crate::shell::{self, ShellPolicy};
 use crate::tools::{self, Action, ToolCall};
@@ -1069,8 +1069,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             Action::Doc { handle, call } => {
                 let tool = tc.name.clone();
                 let handle_for_status = handle.clone();
-                let id = runner.submit(Job { handle, summary: format!("agent:{tool}"), call });
-                match runner.pump(relay) {
+                match runner.run(relay, &handle, &format!("agent:{tool}"), call) {
                     Ok(Some(out)) => {
                         let detail = describe(&out);
                         self.observe(&tc.id, &Self::fenced(&detail));
@@ -1082,7 +1081,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                         Step::Ran { tool, detail }
                     }
                     Ok(None) => {
-                        let why = format!("{id}: queue is not running (paused or cancelled)");
+                        let why = format!("agent:{tool}: queue is not running (paused or cancelled)");
                         self.observe(&tc.id, &why);
                         self.narrate(relay, &tc, labels::Status::Stopped);
                         Step::Stopped(why)
@@ -1160,7 +1159,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
 }
 
 /// One-line rendering of an op result for the feed and the model.
-fn describe(out: &OpOut) -> String {
+pub(crate) fn describe(out: &OpOut) -> String {
     match out {
         OpOut::Grid { sheet, rows, cols } => format!("grid {sheet}: {rows}x{cols}"),
         OpOut::Text { detail } => detail.clone(),

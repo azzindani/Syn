@@ -24,7 +24,7 @@ export function readState() {
  * the file down with it, and the failures it caused looked like bugs in
  * unrelated tests.
  */
-export async function startConsole({ port, tail } = {}) {
+export async function startConsole({ port, tail, env } = {}) {
   const { spawn } = await import("node:child_process");
   const os = await import("node:os");
   const ui = uiBin;
@@ -35,7 +35,9 @@ export async function startConsole({ port, tail } = {}) {
   const args = ["--port", String(port), "--url-file", urlFile];
   if (tail) args.push("--tail", tail);
 
-  const child = spawn(ui, args, { cwd: repo, stdio: "ignore", windowsHide: true });
+  // `env` wins over .env the way a shell export does: that is how a spec
+  // points a console at a provider of its own without touching the file.
+  const child = spawn(ui, args, { cwd: repo, stdio: "ignore", windowsHide: true, env: { ...process.env, ...env } });
   child.unref();
 
   let url = null;

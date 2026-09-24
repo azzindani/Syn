@@ -193,6 +193,13 @@ fn main() {
             .unwrap_or_else(|| std::path::PathBuf::from("cli")),
     };
 
+    // The same .env the CLI child reads, so this process knows which
+    // providers to ask for a model list. A shell export still wins, and the
+    // child inherits exactly what it would have loaded itself.
+    let _ = core::config::load_env(&std::env::current_dir().unwrap_or_default());
+    let catalog = Arc::new(Mutex::new(core::catalog::to_json(&core::catalog::load())));
+    keep_catalog_fresh(Arc::clone(&catalog));
+
     let cli = match Cli::start(&exe) {
         Ok(c) => Arc::new(Mutex::new(c)),
         Err(e) => {
@@ -242,6 +249,7 @@ fn main() {
         let Ok(s) = conn else { continue };
         let cli = Arc::clone(&cli);
         let live = Arc::clone(&live);
+        let catalog = Arc::clone(&catalog);
         let pinned = pinned.clone();
         let allowed_origins = allowed_origins.clone();
         std::thread::spawn(move || {
@@ -420,6 +428,27 @@ data: {{\"source\":\"{}\",\"since\":{}}}
                     std::thread::sleep(Duration::from_millis(60));
                 }
             }
+            // The model catalog, from memory: the picker opens instantly
+            // and never waits on a provider. What is in memory is kept
+            // fresh by `keep_catalog_fresh`.
+            ("GET", "/models") => {
+                let body = catalog.lock().map(|c| c.clone()).unwrap_or_default();
+                let _ = respond(&mut s, "200 OK", "application/json", &body);
+            }
+            // The picker's refresh button: ask every provider now. A POST
+            // behind the same Origin rule as /cmd, because it makes this
+            // machine send requests.
+            ("POST", "/models") => {
+                if req.origin.is_none() {
+                    let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /models needs an Origin header");
+                    return;
+                }
+                let body = core::catalog::to_json(&core::catalog::update(true));
+                if let Ok(mut c) = catalog.lock() {
+                    c.clone_from(&body);
+                }
+                let _ = respond(&mut s, "200 OK", "application/json", &body);
+            }
             ("GET", "/events") => {
                 let since = req
                     .path
@@ -460,6 +489,24 @@ data: {{\"source\":\"{}\",\"since\":{}}}
         }
         });
     }
+}
+
+/// Ask the providers for their lists at start, and again whenever the
+/// cached one is older than `catalog::FRESH_SECS`, for as long as the
+/// console runs. A console left open for a week offers this week's models.
+fn keep_catalog_fresh(catalog: Arc<Mutex<String>>) {
+    std::thread::spawn(move || {
+        loop {
+            // `update` only fetches what is stale, so waking every minute
+            // costs a file read, and a failed fetch is retried a minute
+            // later rather than a quarter of an hour.
+            let body = core::catalog::to_json(&core::catalog::update(false));
+            if let Ok(mut c) = catalog.lock() {
+                *c = body;
+            }
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
 }
 
 #[cfg(test)]

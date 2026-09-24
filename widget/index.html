@@ -496,9 +496,61 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
   border:1px solid var(--border);border-radius:99px;background:var(--card);color:var(--muted-foreground);
   font-size:12.5px;transition:border-color .12s,color .12s}
 .pick:hover,.pick:focus-within{border-color:var(--input);color:var(--foreground)}
-#task{height:28px;max-width:12rem;padding:0 20px 0 0;border:0;outline:0;background:none;appearance:none;
+#think{height:28px;max-width:12rem;padding:0 20px 0 0;border:0;outline:0;background:none;appearance:none;
   -webkit-appearance:none;font-size:12.5px;font-weight:500;color:inherit;cursor:pointer}
 .pick .caret{position:absolute;right:8px;pointer-events:none}
+/* The model button is a pill like the thinking one beside it, so the two
+   read as a pair: what thinks, and how hard. */
+#mpick{padding-right:26px;cursor:pointer}
+#mpick #mname{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+#mpick[aria-expanded="true"]{border-color:var(--input);color:var(--foreground)}
+.pick.off{opacity:.55}
+
+/* ---------------- the model picker ----------------
+   Hundreds of models is a search problem, not a dropdown: type a few
+   letters of the name, see what it costs and whether it can think, pick.
+   It opens upward from the composer, where the choice is used. */
+#comp{position:relative}
+#models{display:none;position:absolute;left:8px;bottom:calc(100% + 8px);z-index:35;
+  width:min(470px,calc(100% - 16px));max-height:min(540px,62vh);flex-direction:column;
+  border:1px solid var(--border);border-radius:16px;background:var(--surface-raised);box-shadow:var(--shadow-lg);overflow:hidden}
+#models.on{display:flex;animation:rise .14s ease-out}
+#models .mtop{display:flex;align-items:center;gap:8px;padding:10px 10px 8px 14px;border-bottom:1px solid var(--border)}
+#models .mtop [data-icon]{color:var(--muted-foreground);display:grid}
+#msearch{flex:1;min-width:0;height:30px;border:0;outline:0;background:none;font-size:14px}
+#msearch::placeholder{color:var(--placeholder)}
+#msearch::-webkit-search-cancel-button{display:none}
+#mrefresh{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;color:var(--muted-foreground)}
+#mrefresh:hover{background:var(--accent);color:var(--foreground)}
+#mrefresh.spinning svg{animation:sp .8s linear infinite}
+#mtabs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px 0}
+#mtabs:empty{display:none}
+.mchip{height:26px;padding:0 10px;border:1px solid var(--border);border-radius:99px;background:var(--card);
+  font-size:12px;font-weight:500;color:var(--muted-foreground);transition:.12s}
+.mchip:hover{color:var(--foreground);border-color:var(--input)}
+.mchip[aria-pressed="true"]{color:var(--foreground);border-color:color-mix(in srgb,var(--primary) 55%,var(--input));
+  background:color-mix(in srgb,var(--primary) 10%,var(--card))}
+.mchip .n{margin-left:5px;font-weight:400;color:var(--muted-foreground)}
+#mlist{flex:1;min-height:0;overflow:auto;padding:6px;scrollbar-width:thin}
+.mrow{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 12px;width:100%;padding:8px 10px;
+  border-radius:10px;text-align:left;cursor:pointer}
+.mrow:hover,.mrow.active{background:var(--accent)}
+.mrow[aria-selected="true"]{background:color-mix(in srgb,var(--primary) 12%,transparent)}
+.mrow .mn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:550}
+.mrow .mi{grid-column:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:11.5px var(--font-mono);color:var(--muted-foreground)}
+.mrow .mm{grid-column:2;grid-row:1 / span 2;display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+  font-size:11.5px;color:var(--muted-foreground);white-space:nowrap}
+.mrow .tags{display:flex;gap:4px}
+.mtag{padding:1px 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;
+  background:var(--accent);color:var(--muted-foreground)}
+.mtag.thinks{background:color-mix(in srgb,var(--primary) 14%,transparent);color:var(--primary)}
+.mtag.free{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.mrow.auto .mn{display:flex;align-items:center;gap:6px}
+#mlist .none{padding:22px 12px;text-align:center;font-size:13px;color:var(--muted-foreground)}
+#mfoot{padding:8px 14px 10px;border-top:1px solid var(--border);font-size:11.5px;line-height:1.45;color:var(--muted-foreground)}
+#mfoot .warn{color:var(--warning-foreground)}
+#mfoot code{font:11px var(--font-mono)}
 #send{margin-left:auto;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;
   color:#fff;background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
   box-shadow:inset 0 1px 0 rgb(255 255 255/22%),0 6px 16px -6px color-mix(in srgb,var(--brand-to) 70%,transparent);
@@ -555,6 +607,10 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   .empty h2{font-size:24px}
   #hands .lbl{display:none}
   .pill.model{display:none}
+  /* Still anchored to the composer, not fixed: its backdrop-filter makes
+     it the containing block, so a fixed panel landed below the screen. */
+  #models{left:0;right:0;width:auto;max-height:calc(100dvh - 190px)}
+  #mpick #mname{max-width:8rem}
   #pop{position:fixed;left:12px;right:12px;top:62px;width:auto}}
 
 /* ---------------- the timeline minimap ----------------
@@ -717,6 +773,14 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 
   <div id="dock">
     <div id="comp">
+      <div id="models" role="dialog" aria-label="Choose a model">
+        <div class="mtop"><span data-icon="search"></span
+          ><input id="msearch" type="search" placeholder="Search models" autocomplete="off" spellcheck="false" aria-controls="mlist"
+          ><button id="mrefresh" type="button" title="Ask the providers for their latest list" aria-label="Refresh the list" data-icon="refresh"></button></div>
+        <div id="mtabs"></div>
+        <div id="mlist" role="listbox" aria-label="Models"></div>
+        <div id="mfoot"></div>
+      </div>
       <div id="banners"></div>
       <div id="ask">
         <div class="hd"><span data-icon="shield"></span>Command approval <small>Syn wants to run a program</small></div>
@@ -729,8 +793,16 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
       </div>
       <textarea id="box" rows="1" placeholder="Ask Syn to do something with your open apps…"></textarea>
       <div id="bar">
-        <label class="pick" title="Which model to think with"><span data-icon="spark"></span
-          ><select id="task" aria-label="Model"></select><span class="caret" data-icon="chevron-down"></span></label>
+        <button id="mpick" class="pick" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="models"
+          title="Choose a model"><span data-icon="spark"></span><span id="mname">Automatic</span
+          ><span class="caret" data-icon="chevron-down"></span></button>
+        <label class="pick" id="thinkpick" title="How hard the model thinks before it answers"><span data-icon="bulb"></span
+          ><select id="think" aria-label="Thinking level">
+            <option value="auto">Thinking: auto</option>
+            <option value="low">Thinking: low</option>
+            <option value="medium">Thinking: medium</option>
+            <option value="high">Thinking: high</option>
+          </select><span class="caret" data-icon="chevron-down"></span></label>
         <div id="meter" class="holding" title="Step budget for this turn">
           <span class="track"><span class="fill"></span></span>
           <span class="nums"></span>
@@ -788,6 +860,9 @@ function verdict(out) {
 const ICONS = {
   spark: '<path fill="currentColor" stroke="none" d="M12 2.5c.7 4.9 3.4 7.6 8.5 8.5-5.1.9-7.8 3.6-8.5 8.5-.7-4.9-3.4-7.6-8.5-8.5 5.1-.9 7.8-3.6 8.5-8.5z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2h5c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
@@ -1041,24 +1116,223 @@ const scrollEnd = () => { scroll.scrollTop = scroll.scrollHeight; };
    The picker and the hand buttons are built from what the CLI reports, not
    from names written into this page: a model swapped in .env appears here
    untouched, and a hand nobody wired is not offered as a dead button. */
-async function loadSlots() {
-  const sel = $("task"), out = await cli("slots");
+/* ---------- the model and how hard it thinks ----------
+   The list is each provider's own `/models`, fetched by the server and
+   kept fresh while it runs, so a model released this morning is here
+   without anyone editing a file. Picking one types `model <provider> <id>`
+   into the CLI, and the thinking level `think <level>`: the page still
+   does nothing the CLI cannot. */
+const picker = { cat: { providers: [] }, tab: null, filter: new Set(), chosen: null, auto: "", shown: [], at: -1 };
+
+async function loadModels() {
+  // What "Automatic" means here: the model the .env slot resolves to.
+  const out = await cli("slots");
   const cur = (out.match(/current=(\S+)/) || [])[1];
-  sel.textContent = "";
-  for (const s of tagged(out, "SLOT")) {
-    const o = document.createElement("option");
-    o.value = s.task;
-    // The slot name is what a human picks by; the full id is the tooltip.
-    o.textContent = s.slot;
-    o.title = s.model || "";
-    if (s.task === cur) o.selected = true;
-    sel.appendChild(o);
+  picker.auto = (tagged(out, "SLOT").find(s => s.task === cur) || {}).model || "";
+  await fetchCatalog();
+  // The CLI is the truth: another window may have chosen already. Only a
+  // console that has chosen nothing gets what this browser last picked.
+  const has = (out.match(/ pick=(\S+)/) || [])[1] || "auto", on = (out.match(/ provider=(\S+)/) || [])[1];
+  const level = (out.match(/ think=(\S+)/) || [])[1] || "auto";
+  let saved = null, think = "auto";
+  try { saved = JSON.parse(localStorage.getItem("syn.model") || "null"); think = localStorage.getItem("syn.think") || "auto"; } catch {}
+  if (has !== "auto") {
+    const prov = (picker.cat.providers || []).find(p => p.name === on) || { name: on, label: on, models: [] };
+    const m = prov.models.find(x => x.id === has) || { id: has, name: has };
+    picker.chosen = { p: prov.name, label: prov.label, id: m.id, name: m.name, thinks: m.thinks };
+    paintChoice();
+  } else if (saved && saved.p && saved.id) await chooseModel(saved, true);
+  else paintChoice();
+  if (level !== "auto") $("think").value = level;
+  else if (think !== "auto" && [...$("think").options].some(o => o.value === think)) {
+    $("think").value = think;
+    await cli("think " + think);
   }
-  slotTitle();
+  paintThink();
 }
-function slotTitle() {
-  const o = $("task").selectedOptions[0];
-  $("task").closest(".pick").title = o && o.title ? "Thinking with " + o.title : "Which model to think with";
+
+async function fetchCatalog(force) {
+  try {
+    const r = await fetch("/models", force ? { method: "POST" } : {});
+    if (r.ok) picker.cat = await r.json();
+  } catch { /* the list stays what it was; the footer says when that was */ }
+  const ps = picker.cat.providers || [];
+  if (!ps.some(p => p.name === picker.tab)) picker.tab = (ps[0] || {}).name || null;
+}
+
+// "Anthropic: Something" reads as "Something" once the provider list is
+// grouped: the vendor is in the id underneath anyway.
+const shortName = m => String(m.name || m.id).replace(/^[^:]{1,40}:\s+/, "");
+const money = n => n >= 1 ? String(+n.toFixed(2)) : n >= 0.01 ? String(+n.toFixed(3)) : n > 0 ? "<0.01" : "0";
+const ctx = n => !n ? "" : n >= 1e6 ? +(n / 1e6).toFixed(1) + "M" : Math.round(n / 1000) + "K";
+function fetchedAgo(secs) {
+  if (!secs) return "never";
+  const d = Math.max(0, Date.now() / 1000 - secs);
+  return d < 90 ? "just now" : d < 5400 ? Math.round(d / 60) + " min ago" : d < 129600 ? Math.round(d / 3600) + " h ago" : Math.round(d / 86400) + " days ago";
+}
+
+function paintChoice() {
+  const c = picker.chosen;
+  $("mname").textContent = c ? shortName(c) : "Automatic";
+  $("mpick").title = c ? `${c.id} on ${c.label || c.p}` : "Automatic: " + (picker.auto || "the model in .env");
+  paintThink();
+}
+function paintThink() {
+  const c = picker.chosen, off = !!c && c.thinks === false;
+  $("thinkpick").classList.toggle("off", off);
+  $("thinkpick").title = off ? "This model does not think before it answers, so the level is ignored"
+    : "How hard the model thinks before it answers. More is slower and costs more.";
+}
+
+async function chooseModel(m, quiet) {
+  const out = await cli(m ? `model ${m.p} ${m.id}` : "model auto");
+  if (/^ERROR/m.test(out)) {
+    // A provider removed from .env since this was saved: say nothing on
+    // boot, fall back to automatic.
+    try { localStorage.removeItem("syn.model"); } catch {}
+    picker.chosen = null;
+    if (!quiet) $("mfoot").textContent = out.replace(/^ERROR\s+/m, "");
+  } else {
+    picker.chosen = m;
+    try { m ? localStorage.setItem("syn.model", JSON.stringify(m)) : localStorage.removeItem("syn.model"); } catch {}
+  }
+  paintChoice();
+  return !/^ERROR/m.test(out);
+}
+
+function openModels() {
+  $("models").classList.add("on");
+  $("mpick").setAttribute("aria-expanded", "true");
+  $("msearch").value = "";
+  paintModels();
+  $("msearch").focus();
+  // The server keeps it fresh; this only covers a list that has never
+  // arrived at all (a first start with the provider slow to answer).
+  if (!(picker.cat.providers || []).some(p => p.models.length)) {
+    $("mrefresh").classList.add("spinning");
+    fetchCatalog(true).then(() => { $("mrefresh").classList.remove("spinning"); paintModels(); });
+  }
+}
+function closeModels(refocus) {
+  if (!$("models").classList.contains("on")) return;
+  $("models").classList.remove("on");
+  $("mpick").setAttribute("aria-expanded", "false");
+  if (refocus) $("mpick").focus();
+}
+
+function paintModels() {
+  const ps = picker.cat.providers || [], prov = ps.find(p => p.name === picker.tab);
+  const tabs = $("mtabs");
+  tabs.textContent = "";
+  if (ps.length > 1) {
+    for (const p of ps) {
+      const b = el("button", "mchip", p.label);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(p.name === picker.tab));
+      b.appendChild(el("span", "n", String(p.models.length)));
+      b.onclick = () => { picker.tab = p.name; paintModels(); $("msearch").focus(); };
+      tabs.appendChild(b);
+    }
+  }
+  const models = prov ? prov.models : [];
+  // Filters only where the provider said something to filter on: a bare
+  // OpenAI list has no prices and no reasoning flag.
+  const can = { thinks: models.some(m => m.thinks === true), free: models.some(m => m.in === 0 && m.out === 0) };
+  for (const [k, label] of [["thinks", "Thinks"], ["free", "Free"]]) {
+    if (!can[k]) { picker.filter.delete(k); continue; }
+    const b = el("button", "mchip", label);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(picker.filter.has(k)));
+    b.onclick = () => { picker.filter.has(k) ? picker.filter.delete(k) : picker.filter.add(k); paintModels(); $("msearch").focus(); };
+    tabs.appendChild(b);
+  }
+
+  const words = $("msearch").value.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = models.filter(m => {
+    if (picker.filter.has("thinks") && m.thinks !== true) return false;
+    if (picker.filter.has("free") && !(m.in === 0 && m.out === 0)) return false;
+    const hay = (m.name + " " + m.id).toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
+
+  const list = $("mlist"), frag = document.createDocumentFragment();
+  list.textContent = "";
+  picker.shown = [];
+  if (!words.length && !picker.filter.size) {
+    const a = row(null);
+    frag.appendChild(a);
+  }
+  // Enough to scroll through; typing narrows the rest.
+  for (const m of hits.slice(0, 300)) frag.appendChild(row(m, prov));
+  if (!hits.length) {
+    const why = !models.length
+      ? (prov && prov.error ? "No list from " + prov.label + " yet." : "Asking for the list…")
+      : "Nothing matches that.";
+    frag.appendChild(el("div", "none", why));
+  }
+  list.appendChild(frag);
+  picker.at = -1;
+
+  const foot = $("mfoot");
+  foot.textContent = "";
+  if (prov) {
+    const n = hits.length > 300 ? ` · showing 300 of ${hits.length}, type to narrow` : "";
+    foot.appendChild(document.createTextNode(`${prov.label} · ${models.length} models · updated ${fetchedAgo(+prov.fetched)}${n}`));
+    if (prov.error) {
+      foot.appendChild(el("br"));
+      foot.appendChild(el("span", "warn", `Could not reach it just now (${prov.error}), so this is the last list it sent.`));
+    }
+    if (!prov.ready) {
+      foot.appendChild(el("br"));
+      const w = el("span", "warn", "No key for this provider yet: add it to .env to use these. ");
+      foot.appendChild(w);
+    }
+  }
+}
+
+function row(m, prov) {
+  const r = el("div", "mrow" + (m ? "" : " auto"));
+  r.setAttribute("role", "option");
+  const chosen = picker.chosen;
+  const on = m ? !!chosen && chosen.id === m.id && chosen.p === prov.name : !chosen;
+  r.setAttribute("aria-selected", String(on));
+  const nm = el("div", "mn");
+  if (!m) {
+    nm.innerHTML = svg("spark", 14);
+    nm.appendChild(document.createTextNode("Automatic"));
+    r.append(nm, el("div", "mi", picker.auto ? "the model set up for Syn: " + picker.auto : "the model set up for Syn"));
+    r.onclick = () => pick(null);
+  } else {
+    nm.textContent = shortName(m);
+    nm.title = m.name;
+    const meta = el("div", "mm"), tags = el("div", "tags");
+    if (m.thinks) tags.appendChild(el("span", "mtag thinks", "thinks"));
+    if (m.in === 0 && m.out === 0) tags.appendChild(el("span", "mtag free", "free"));
+    if (tags.childElementCount) meta.appendChild(tags);
+    const facts = [ctx(+m.context), m.in > 0 || m.out > 0 ? `$${money(+m.in)} / $${money(+m.out)}` : ""].filter(Boolean).join(" · ");
+    if (facts) {
+      const f = el("span", "", facts);
+      f.title = "Context window · dollars per million tokens in / out";
+      meta.appendChild(f);
+    }
+    r.append(nm, meta, el("div", "mi", m.id));
+    r.onclick = () => pick({ p: prov.name, label: prov.label, id: m.id, name: m.name, thinks: m.thinks });
+  }
+  picker.shown.push(r);
+  return r;
+}
+
+async function pick(m) {
+  if (await chooseModel(m)) closeModels(true);
+}
+
+function moveActive(d) {
+  const rows = picker.shown;
+  if (!rows.length) return;
+  if (picker.at >= 0) rows[picker.at].classList.remove("active");
+  picker.at = (picker.at + d + rows.length) % rows.length;
+  rows[picker.at].classList.add("active");
+  rows[picker.at].scrollIntoView({ block: "nearest" });
 }
 
 async function loadWiring() {
@@ -1771,7 +2045,29 @@ box.addEventListener("keydown", e => {
 $("send").onclick = send;
 $("ok").onclick = () => decide(true);
 $("no").onclick = () => decide(false);
-$("task").onchange = e => { slotTitle(); cli("task " + e.target.value); };
+$("mpick").onclick = () => $("models").classList.contains("on") ? closeModels(true) : openModels();
+$("msearch").addEventListener("input", paintModels);
+$("msearch").addEventListener("keydown", e => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); moveActive(e.key === "ArrowDown" ? 1 : -1); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const r = picker.shown[picker.at >= 0 ? picker.at : picker.shown.length === 1 ? 0 : -1];
+    if (r) r.click();
+  } else if (e.key === "Escape") { e.stopPropagation(); closeModels(true); }
+});
+$("mrefresh").onclick = async () => {
+  $("mrefresh").classList.add("spinning");
+  await fetchCatalog(true);
+  $("mrefresh").classList.remove("spinning");
+  paintModels();
+};
+document.addEventListener("pointerdown", e => {
+  if (!e.target.closest("#models,#mpick")) closeModels(false);
+});
+$("think").onchange = async e => {
+  const out = await cli("think " + e.target.value);
+  if (!/^ERROR/m.test(out)) try { localStorage.setItem("syn.think", e.target.value); } catch {}
+};
 $("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); closeSideOnPhone(); box.focus(); };
 window.addEventListener("hashchange", () => {
   const id = location.hash.slice(1);
@@ -1786,7 +2082,7 @@ $("hands").onclick = e => {
   $("hands").setAttribute("aria-expanded", String(open));
 };
 document.addEventListener("click", e => { if (!pop.contains(e.target)) closePop(); });
-window.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+window.addEventListener("keydown", e => { if (e.key === "Escape") { closePop(); closeModels(false); } });
 $("killbtn").onclick = () => { closePop(); run("kill"); };
 $("handsbtn").onclick = () => { closePop(); run("hands"); };
 $("evbtn").onclick = () => { closePop(); run("events"); };
@@ -1835,7 +2131,7 @@ $("contrast").addEventListener("input", e => setContrast(e.target.value));
     // Read the requested thread before loadChats() rewrites the hash to
     // whatever the CLI considers current.
     const want = location.hash.slice(1);
-    await loadSlots(); await loadWiring(); await loadChats();
+    await loadModels(); await loadWiring(); await loadChats();
     if (want && want !== current) await openChat(want); else await refresh();
     await hands();
   }

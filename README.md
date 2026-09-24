@@ -19,6 +19,8 @@ software hands (Office first) in one live session, any model via OpenRouter.
     helper if it is not running, open the file, bind the handle live.
   - `json` — a small JSON parser, for the one component that speaks a
     nested protocol.
+  - `catalog` — the model list: each provider's own `GET /models`,
+    cached in `.agent/models.json` and refreshed while the console runs.
   - `router/queue/runner/paths/stream/snapshots/acp/vfs/ooxml` — as before.
   - `agent` — the loop: a goal becomes tool calls, one per step, each
     dispatched through `Runner` so it meets every gate. `Brain` is a seam,
@@ -184,8 +186,20 @@ switches between system, light and dark, and sets contrast. The visual
 design is digested from t3code in `docs/DIGEST-09-t3code-visual.md`.
 
 Conversations are saved to `.agent/chats` after every turn and listed newest
-first. Switching the model slot applies to the next turn of the conversation
-you are in, which is what makes a 429 on a free-tier model survivable.
+first.
+
+The model button in the composer opens a searchable list of every model
+your provider serves that can call tools, with its context size, its price
+per million tokens and whether it can think. The list is the provider's own
+`/models`, fetched at start, again every 15 minutes while the console runs,
+and on demand with the refresh button, so a model released today shows up
+without editing anything. It lists OpenRouter by default, and also OpenCode
+Zen once `AGENT_API_KEY_OPENCODE` is set; an endpoint of your own in
+`AGENT_BASE_URL` gets its list read the same way. "Automatic" means the model
+in `.env`. Beside it, the thinking level (auto, low, medium, high) sets how
+hard the model reasons before it answers; auto leaves it to Syn. Both apply
+to the next turn of the conversation you are in, which is what makes a 429
+on a free-tier model survivable: pick another and send again.
 
 It binds 127.0.0.1 only, and a command is refused unless its `Origin` is
 the console's own (and refused outright with none). Browsers attach
@@ -217,7 +231,9 @@ unverified on real Office: `docs/11-mcp.md`.
 cli.exe
   attach excel plan.xlsx Sheet1
   shellallow hostname            # empty by default: nothing may run
-  task code                      # which router slot to think with
+  models atlas                   # search the providers' model lists
+  model openrouter vendor/model  # talk to that model (model auto: the .env slot)
+  think high                     # low|medium|high, or auto
   do Read the sheet and write its shape into the report.
 ```
 

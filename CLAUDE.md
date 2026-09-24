@@ -25,7 +25,9 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
   - `hand.rs`: the `office-rpc/1` transport (JSON lines over a named pipe).
     `cdp.rs` + `ws.rs` are the browser hand.
   - `provider.rs`, `config.rs`, `router.rs`: request bodies, `.env`
-    loading, and the four model slots.
+    loading, and the four model slots. `catalog.rs` is the console's model
+    list: each provider's `GET /models`, cached in `.agent/models.json`;
+    `ui` refreshes it in the background and serves it at `/models`.
   - `mcpgate.rs` + `desk.rs`: the MCP server (`docs/11-mcp.md`). Its
     document tools are generated from `tools::TOOLS` and a test fails if
     they drift; `desk` connects hands, starts helpers and opens files.

@@ -8,7 +8,7 @@ launch, open, bind, first look), the gates, the `office-rpc/1` wire, the
 guidance a model reads, and that the documents end up right -- checked by
 unzipping the exported files, not by asking Syn. What it cannot prove is
 anything about Microsoft Office or the C# helper; that is tier 3, on
-Windows (docs/10, docs/11).
+Windows (docs/development.md, docs/mcp.md).
 
 Skips without LibreOffice + python3-uno or a built `mcpgate`, unless
 SYN_REQUIRE_LO=1 (CI's libreoffice job), where a missing piece is a failure.

@@ -11,7 +11,7 @@
 //! "Drew a chart on Dashboard". A run that makes forty `office-rpc/1`
 //! envelopes reads as three sentences instead of forty lines.
 //!
-//! It lives in `core`, not in a renderer, for the reason `docs/09` gives:
+//! It lives in `core`, not in a renderer, for the reason `docs/design/split-plan.md` gives:
 //! a label describes a **world tool**, so it belongs with the vocabulary it
 //! describes and travels to every client over the existing event feed. It is
 //! also pure, which is why every line of it is tested without a document, a

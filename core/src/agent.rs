@@ -1530,7 +1530,7 @@ mod tests {
         // 142 and step 101 the provider answered `413 Request too large`,
         // with two of three documents untouched.
         //
-        // The policy is opencode's (DIGEST-06 section 5): walk newest
+        // The policy is opencode's (docs/design/DIGEST-06 section 5): walk newest
         // first, protect the last turn outright, protect the newest
         // PRUNE_PROTECT characters of tool output, and only act at all if
         // the saving clears PRUNE_MINIMUM.

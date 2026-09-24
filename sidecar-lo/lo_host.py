@@ -12,7 +12,7 @@ desk, the gates, the hand transport, the wire format, the guidance a model
 reads -- can then be tested against a real office engine that evaluates
 formulas and writes real .xlsx/.docx/.pptx files, on Linux, in CI. What it
 cannot test is the C# itself: COM quirks, Excel's own behaviour, the
-single-instance rules in docs/runbook-windows.md. A green run here is
+single-instance rules in docs/troubleshooting.md. A green run here is
 evidence about everything except the Windows helper.
 
 Run:  python3 lo_host.py --pipe hand-excel --app excel [--trace]

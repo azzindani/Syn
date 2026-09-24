@@ -4,7 +4,7 @@
 //! behind any client -- start `mcpgate` and get the same tools Syn's own
 //! loop uses, reaching the same open documents through the same gates.
 //!
-//! Three rules, each the fix for something `docs/09` section 4 found:
+//! Three rules, each the fix for something `docs/design/split-plan.md` section 4 found:
 //!
 //!   - **One surface.** Every document tool is generated from
 //!     `tools::TOOLS`: its name, its description with its worked example,
@@ -84,7 +84,7 @@ RULES
 - Nothing here closes or saves a document. The user saves.";
 
 /// The pages `manual` offers here. The `loop` page is about Syn's own
-/// budget and plan, which an outside client does not have (docs/09 §3), and
+/// budget and plan, which an outside client does not have (docs/design/split-plan.md §3), and
 /// the index points at it, so neither is offered.
 const MANUAL_TOPICS: &[&str] = &["excel", "word", "powerpoint", "windows", "browser"];
 
@@ -144,7 +144,7 @@ struct Def {
 /// client's prompt cache holds): the two a session starts with, then the
 /// six document ops exactly as `tools::TOOLS` defines them, then the manual.
 /// `shell` is not here: it always stops for a human, and that human and
-/// their approval prompt live in Syn's own app (docs/09 §3).
+/// their approval prompt live in Syn's own app (docs/design/split-plan.md §3).
 fn defs() -> Vec<Def> {
     let parse = |t: &str| json::parse(t).expect("a compiled-in schema is valid JSON");
     let mut out = vec![
@@ -719,7 +719,7 @@ mod tests {
 
     #[test]
     fn the_document_tools_are_the_loops_own_and_cannot_drift() {
-        // docs/09 §4: the old list told clients `payload` where the tool
+        // docs/design/split-plan.md §4: the old list told clients `payload` where the tool
         // reads `values`. Now there is one definition, and this holds it.
         let (mut srv, _) = server();
         let v = ask(&mut srv, r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#);

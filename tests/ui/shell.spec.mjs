@@ -1,6 +1,6 @@
 // The parts of t3code's shell that a long run needs, checked.
 //
-// docs/DIGEST-08 named five things beyond the tool rows: the three-layer
+// docs/design/DIGEST-08 named five things beyond the tool rows: the three-layer
 // contrast tokens (section 8), the timeline minimap (section 5), the
 // banner stack with activity outranking error (section 6), the budget
 // meter that says what will happen (section 7), and long messages folding

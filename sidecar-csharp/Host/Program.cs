@@ -13,10 +13,11 @@
 // - write paths copy a .bak snapshot before save (mirrors core undo).
 // - late binding (dynamic) only: no PIAs, no NuGet, compiles anywhere.
 // - untrusted opens set AutomationSecurity=ForceDisable (3).
-// STATUS: compiles on .NET 8 and verified against live Excel on Windows 11
-// (read/write/error paths, attach-to-open-workbook, detach without closing
-// the user's app, no orphans). Word and PowerPoint paths are written but
-// NOT yet exercised live -- see docs/runbook-windows.md.
+// STATUS: compiles on .NET 8. Verified against live Office on Windows 11:
+// Excel read/write/error paths, attach-to-open-workbook, detach without
+// closing the user's app, no orphans; Word and PowerPoint through the
+// capability test's scripted run. scripts/live-office-peak.ps1 covers every
+// verb. The lessons behind this design: docs/troubleshooting.md.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

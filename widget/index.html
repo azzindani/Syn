@@ -17,8 +17,8 @@
 </script>
 <style>
 /* ---------------- tokens, in three layers ----------------
-   t3code's system, not a palette. See docs/DIGEST-08 section 8 and
-   docs/DIGEST-09 for the visual layer on top of it.
+   t3code's system, not a palette. See docs/design/DIGEST-08 section 8 and
+   docs/design/DIGEST-09 for the visual layer on top of it.
 
    1. `--raw-*` is the theme: the colour someone picked.
    2. `--foreground`, `--border`, ... are DERIVED from the raw layer by
@@ -402,7 +402,7 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 .act .bad{flex:none;font-size:11px;font-weight:550;padding:1px 7px;border-radius:99px}
 /* Three registers, not two. A refusal is the application saying no and the
    model can try again; a stop is the run being over. Colouring them alike
-   is the conflation docs/DIGEST-08 §3 is about. */
+   is the conflation docs/design/DIGEST-08 §3 is about. */
 .act[data-status="refused"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
 .act[data-status="failed"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
 .act[data-status="stopped"] .bad{color:var(--error-foreground);background:var(--error-surface)}
@@ -612,7 +612,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   #pop{position:fixed;left:12px;right:12px;top:62px;width:auto}}
 
 /* ---------------- the timeline minimap ----------------
-   docs/DIGEST-08 section 5. One tick per user turn in the left gutter,
+   docs/design/DIGEST-08 section 5. One tick per user turn in the left gutter,
    invisible until the pointer is near, tapering by distance from the
    cursor, with a preview card and full keyboard navigation.
 
@@ -648,7 +648,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   overflow:hidden;color:var(--foreground)}
 
 /* ---------------- the banner stack ----------------
-   docs/DIGEST-08 section 6. Everything the run needs to say at once,
+   docs/design/DIGEST-08 section 6. Everything the run needs to say at once,
    in priority order, with only the front one shown.
 
    "Activity stays attached. Urgency and severity only order the notices
@@ -674,7 +674,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 #peek:hover{border-color:var(--input);color:var(--foreground)}
 
 /* ---------------- a long pasted message folds away ----------------
-   docs/DIGEST-08 section 9. A pasted log must not push the conversation
+   docs/design/DIGEST-08 section 9. A pasted log must not push the conversation
    off the screen. Mask rather than a hard cut, so it reads as more
    text rather than as a bug. */
 .you.tall{max-height:11rem;overflow:hidden;
@@ -694,7 +694,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 .seam::before,.seam::after{content:"";flex:1;height:1px;background:var(--border)}
 
 /* ---------------- the budget meter ----------------
-   docs/DIGEST-08 section 7. It says what will happen, not just where
+   docs/design/DIGEST-08 section 7. It says what will happen, not just where
    you are, and its slot is reserved while the number loads so the
    controls beside it do not jump. */
 #meter{display:flex;align-items:center;gap:8px;min-height:18px;font-size:11.5px;
@@ -2213,7 +2213,7 @@ $("contrast").addEventListener("input", e => setContrast(e.target.value));
 })();
 
 /* ---------------- the contrast dial ----------------
-   docs/DIGEST-08 section 8. One function, three custom properties, and
+   docs/design/DIGEST-08 section 8. One function, three custom properties, and
    every colour in the app moves. No component knows it exists. */
 function setContrast(v) {
   const n = Math.max(0, Math.min(200, Number(v) || 100));
@@ -2230,7 +2230,7 @@ try { const c = localStorage.getItem("contrast"); if (c) setContrast(c); } catch
 
 /* ---------------- the banner stack ----------------
    Activity outranks urgency outranks notice, only the front one shows,
-   the rest collapse behind a count. docs/DIGEST-08 section 6. */
+   the rest collapse behind a count. docs/design/DIGEST-08 section 6. */
 const banners = new Map();
 let bannersOpen = false;
 
@@ -2290,7 +2290,7 @@ function bannerRow(b) {
 /* ---------------- the step budget ----------------
    Says what will happen, not only where you are. The slot is held while
    the number is unknown so the send button beside it does not jump.
-   docs/DIGEST-08 section 7. */
+   docs/design/DIGEST-08 section 7. */
 function setBudget(step, max) {
   const m = $("meter");
   if (!m) return;
@@ -2310,7 +2310,7 @@ function setBudget(step, max) {
    One tick per user turn, in the gutter, tapering by distance from the
    pointer, with a preview and arrow-key navigation. Inert when the
    window is too narrow for a gutter, rather than overlaying the text.
-   docs/DIGEST-08 section 5. */
+   docs/design/DIGEST-08 section 5. */
 let turns = [];
 let mapAt = null;
 

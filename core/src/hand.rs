@@ -13,7 +13,7 @@
 //!
 //! Framing matches the sidecar exactly: byte mode, UTF-8 with no BOM, one
 //! object per line. Both of those were learned the hard way against live
-//! Excel; see `docs/runbook-windows.md`.
+//! Excel; see `docs/troubleshooting.md`.
 
 use crate::ops::{Call, ExportArgs, FormatArgs, ReadArgs, StructArgs, WriteArgs};
 use std::io::{BufRead, BufReader, Read, Write};

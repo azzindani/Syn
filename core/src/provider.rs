@@ -406,16 +406,16 @@ pub fn worth_another_model(err: &str) -> bool {
 /// overloaded provider recovers. Walking straight to the next slot on one
 /// blip cost two capability runs the model they were meant to be testing:
 /// both switched off the model named in the experiment at step ~15 and
-/// spent the rest of the run on a weaker one. `08-production-grade.md`
-/// lists opencode's exponential backoff as ported; only the model-fallback
-/// half of it ever landed.
+/// spent the rest of the run on a weaker one. An early plan listed
+/// opencode's exponential backoff as ported; only the model-fallback half
+/// of it ever landed.
 pub fn worth_waiting(err: &str) -> bool {
     retryable_message(err)
 }
 
 // ---- retry, ported from opencode `session/retry.ts` --------------------
 //
-// See `docs/DIGEST-06-opencode-loop.md` §3. The previous version here was
+// See `docs/design/DIGEST-06-opencode-loop.md` §3. The previous version here was
 // a fixed `[2, 6, 15]` with no jitter and, worse, no reading of
 // `Retry-After`: the provider states how long to wait and we ignored it.
 

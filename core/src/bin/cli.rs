@@ -265,7 +265,7 @@ fn status_name(s: core::labels::Status) -> &'static str {
 
 /// Ask the same model again, waiting the way opencode waits.
 ///
-/// Ported from `session/retry.ts`; see `docs/DIGEST-06-opencode-loop.md`
+/// Ported from `session/retry.ts`; see `docs/design/DIGEST-06-opencode-loop.md`
 /// §3. Three things this does that the fixed `[2s, 6s, 15s]` before it did
 /// not:
 ///

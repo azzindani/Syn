@@ -10,7 +10,7 @@ console all use it the same way they use office-host on Windows.
 It exists so the whole stack can be tested against a real office engine
 that evaluates formulas and writes real `.xlsx`, `.docx` and `.pptx` files,
 anywhere, in CI. It does not test the C# helper, COM or Excel itself; that
-is still tier 3, on Windows (`docs/10`, `docs/11`).
+is still tier 3, on Windows (`docs/development.md`).
 
 ## Requirements
 
@@ -41,15 +41,24 @@ running headless.
 
 ## What it does, and what it refuses
 
-| App | Handled |
-|---|---|
-| Excel (Calc) | `open`, `read` (values, the 200-cell cap, sheet list on a bad sheet), `write` (grids, Excel-syntax formulas, one formula filled over a range), `format` (all of office-host's keys), `addSheet`, `chart` (line, bar, column, pie; `style`), `export` (xlsx, pdf, csv) |
-| Word (Writer) | `open`, `read` (`body`, `p0`, `p1` …), `write` (`pN`), `insertParagraph` (with style), `insertTable`, `pageBreak`, `export` (docx, pdf) |
-| PowerPoint (Impress) | `open`, `read` (`deck`, `sN`, `sN.notes`), `createSlide` (layouts, bullets, `>` sub-bullets), `write` (`sN` title, `sN.notes`), `export` (pptx, pdf) |
+Every app: `open`, `read`, `write`, `export` (a copy; `summary` needs no
+path), `undo`, `find`, `replace`, `delete`.
 
-Everything else (pivots, slicers, tables, conditional formats, VBA, contents,
-page numbers, pictures, charts to PNG) is refused with
-`unsupported <app>.<method> on the LibreOffice helper`, never faked.
+| App | Also handled |
+|---|---|
+| Excel (Calc) | `format`, `insert`, `sort`, `copy`, `sheet` (rename, delete, copy, hide, show), `addSheet`, `chart` (line, bar, column, pie), `comment`, `header`, `pageNumbers`; export xlsx, csv (any sheet), pdf. Formulas are written in Excel's English syntax. |
+| Word (Writer) | `read` as numbered text (`body`, `p3`, `p3:p9`), `insertParagraph` (with style, at a position), `insertTable`, `pageBreak`, `comment`, `header`; export docx, pdf. |
+| PowerPoint (Impress) | `createSlide` (layouts, bullets, `>` sub-bullets), `write` (`sN` title, `sN.notes`), `duplicateSlide`, `textBox`, `pageSetup` (slide size); export pptx, pdf. |
+
+Every other verb is refused with `unsupported <app>.<method> on the
+LibreOffice helper`, never faked: among them pivots, slicers, filters,
+validation, conditional formats, VBA, contents, pictures, page setup outside
+decks, PNG exports, moving slides and themes.
+
+Undo uses LibreOffice's own undo list for Calc and Writer, and a record of
+its own for decks (Impress changes made through the API do not reach
+LibreOffice's undo list); undoing a deleted or moved slide is refused.
+
 `core/tests/wire_contract.rs` checks that every method handled here is one
 the Rust side sends, and that the core set above is still handled.
 

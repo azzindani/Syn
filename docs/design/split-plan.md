@@ -1,7 +1,7 @@
-# 09 — Splitting the harness from the tools
+# Splitting the harness from the tools
 
 Date: 2026-09-20
-Status: scenario, not a decision. Nothing here is scheduled.
+Status: phases 0–2 built (2026-09-24); phases 3–4 are a scenario, not a decision.
 
 A plan for the day this becomes two things: an **MCP server** that drives the
 applications on this machine, and a **harness** that thinks. Written now,
@@ -14,7 +14,7 @@ Three reasons, in the order they are likely to bite.
 
 **Someone else's brain.** The hands are the hard part and the rare part.
 Late-bound COM into a live Office instance, a UIA tree, a CDP session — that
-is a year of other people's debugging (see `runbook-windows.md` §0). The
+is a year of other people's debugging (see `../troubleshooting.md`). The
 agent loop is the replaceable part: Claude Code, Claude Desktop, OpenCode and
 Cursor all ship one, and all of them speak MCP. As an MCP server, the agent's hands
 become usable from a brain nobody here has to build or pay for.
@@ -73,7 +73,7 @@ for another client. It stays harness-side.
 
 **The event feed is the hard one.** `step.start` / `step.live` / `step.done`
 is what makes a run watchable, and it is the answer to the headless-blind
-problem this project was started over (`07-live-orchestration.md`). MCP is
+problem this project was started over. MCP is
 request/response with server notifications; a per-op progress stream is
 expressible but is not what most clients render. Options, none free:
 
@@ -97,7 +97,7 @@ documents.
 
 ## 4. What is actually in the way today
 
-> **Both fixed 2026-09-24** — see `11-mcp.md`. `mcpgate` is now a real MCP
+> **Both fixed 2026-09-24** — see `../mcp.md`. `mcpgate` is now a real MCP
 > server generated from `tools::TOOLS` with real schemas, and every caller
 > reaches a document through `Runner::run`. Kept below as the record of
 > why.
@@ -115,7 +115,7 @@ against `tools::TOOLS`, which calls those arguments `values`, and those verbs
 that do not exist.** It also ships no JSON Schema at all — no
 `inputSchema`, so none of the closed-schema work (`additionalProperties:
 false`, caps, refuse-don't-truncate) reaches an external caller. Every
-security property argued for in `08-production-grade.md` is in-process only.
+security property in `../security.md` was in-process only.
 
 Fix before anything else: `mcpgate` builds its list from `tools::TOOLS`,
 with `tools::spec_json` reshaped for MCP's `inputSchema`. One source of

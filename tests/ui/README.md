@@ -33,6 +33,9 @@ the binary, because that failure is silent and completely convincing.
 | `harness.spec.mjs` | does a command reach a document, change it, and stop when a gate says stop | nothing | ~9s |
 | `render.spec.mjs` | is what a human reads legible | nothing | ~5s |
 | `stream.spec.mjs` | is the live view actually live | nothing | ~26s |
+| `concurrent.spec.mjs` | do two runs at once each keep their own view | nothing | |
+| `shell.spec.mjs` | do the minimap, banners, budget meter, contrast and folding work | nothing | |
+| `models.spec.mjs` | does the model picker list, search and choose models | nothing (a local fake provider) | |
 | `chat.spec.mjs` | does a typed prompt reach a model and come back | `AGENT_API_KEY` and whichever model `.env` wires to the current slot | one model call |
 
 Everything but `chat.spec.mjs` is offline: no key, no network, no Office.

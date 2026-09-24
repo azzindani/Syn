@@ -4,8 +4,8 @@ Syn is a desktop agent for one user on one machine. One chat session and one
 event feed drive the apps already open: Word, Excel and PowerPoint through
 COM, native windows through UI Automation, and browsers or Electron apps
 through Chrome DevTools. Any OpenAI-compatible chat-completions endpoint
-works (OpenRouter by default). Start with `README.md`. The design history is
-in `docs/`, and `docs/09` and `docs/10` are the most current.
+works (OpenRouter by default). Start with `README.md`; the documentation
+index is `docs/README.md`, and background notes are in `docs/design/`.
 
 ## Layout
 
@@ -28,7 +28,7 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
     loading, and the four model slots. `catalog.rs` is the console's model
     list: each provider's `GET /models`, cached in `.agent/models.json`;
     `ui` refreshes it in the background and serves it at `/models`.
-  - `mcpgate.rs` + `desk.rs`: the MCP server (`docs/11-mcp.md`). Its
+  - `mcpgate.rs` + `desk.rs`: the MCP server (`docs/mcp.md`). Its
     document tools are generated from `tools::TOOLS` and a test fails if
     they drift; `desk` connects hands, starts helpers and opens files.
     Every MCP call goes through `Runner::run`, like the loop's.
@@ -52,7 +52,7 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
 - `protocol/`: the rpc catalog and the default-deny security policy (JSON).
 - `widget/index.html`: the whole console UI, one file, no dependencies,
   compiled into `ui`. Its visual design is digested from t3code in
-  `docs/DIGEST-09-t3code-visual.md`. It keys icons off a row's `app` and
+  `docs/design/DIGEST-09-t3code-visual.md`. It keys icons off a row's `app` and
   `tool`, never off a verb (`core/tests/console_contract.rs`).
 - `tests/ui/`: Playwright against the real console.
   `tests/capability/`: the v0.1.0 capability test and its recorded runs.
@@ -81,7 +81,7 @@ light, desktop and phone, to `testbed/shots/showcase`: look at them.
 
 ## What a cloud session can and cannot verify
 
-There are three tiers (`docs/10-adding-tools-remotely.md`):
+There are three tiers (`docs/development.md`):
 1. `cargo test`, anywhere. This covers the loop, the parser, the schemas,
    and `core/tests/wire_contract.rs`, which fails if a method `hand.rs` can
    send has no handler in the C# sidecars.
@@ -122,7 +122,7 @@ A verb that needs its own parsing gets the full recipe, in order: `ops.rs`
 (`envelope_for`) → `Program.cs` (a case in the method switch) → `cli.rs`
 (an optional command) → `manual.rs` (reference only: it must never name the
 fixture or prescribe an order, and a test enforces this) → tests. The full
-recipe is in `docs/10`.
+recipe is in `docs/development.md`.
 
 Every Office verb gets a step in `scripts/live-office-peak.ps1`, which runs
 them all against real Office and is how a change is proved on Windows.
@@ -153,7 +153,7 @@ them all against real Office and is how a change is proved on Windows.
   and never Python office-file libraries (openpyxl, python-docx, ...).
 - **The sidecar never closes or saves what it did not open.** Office COM
   servers are single-instance per user, so quitting one can close the
-  user's own work. Read the lessons in `docs/runbook-windows.md` §0 before
+  user's own work. Read the lessons in `docs/troubleshooting.md` before
   editing the C#. A helper serves up to eight clients at once, but COM
   calls stay on office-host's one STA thread: listeners queue work to it
   and never call COM themselves. In particular, PowerPoint's `Visible`, `DisplayAlerts`,
@@ -172,7 +172,7 @@ The project is vendor-neutral. Model slots are named by job: `small`,
 `routine`, `code`, `deep` and `vision`. Every slot defaults to
 `openrouter/auto`. Don't bring vendor model names or tier names into code,
 config, docs or tests. The one exception is a verbatim quote of someone
-else's source in a `docs/DIGEST-*` note.
+else's source in a `docs/design/DIGEST-*` note.
 
 ## Style
 

@@ -242,7 +242,7 @@ impl Runner {
     /// document without meeting the kill switch, the app allowlist, the VBA
     /// gate, the doom-loop gate, the registry check and the event feed.
     /// `mcpgate` used to be the exception: its writes built an envelope
-    /// and never met any of them (docs/09 section 4).
+    /// and never met any of them (docs/design/split-plan.md section 4).
     ///
     /// `Ok(None)` means the queue is not running: paused, cancelled or
     /// frozen by the doom-loop gate.

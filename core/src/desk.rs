@@ -411,6 +411,17 @@ impl Desk {
             let live = if self.runner.is_live(h) { "" } else { " (not connected to a live app)" };
             out.push_str(&format!("  {h}{live}{}\n", if about.is_empty() { String::new() } else { format!(" -- {about}") }));
         }
+        // The selector grammar of each app open, once each: the handle and
+        // how to address a part of it, side by side.
+        let mut shown: Vec<&str> = Vec::new();
+        for h in &open {
+            let app = crate::coach::app_key(h.split(':').next().unwrap_or(""));
+            let line = crate::coach::selectors(app);
+            if !line.is_empty() && !shown.contains(&app) {
+                shown.push(app);
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
 
         out.push_str("\nCAN OPEN\n");
         for app in APPS {
@@ -447,7 +458,7 @@ pub fn explain(app: &str, e: Error) -> String {
             "the connection to {}'s helper broke ({d}). Call `open` again to reconnect.",
             app_name(app)
         ),
-        other => other.to_string(),
+        other => crate::coach::explain(app, &other.to_string(), crate::coach::Caller::Mcp),
     }
 }
 
@@ -850,6 +861,16 @@ mod tests {
     fn desk() -> (Desk, std::rc::Rc<std::cell::RefCell<Log>>) {
         let (c, log) = FakeConnector::new();
         (Desk::new("t", Box::new(c)), log)
+    }
+
+    #[test]
+    fn status_puts_the_selector_grammar_beside_the_open_documents() {
+        let (mut d, _) = desk();
+        d.open("excel", &std::env::temp_dir().join("a.xlsx").to_string_lossy()).unwrap();
+        d.open("excel", &std::env::temp_dir().join("b.xlsx").to_string_lossy()).unwrap();
+        let st = d.status();
+        let open = &st[st.find("OPEN DOCUMENTS").unwrap()..st.find("CAN OPEN").unwrap()];
+        assert_eq!(open.matches("Excel selectors name the sheet").count(), 1, "{open}");
     }
 
     #[test]

@@ -194,6 +194,11 @@ class LiveAgainstLibreOffice(unittest.TestCase):
         err, text = self.call("open", app="excel", path="/etc/other.xlsx")
         self.assertTrue(err)
         self.assertIn("outside the folders", text)
+        # The application's own refusal, with what it means after it.
+        err, text = self.call("open", app="excel", path=os.path.join(self.docs, "nope.xlsx"))
+        self.assertTrue(err)
+        self.assertIn("no such file", text)
+        self.assertIn("What to do: No file exists at that path", text)
 
 
 @unittest.skipIf(REASON, REASON or "")

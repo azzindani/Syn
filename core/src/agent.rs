@@ -397,6 +397,19 @@ impl Agent {
                     if *live { " (live: reaches the window they are looking at)" } else { " (model only: no hand is driving it)" }
                 ));
             }
+            // How to address each kind of thing that is open, once per app
+            // and only for apps that are: the grammar where the handles are,
+            // before the first call, not in a refusal after the first miss.
+            let mut apps: Vec<&str> = Vec::new();
+            for (h, _) in open {
+                let app = crate::coach::app_key(h.split(':').next().unwrap_or(""));
+                if !apps.contains(&app) && !crate::coach::selectors(app).is_empty() {
+                    apps.push(app);
+                }
+            }
+            for app in apps {
+                t.push_str(&format!("{}\n", crate::coach::selectors(app)));
+            }
             t
         };
         self.registry_note = text;
@@ -1131,7 +1144,12 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                         let why = e.to_string();
                         // The model sees why it failed and may correct, but a
                         // latched kill or a dead pipe ends the run outright.
-                        self.observe(&tc.id, &format!("error: {why}"));
+                        // What the application said stays first; a known
+                        // failure gets one line of what to do after it,
+                        // because `com 0x800A03EC` alone teaches a model
+                        // nothing but to try the same call again.
+                        let app = handle_for_status.split(':').next().unwrap_or("");
+                        self.observe(&tc.id, &format!("error: {}", crate::coach::explain(app, &why, crate::coach::Caller::Loop)));
                         let fatal = matches!(
                             e,
                             crate::protocol::Error::Killed
@@ -1264,6 +1282,47 @@ mod tests {
             // test's budget leaked into every test that ran after it.
             unsafe { std::env::remove_var("AGENT_CONTEXT_CHARS") };
         }
+    }
+
+    /// A live Excel that is busy, answering the way office-host does.
+    #[derive(Debug)]
+    struct BusyExcel;
+
+    impl crate::hand::LiveHand for BusyExcel {
+        fn dispatch_call(&mut self, _: &crate::ops::Call, _: &str) -> std::io::Result<crate::hand::Reply> {
+            Ok(crate::hand::Reply {
+                ok: false,
+                preview: String::new(),
+                error: "com 0x800AC472: Exception from HRESULT: 0x800AC472".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn the_registry_says_how_to_address_each_kind_of_thing_open() {
+        let mut a = agent("x");
+        a.show_registry(&[
+            ("excel:plan.xlsx:Sheet1".into(), true),
+            ("excel:other.xlsx:data".into(), true),
+            ("ui:Calculator::self".into(), true),
+        ]);
+        let Some(Msg::System(note)) = a.msgs.get(1) else { panic!("no status note") };
+        assert_eq!(note.matches("Excel selectors name the sheet").count(), 1, "once per app, not per handle: {note}");
+        assert!(note.contains(":tree"), "{note}");
+        assert!(!note.contains("Word selectors"), "only for apps that are open: {note}");
+    }
+
+    #[test]
+    fn a_busy_application_is_explained_to_the_model_not_just_reported() {
+        let (mut r, mut run, _s, h) = world();
+        run.attach_hand_as("hand-excel", vec!["excel".into()], Box::new(BusyExcel));
+        run.mark_live(&h).unwrap();
+        let mut a = agent("read it");
+        let mut brain = FakeBrain::new(&[call_reply("read", &format!(r#"{{"handle":"{h}","selector":"Sheet1!A1"}}"#))]);
+        let _ = a.step(&mut brain, &mut r, &mut run, &ShellPolicy::default());
+        let Some(Msg::Tool { content, .. }) = a.msgs.last() else { panic!("no result") };
+        assert!(content.contains("0x800AC472"), "the application's words stay: {content}");
+        assert!(content.contains("What to do:") && content.contains("press Esc"), "{content}");
     }
 
     #[test]

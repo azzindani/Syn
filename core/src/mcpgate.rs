@@ -62,7 +62,7 @@ Syn drives Excel, Word, PowerPoint, a web browser and other windows that are ope
 HOW TO WORK
 1. Call `status` first. It lists open documents and the exact handle for each.
 2. If the document you need is not listed, call `open` with the app and the file's FULL path, e.g. open{\"app\":\"excel\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\sales.xlsx\"}. It starts the application if needed and returns the handle.
-3. Before your first change in an application, call `manual` for it once (excel, word or powerpoint).
+3. Before your first change in an application, call `manual` for it once (excel, word, powerpoint, windows or browser).
 4. Look before you change: `read` a small range first.
 5. Change with `write`, `format` and `struct`. Then `read` again to check the result.
 6. When the job is done, tell the user in plain words what changed and where.
@@ -86,7 +86,7 @@ RULES
 /// The pages `manual` offers here. The `loop` page is about Syn's own
 /// budget and plan, which an outside client does not have (docs/09 §3), and
 /// the index points at it, so neither is offered.
-const MANUAL_TOPICS: &[&str] = &["excel", "word", "powerpoint"];
+const MANUAL_TOPICS: &[&str] = &["excel", "word", "powerpoint", "windows", "browser"];
 
 /// Per-tool behaviour hints (MCP ToolAnnotations): read-only, destructive,
 /// idempotent, open-world. Clients use them to decide what to confirm.
@@ -174,18 +174,6 @@ fn example_of(description: &str) -> Option<String> {
     let ex = &description[i..];
     let ex = ex.find(" Bad:").map_or(ex, |j| &ex[..j]);
     Some(ex.chars().take(420).collect())
-}
-
-/// How selectors look in each app, for a refusal about one.
-fn selector_hint(app: &str) -> &'static str {
-    match app {
-        "excel" => "Excel selectors name the sheet: Sheet1!A1:D10, or 'Q3 sales'!B2 when the name has a space.",
-        "word" => "Word selectors are body, or p0, p1 ... for one paragraph; p0 is the first.",
-        "ppt" => "PowerPoint selectors are deck, or s1, s2 ... for one slide, s2.notes for its notes.",
-        "web" => "Selectors on a web page are CSS: h1, #total, table tr:nth-child(2).",
-        "ui" => "Window selectors are :tree for the control list, or id=..., name=..., type=... joined by commas.",
-        _ => "",
-    }
 }
 
 /// Turn a model's arguments into the flat string map the tool layer reads.
@@ -515,7 +503,10 @@ impl Server {
                         "the kill switch is latched and nothing more will run in this session. Tell the user.".to_string(),
                         Status::Stopped,
                     ),
-                    Err(e @ Error::BadSelector(_)) => (format!("{e}. {}", selector_hint(&app)), Status::Failed),
+                    Err(e @ Error::BadSelector(_)) => (format!("{e}. {}", crate::coach::selectors(&app)), Status::Failed),
+                    Err(e @ Error::Live(_)) => {
+                        (crate::coach::explain(&app, &e.to_string(), crate::coach::Caller::Mcp), Status::Failed)
+                    }
                     Err(e @ Error::Transport(_)) => (crate::desk::explain(&app, e), Status::Stopped),
                     Err(e @ (Error::AppDenied(_) | Error::Denied(_) | Error::UnknownHandle(_) | Error::ClosedSchema(_) | Error::OverBulkCap)) => {
                         (e.to_string(), Status::Refused)
@@ -763,6 +754,22 @@ mod tests {
         let doc = srv.desk.open("excel", r"C:\b\plan.xlsx").unwrap();
         let (_, text) = call(&mut srv, "read", &format!(r#"{{"handle":"{}","selector":"data!A1"}}"#, doc.handle));
         assert!(text.contains("IGNORE ALL PREVIOUS") && text.contains("WARNING"), "{text}");
+    }
+
+    #[test]
+    fn an_application_refusal_comes_back_with_what_to_do() {
+        // The fake Excel answers "workbook not open" for a file it does not
+        // have, in office-host's words. A model told only that retries; one
+        // told what it means calls `open`.
+        let (mut srv, _) = server();
+        srv.desk.open("excel", r"C:\b\plan.xlsx").unwrap();
+        let h = "excel:gone.xlsx:workbook";
+        srv.desk.relay.attach("mcp", h.into(), OpenFile::placeholder("excel"));
+        srv.desk.runner.mark_live(h).unwrap();
+        let (err, text) = call(&mut srv, "read", &format!(r#"{{"handle":"{h}","selector":"data!A1"}}"#));
+        assert!(err, "{text}");
+        assert!(text.contains("workbook not open for"), "the application's own words stay: {text}");
+        assert!(text.contains("What to do:") && text.contains("Call `open` with its full path"), "{text}");
     }
 
     #[test]

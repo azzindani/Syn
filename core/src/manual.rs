@@ -62,6 +62,8 @@ pub const PAGES: &[Page] = &[
 - excel: what the Excel verbs do to a live workbook.
 - word: what the Word verbs do to a live document.
 - powerpoint: what the PowerPoint verbs do to a live deck.
+- windows: reading and pressing controls in any desktop window.
+- browser: reading, filling and pressing on a web page or Electron app.
 - loop: how a long run works here -- the budget, the plan, and the four ways
   runs end early.
 
@@ -204,6 +206,19 @@ Cosmetic only, `k=v` joined by ";": bold, italic, size, font, color, fill
 (six-digit hex), numberFormat, width, autofit, autofitSheet, wrap, merge,
 border, align, freeze.
 
+LIVE EXCEL IS SOMEONE'S SCREEN
+
+Formulas are written in English with commas between arguments, whatever
+language the computer uses: =SUMIF(A:A,"x",B:B), never a translated function
+name or semicolons. Dynamic-array functions (SORT, UNIQUE, FILTER) spill
+into the cells below the one you write.
+
+While the user is editing a cell, or a dialog is open, Excel refuses every
+call. That comes back as "busy" or "modal dialog": nothing was changed, and
+the fix is for the user to press Esc or close the dialog. Repeating the
+call changes nothing. A protected sheet refuses writes until the user
+unprotects it; ask rather than look for a way round.
+
 EXPORT
 
 `export` with format "png" writes EVERY chart in the workbook to disk as
@@ -252,6 +267,14 @@ PAGE BREAKS
 
 `pageBreak` with name "page" or "section".
 
+LIVE WORD
+
+A document that arrived by email or from the internet opens in Protected
+View and refuses every change until the user clicks Enable Editing. A style
+name the document does not have is reported as "left as-is" and the text
+goes in unstyled: the built-in names above exist in every document, custom
+ones only where someone made them.
+
 LENGTH
 
 Pages are not something you set. A page is roughly 400-500 words of body
@@ -297,10 +320,122 @@ deck, at the end.
 FINDING THE DECK
 
 Every call names a handle. There is no "active presentation" here, which is
-deliberate: the active one is whatever the human last clicked."#,
+deliberate: the active one is whatever the human last clicked.
+
+LIVE POWERPOINT
+
+A deck in slide-show mode, or with a dialog open, refuses changes; the user
+has to leave the show or close the dialog. Slides are numbered from s1 in
+the order the deck shows them, and createSlide adds the new one at the end,
+so the numbers of the slides already there do not change."#,
+    },
+    Page {
+        topic: "windows",
+        summary: "any desktop window: its control tree, reading, typing into and pressing controls",
+        body: r#"WINDOWS
+
+Any desktop program with no document interface of its own is driven through
+its controls, the way a screen reader sees them. A window handle is
+ui:<part of the window title>:<unit>, and :self is the whole window.
+
+SEE BEFORE YOU PRESS
+
+  read {selector:":tree"}
+
+lists the window's controls, nested, each with its type and, when it has
+them, id= and name= (six levels deep, 300 controls). Address a control by
+what the tree shows you, never by a guess:
+
+  id=num7Button            the control's automation id: exact, and the
+                           most stable way to name one
+  name=Save                its name. Exact first; if nothing is called
+                           exactly that, the first control whose name
+                           contains it
+  type=Button,name=OK      several keys joined by commas must all match
+  class=Edit               the underlying window class
+
+type= takes a control type name: Button, Edit, CheckBox, ComboBox, List,
+ListItem, Menu, MenuItem, Tab, TabItem, Tree, TreeItem, Text, Window.
+
+READ, TYPE, PRESS
+
+  read {selector:"id=..."}      the control's value or text, else its name
+  write {selector:"type=Edit", values:"..."}
+                                sets a text box's contents directly: no
+                                keystrokes, so nothing else is typed by
+                                accident. Controls that do not hold text,
+                                and read-only fields, refuse
+  struct {verb:"invoke", selector:"...", action:"invoke"}
+                                presses it. action is invoke (buttons),
+                                toggle (check boxes), select (list items,
+                                tabs), expand or collapse (tree nodes,
+                                menus), or focus
+
+`export` returns the whole tree as text, or writes it to a file with `path`.
+
+THE WINDOW CHANGES UNDER YOU
+
+A press can open a dialog, open another window or change the title, and a
+handle finds its window by title: when the title changes (a saved file's
+name appears in it) the handle may stop matching. After a press that
+changes what is on screen, read :tree again rather than reuse what the old
+tree said.
+
+The window belongs to the person watching it. A button that deletes,
+sends, pays, overwrites or signs in is theirs to press unless they asked
+for exactly that. Never type a password."#,
+    },
+    Page {
+        topic: "browser",
+        summary: "a web page or Electron app: CSS selectors, reading, filling fields, pressing",
+        body: r#"WEB PAGES
+
+A browser tab or an Electron app is driven through the page itself. A page
+handle is web:<part of the page title or address>:<unit>; :doc is the whole
+page, and a unit can also be a CSS selector for one part of it.
+
+SELECTORS ARE CSS
+
+  #total                   the element with id="total"
+  .price                   the first element with class="price"
+  input[name=q]            by attribute
+  table tr:nth-child(2) td:nth-child(3)
+  a[href*="report"]        an attribute containing text
+
+A selector addresses the FIRST element that matches.
+
+READ, FILL, PRESS
+
+  read {selector:"h1"}     its visible text, or the value of a field, up to
+                           4,000 characters. selector body reads the page
+  write {selector:"input[name=email]", values:"..."}
+                           sets a field's value and fires the input and
+                           change events a page's own scripts listen for.
+                           On an element that is not a field it replaces
+                           the visible text
+  struct {verb:"invoke", selector:"button[type=submit]", action:"click"}
+                           clicks it; action focus moves to it
+  format {selector:"...", style:"color=#c00;font-weight=bold"}
+                           sets inline CSS on the page as it is shown
+
+`export` returns the page as text (format "text"), HTML ("html") or its
+title and address ("title"); format "png" with a `path` saves a
+screenshot.
+
+PAGES MOVE
+
+Pages load in pieces and change after every click. A selector that matched
+a moment ago can match nothing now: read again after anything that
+navigates or loads, rather than trusting the last read.
+
+IT IS THEIR BROWSER
+
+The browser is the person's own, signed in to their accounts. Submitting a
+form that buys, sends, posts, deletes or changes a setting is theirs to do
+unless they asked for exactly that. Never type a password or a card
+number."#,
     },
 ];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +478,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_window_and_page_manuals_say_look_first_and_leave_their_decisions_to_them() {
+        let w = lookup("windows");
+        assert!(w.contains(":tree") && w.contains("never by a guess"), "{w}");
+        assert!(w.contains("read :tree again"), "{w}");
+        let b = lookup("browser");
+        assert!(b.contains("FIRST element") && b.contains("read again"), "{b}");
+        for page in [&w, &b] {
+            assert!(page.contains("Never type a password"), "{page}");
+            assert!(page.contains("unless they asked"), "{page}");
+        }
+    }
+
+    #[test]
+    fn the_office_pages_say_what_a_live_windows_app_does() {
+        assert!(lookup("excel").contains("English with commas"));
+        assert!(lookup("excel").contains("press Esc"));
+        assert!(lookup("word").contains("Protected"));
+        assert!(lookup("powerpoint").contains("slide-show"));
     }
 
     #[test]

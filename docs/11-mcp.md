@@ -73,6 +73,27 @@ handle it invented. Everything below is aimed at that model:
   and `"slides"` all mean the same app. What is ambiguous is refused with
   the alternatives: a flat list of values could be a row or a column, so
   it is not guessed.
+- **An application's refusal comes back with what it means.** office-host
+  passes on what COM said, and COM says `com 0x800A03EC`. `core/src/coach.rs`
+  adds one line after the application's own words for each known failure:
+  - a dialog open or Excel busy: ask the user to press Esc;
+  - the app closed or crashed: call `open`;
+  - a protected sheet or a read-only file: ask the user;
+  - a formula Excel cannot parse: write it in English with commas;
+  - a window control or page element that isn't there: read `:tree` or
+    `body` first.
+
+  A test checks that each rule still matches its helper's wording.
+- **The selector format sits beside the handle.** `status` shows each open
+  app's selector format next to its documents, so a model sees how to
+  address Excel or a window before its first call, not after a miss.
+- **Windows and pages have manuals too.** `manual` offers `windows` (the
+  UI Automation control tree, `id=`/`name=`/`type=`, invoke, toggle,
+  select) and `browser` (CSS selectors, filling fields so the page's own
+  scripts notice, pages that change under you). The Office pages say what a
+  live Windows app does: English formulas, busy and modal states, Protected
+  View, slide-show mode. Every page says a button that deletes, sends,
+  pays or signs in is the user's to press.
 - **The instructions are short.** 359 words, and a test keeps them under
   520: a model with an 8k window pays for them on every turn.
 

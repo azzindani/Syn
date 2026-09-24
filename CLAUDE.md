@@ -32,6 +32,10 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
     document tools are generated from `tools::TOOLS` and a test fails if
     they drift; `desk` connects hands, starts helpers and opens files.
     Every MCP call goes through `Runner::run`, like the loop's.
+  - `coach.rs`: what a live application's refusal means and what to do,
+    appended to the error for the loop and for MCP, plus each app's
+    selector format. Every rule keys on text a helper really sends, and
+    `core/tests/coach_contract.rs` fails if that text is reworded.
   - `json.rs`: a real JSON parser. Use it for anything nested; the
     substring `tools::field` finds the first matching key at any depth.
   - bins: `cli` (the REPL), `ui` (a loopback web console that drives `cli`

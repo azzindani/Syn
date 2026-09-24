@@ -11,6 +11,7 @@ pub mod catalog;
 pub mod cdp;
 pub mod desk;
 pub mod chats;
+pub mod coach;
 pub mod config;
 pub mod guard;
 pub mod hand;

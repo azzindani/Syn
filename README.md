@@ -19,6 +19,8 @@ software hands (Office first) in one live session, any model via OpenRouter.
     helper if it is not running, open the file, bind the handle live.
   - `json` — a small JSON parser, for the one component that speaks a
     nested protocol.
+  - `coach` — turns an application's refusal (a COM code, a dialog, a
+    missing control) into what to do next, for the loop and for MCP.
   - `catalog` — the model list: each provider's own `GET /models`,
     cached in `.agent/models.json` and refreshed while the console runs.
   - `router/queue/runner/paths/stream/snapshots/acp/vfs/ooxml` — as before.

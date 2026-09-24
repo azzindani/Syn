@@ -449,9 +449,9 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 
 /* ---------------- the first screen ----------------
    An empty conversation is the one screen everybody sees, so it earns more
-   than a line of grey text: what Syn is and what it can touch. No example
-   prompts: the owner found four cards of them noisy, and the composer is
-   already where to start. */
+   than a line of grey text: the mark, and the apps it can touch. No
+   heading, no tagline and no example prompts: the owner found them noisy,
+   and the composer is already where to start. */
 .empty{display:flex;flex-direction:column;align-items:center;margin:0 auto;width:100%;max-width:40rem;text-align:center}
 .hero{position:relative;display:grid;place-items:center;width:56px;height:56px;margin-bottom:22px;
   border-radius:17px;color:#fff;background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
@@ -459,9 +459,7 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 .hero svg{width:28px;height:28px}
 .hero::after{content:"";position:absolute;inset:-60px;z-index:-1;border-radius:50%;
   background:radial-gradient(circle,color-mix(in srgb,var(--brand-from) 14%,transparent) 0,transparent 68%)}
-.empty h2{margin:0 0 10px;font-size:30px;line-height:1.15;font-weight:650;letter-spacing:-.025em;text-wrap:balance}
-.empty p{margin:0;max-width:30rem;color:var(--muted-foreground);font-size:15px;text-wrap:balance}
-.works{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px 14px;margin-top:26px;
+.works{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px 14px;margin-top:4px;
   font-size:12px;color:var(--muted-foreground)}
 .works .w{display:inline-flex;align-items:center;gap:6px}
 
@@ -595,7 +593,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   #tl{padding:22px 16px 12px}
   #comp,#hint{max-width:none}#dock{padding:0 12px 12px}
   .turn{padding-left:0}.turn::before,.turn::after{display:none}
-  .empty h2{font-size:24px}
   #hands .lbl{display:none}
   .pill.model{display:none}
   /* Still anchored to the composer, not fixed: its backdrop-filter makes
@@ -1574,9 +1571,6 @@ function emptyState() {
   const hero = el("div", "hero");
   hero.innerHTML = svg("spark", 28);
   e.appendChild(hero);
-  e.appendChild(el("h2", null, "What should Syn do?"));
-  e.appendChild(el("p", null,
-    "It works in the apps you already have open — Excel, Word, PowerPoint, your browser, any window — and shows you every step."));
   const works = el("div", "works");
   works.appendChild(el("span", null, "Works with"));
   for (const k of ["excel", "word", "ppt", "web", "ui"]) {

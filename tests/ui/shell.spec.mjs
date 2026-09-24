@@ -329,9 +329,10 @@ test("the theme can be pinned, and 'system' follows the machine", async ({ page 
   await page.evaluate(() => window.live.theme("system"));
 });
 
-test("the first screen says what Syn is, without a wall of example prompts", async ({ page }) => {
+test("the first screen is the mark and the apps, nothing to read past", async ({ page }) => {
   await page.evaluate(() => window.live.render([], {}));
-  await expect(page.locator(".empty h2")).toHaveText("What should Syn do?");
-  await expect(page.locator(".empty button")).toHaveCount(0);
+  await expect(page.locator(".empty .hero")).toBeVisible();
+  await expect(page.locator(".empty .works")).toContainText("Excel");
+  await expect(page.locator(".empty h2, .empty p, .empty button")).toHaveCount(0);
   await expect(page.locator("#box")).toHaveValue("");
 });

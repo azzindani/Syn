@@ -34,6 +34,10 @@ in `docs/`, and `docs/09` and `docs/10` are the most current.
   and Office to run.
 - `relay/`: the original Python proof of concept, stdlib only.
 - `protocol/`: the rpc catalog and the default-deny security policy (JSON).
+- `widget/index.html`: the whole console UI, one file, no dependencies,
+  compiled into `ui`. Its visual design is digested from t3code in
+  `docs/DIGEST-09-t3code-visual.md`. It keys icons off a row's `app` and
+  `tool`, never off a verb (`core/tests/console_contract.rs`).
 - `tests/ui/`: Playwright against the real console.
   `tests/capability/`: the v0.1.0 capability test and its recorded runs.
 - `scripts/`: Windows bring-up and live smoke tests (PowerShell).
@@ -53,8 +57,11 @@ parses. Run clippy and the tests before every commit.
 
 The UI specs need a fresh build, because the page is compiled into `ui`:
 `cd core && cargo build --bins`, then `cd tests/ui && npm install && npm
-test`. Don't run `playwright install`: Chromium is already provided in the
-cloud environment.
+test`. In the cloud sandbox don't run `playwright install`: use the
+preinstalled Chromium with `PW_CHROMIUM=/opt/pw-browsers/chromium npm test`,
+and copy `.env.example` to `.env` first (one spec needs a wired hand). After
+a UI change, `node showcase.mjs` writes screenshots of every state, dark and
+light, desktop and phone, to `testbed/shots/showcase`: look at them.
 
 ## What a cloud session can and cannot verify
 

@@ -307,3 +307,35 @@ test("evidence: the shell with everything up at once", async ({ page }) => {
   await page.locator("#mapstrip").hover();
   await page.screenshot({ path: path.join(shots, "shell-full.png") });
 });
+
+test("the theme can be pinned, and 'system' follows the machine", async ({ page }) => {
+  const theme = () => page.evaluate(() => document.documentElement.dataset.theme);
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.evaluate(() => window.live.theme("system"));
+  expect(await theme()).toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(theme).toBe("light");
+
+  // Pinned, it no longer follows, and it survives a reload.
+  await page.evaluate(() => window.live.theme("dark"));
+  await page.emulateMedia({ colorScheme: "light" });
+  expect(await theme()).toBe("dark");
+  await page.reload();
+  await page.waitForFunction(() => !!window.live);
+  expect(await theme()).toBe("dark");
+  await expect(page.locator('#theme button[data-pref="dark"]')).toHaveAttribute("aria-pressed", "true");
+
+  await page.evaluate(() => window.live.theme("system"));
+});
+
+test("the first screen offers things to try, and one goes into the composer", async ({ page }) => {
+  await page.evaluate(() => window.live.render([], {}));
+  const ideas = page.locator(".empty .idea");
+  await expect(ideas).toHaveCount(4);
+  await ideas.first().click();
+  // Into the composer, not sent: the human still decides.
+  await expect(page.locator("#box")).not.toHaveValue("");
+  await expect(page.locator("#box")).toBeFocused();
+  await expect(page.locator("#tl .you")).toHaveCount(0);
+});

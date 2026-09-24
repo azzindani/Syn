@@ -2,13 +2,23 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Syn</title>
+<script>
+// Before first paint, so a dark-mode user never sees a white flash. The
+// page resolves "system" to light or dark itself rather than leaning on a
+// media query in the stylesheet: a human can pin a theme from the menu,
+// and one attribute is the only switch every rule below has to know.
+(function () {
+  var p = "system";
+  try { p = localStorage.getItem("syn.theme") || "system"; } catch (e) {}
+  var dark = p === "dark" || (p !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.pref = p;
+})();
+</script>
 <style>
-/* Tokens lifted from t3code's apps/web/src/index.css, not invented: a zinc
-   neutral scale with one blue primary. See docs/DIGEST-05-t3code-ui.md.
-   The names are theirs too, so everything below reads as semantics rather
-   than colours. */
 /* ---------------- tokens, in three layers ----------------
-   t3code's system, not a palette. See docs/DIGEST-08 section 8.
+   t3code's system, not a palette. See docs/DIGEST-08 section 8 and
+   docs/DIGEST-09 for the visual layer on top of it.
 
    1. `--raw-*` is the theme: the colour someone picked.
    2. `--foreground`, `--border`, ... are DERIVED from the raw layer by
@@ -20,21 +30,20 @@
       about any of this.
 
    One slider drives contrast across the whole app and no component is
-   aware of it. `setContrast(140)` in the console, or the control in the
-   status menu. Mixing is in oklab for text (perceptually even) and srgb
-   for borders, which is what t3code does and for the same reason. */
+   aware of it: the control in the status menu, or `setContrast(140)`. */
 :root{
   color-scheme:light;
 
   /* --- geometry, named so it cannot quietly drift apart --- */
-  --radius:0.625rem;              /* 10px, the app-wide corner */
+  --radius:0.75rem;               /* 12px, cards */
   --control-radius:0.5rem;        /* 8px, buttons and inputs */
   --composer-radius:22px;         /* their composer card */
-  --topbar:52px;
-  --sidebar-w:16rem;
-  --row-h:26px;                   /* one tool row */
+  --topbar:56px;
+  --sidebar-w:16.5rem;
   --gutter:4.5rem;                /* the minimap strip lives here */
-  --content-w:48rem;
+  --content-w:46rem;
+  --font-sans:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --font-mono:ui-monospace,"Cascadia Code","SF Mono",SFMono-Regular,Consolas,"Liberation Mono",monospace;
 
   /* --- the contrast dial --- */
   --contrast-base:100%;
@@ -43,29 +52,48 @@
   --contrast-target:black;
 
   /* --- layer 1: the theme --- */
-  --raw-background:oklch(99.2% 0 0);
-  --raw-foreground:#27272a;
-  --raw-muted-foreground:#71717a;
-  --raw-border:#e4e4e7;
-  --raw-input:#d4d4d8;
-  --raw-placeholder:#a1a1aa;
-  --card:#fff;
-  --accent:#f4f4f5;
-  --primary:oklch(0.488 0.217 264);
+  --raw-background:#fcfcfd;
+  --raw-foreground:#1f1f23;
+  --raw-muted-foreground:#6b6b76;
+  --raw-border:#e7e7ec;
+  --raw-input:#d6d6de;
+  --raw-placeholder:#9d9da8;
+  --card:#ffffff;
+  --accent:#f3f3f6;
+  --primary:oklch(0.53 0.2 272);
   --primary-foreground:#fff;
-  --message-surface:var(--accent);
-  --surface-raised:#fff;
-  --sidebar:#fafafa;
-  --sidebar-row-hover:oklch(99.2% 0 0);
-  --sidebar-row-selected:#fff;
-  --error-foreground:oklch(0.505 0.213 27.518);
-  --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 8%, transparent);
-  --warning-foreground:oklch(0.555 0.163 48.998);
-  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 8%, transparent);
+  --brand-from:#6366f1;
+  --brand-to:#a855f7;
+  --message-surface:color-mix(in srgb, var(--primary) 9%, #fff);
+  --surface-raised:#ffffff;
+  --sidebar:#f6f6f8;
+  --sidebar-row-hover:rgb(0 0 0/4%);
+  --sidebar-row-selected:#ffffff;
+  --shadow-sm:0 1px 2px rgb(16 16 24/6%);
+  --shadow-lg:0 1px 2px rgb(16 16 24/5%),0 18px 40px -18px rgb(16 16 24/28%);
+  --error-foreground:oklch(0.52 0.2 27);
+  --error-surface:color-mix(in srgb, oklch(0.64 0.23 25) 9%, transparent);
+  --warning-foreground:oklch(0.56 0.15 58);
+  --warning-surface:color-mix(in srgb, oklch(0.77 0.17 70) 13%, transparent);
   --info-foreground:oklch(0.52 0.15 250);
-  --info-surface:color-mix(in srgb, oklch(0.62 0.18 250) 8%, transparent);
-  --ok:oklch(0.696 0.17 162.48);
+  --info-surface:color-mix(in srgb, oklch(0.62 0.18 250) 9%, transparent);
+  /* The status hues t3code's sidebar uses everywhere a thread surfaces:
+     sky while working, amber waiting on a human, emerald done. */
+  --working:oklch(0.62 0.15 232);
+  --working-surface:color-mix(in srgb, oklch(0.68 0.14 232) 11%, transparent);
+  --ok:oklch(0.62 0.16 158);
   --composer-highlight:transparent;
+  --glass:color-mix(in srgb, var(--surface-raised) 82%, transparent);
+
+  /* --- the hands. One colour per application, so a row that touched
+     Excel looks like Excel from across the room. --- */
+  --app-excel:#107c41;
+  --app-word:#185abd;
+  --app-ppt:#c43e1c;
+  --app-web:#0284c7;
+  --app-ui:#7c3aed;
+  --app-shell:#475569;
+  --app-other:#71717a;
 
   /* --- layer 2: derived. Nothing below this line names a raw token --- */
   --background:var(--raw-background);
@@ -86,256 +114,448 @@
     var(--raw-foreground) var(--contrast-border-boost));
   --ring:color-mix(in srgb, var(--primary) 55%, transparent);
 }
-@media (prefers-color-scheme:dark){:root{
+:root[data-theme="dark"]{
   color-scheme:dark;
   --contrast-target:white;
-  --raw-background:#0a0a0a;
-  --raw-foreground:#f5f5f5;
-  --raw-muted-foreground:#a1a1aa;
-  --raw-border:rgb(255 255 255/6%);
-  --raw-input:rgb(255 255 255/10%);
-  --raw-placeholder:#71717a;
-  --card:color-mix(in srgb, var(--raw-background) 97%, #fff);
-  --accent:rgb(255 255 255/4%);
-  --primary:oklch(0.571 0.21 264);
-  --surface-raised:color-mix(in srgb, var(--raw-background) 94%, #fff);
-  --sidebar:var(--card);
-  --sidebar-row-hover:rgb(255 255 255/3%);
-  --sidebar-row-selected:rgb(255 255 255/6%);
-  --error-foreground:oklch(0.704 0.191 22.216);
-  --warning-foreground:oklch(0.828 0.189 84.429);
-  --info-foreground:oklch(0.72 0.14 250);
+  --raw-background:#0c0c0e;
+  --raw-foreground:#f2f2f4;
+  --raw-muted-foreground:#9c9ca8;
+  --raw-border:rgb(255 255 255/8%);
+  --raw-input:rgb(255 255 255/14%);
+  --raw-placeholder:#6e6e7a;
+  --card:#151518;
+  --accent:rgb(255 255 255/5%);
+  --primary:oklch(0.62 0.19 275);
+  --message-surface:color-mix(in srgb, var(--primary) 20%, #16161a);
+  --surface-raised:#18181c;
+  --sidebar:#101013;
+  --sidebar-row-hover:rgb(255 255 255/4%);
+  --sidebar-row-selected:rgb(255 255 255/7%);
+  --shadow-sm:0 1px 2px rgb(0 0 0/40%);
+  --shadow-lg:0 1px 2px rgb(0 0 0/40%),0 22px 44px -18px rgb(0 0 0/70%);
+  --error-foreground:oklch(0.72 0.18 22);
+  --warning-foreground:oklch(0.83 0.16 80);
+  --info-foreground:oklch(0.74 0.13 250);
+  --working:oklch(0.76 0.13 230);
+  --ok:oklch(0.76 0.15 160);
   /* The inset top highlight that makes the composer read as a raised
      card rather than a hole. Dark mode only: in light it is invisible
      and in dark it is most of the effect. */
-  --composer-highlight:rgb(255 255 255/7%);
-}}
+  --composer-highlight:rgb(255 255 255/6%);
+  --app-excel:#21a366;
+  --app-word:#2b7cd3;
+  --app-ppt:#e0582f;
+  --app-web:#0ea5e9;
+  --app-ui:#8b5cf6;
+  --app-shell:#64748b;
+}
 
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;display:flex;overflow:hidden;background:var(--background);color:var(--foreground);
-  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-  -webkit-font-smoothing:antialiased}
+  font:14px/1.6 var(--font-sans);-webkit-font-smoothing:antialiased;font-feature-settings:"cv11","ss01"}
 button,input,textarea,select{font:inherit;color:inherit}
-button{background:none;border:0;cursor:pointer}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-thumb{background:rgb(0 0 0/12%);border-radius:3px}
-@media (prefers-color-scheme:dark){::-webkit-scrollbar-thumb{background:rgb(255 255 255/8%)}}
+button{background:none;border:0;cursor:pointer;padding:0}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+svg{flex:none}
+[data-icon]{display:inline-grid;place-items:center;flex:none}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgb(0 0 0/12%);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
+[data-theme="dark"] ::-webkit-scrollbar-thumb{background-color:rgb(255 255 255/10%)}
+::-webkit-scrollbar-track{background:none}
+kbd{display:inline-block;min-width:1.5em;padding:0 5px;border:1px solid var(--border);border-bottom-width:2px;
+  border-radius:5px;background:var(--card);font:500 10.5px/16px var(--font-sans);text-align:center;color:var(--muted-foreground)}
+
+/* ---------------- app tiles ----------------
+   The single change that most makes a run readable at a glance: every row
+   carries the application it touched, as that application's colour. The
+   letter is a label, not a logo -- nothing here imitates a trademark. */
+.tile{--tc:var(--app-other);display:inline-grid;place-items:center;flex:none;width:20px;height:20px;
+  border-radius:6px;background:var(--tc);color:#fff;font:700 11px/1 var(--font-sans);letter-spacing:-.02em;
+  box-shadow:inset 0 -1px 0 rgb(0 0 0/18%),inset 0 1px 0 rgb(255 255 255/18%)}
+.tile svg{width:12px;height:12px}
+.tile[data-k="excel"]{--tc:var(--app-excel)}
+.tile[data-k="word"]{--tc:var(--app-word)}
+.tile[data-k="ppt"]{--tc:var(--app-ppt)}
+.tile[data-k="web"]{--tc:var(--app-web)}
+.tile[data-k="ui"]{--tc:var(--app-ui)}
+.tile[data-k="shell"]{--tc:var(--app-shell)}
+.tile[data-k="syn"]{background:linear-gradient(135deg,var(--brand-from),var(--brand-to))}
+.tile.lg{width:34px;height:34px;border-radius:10px;font-size:16px}
+.tile.lg svg{width:18px;height:18px}
+.tile.sm{width:16px;height:16px;border-radius:5px;font-size:9px}
+.tile.sm svg{width:10px;height:10px}
+/* Overlapping tiles, each ringed in the surface it sits on, so four apps
+   read as a group rather than as four loose squares. */
+.stack{display:inline-flex;align-items:center}
+.stack .tile{box-shadow:0 0 0 2px var(--stack-ring, var(--card))}
+.stack .tile + .tile{margin-left:-3px}
+
+.logo{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:9px;color:#fff;
+  background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
+  box-shadow:inset 0 1px 0 rgb(255 255 255/25%),0 4px 12px -4px color-mix(in srgb,var(--brand-to) 60%,transparent)}
+.logo svg{width:15px;height:15px}
 
 /* ---------------- sidebar ---------------- */
 #side{width:var(--sidebar-w);flex:none;height:100dvh;display:flex;flex-direction:column;
-  background:var(--sidebar);border-right:1px solid var(--border)}
-#brand{height:var(--topbar);flex:none;display:flex;align-items:center;gap:8px;padding:0 15px;
-  font-weight:600}
-#brand i{width:7px;height:7px;border-radius:50%;background:var(--primary)}
-#new{margin:0 8px 8px;height:32px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;
-  border:1px solid var(--border);border-radius:var(--control-radius);background:var(--card);
-  transition:border-color .12s}
+  background:var(--sidebar);border-right:1px solid var(--border);transition:margin-left .18s ease}
+#brand{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 16px}
+#brand b{display:block;font-size:15px;font-weight:650;letter-spacing:-.01em;line-height:1.1}
+#brand small{display:block;font-size:11px;color:var(--muted-foreground);line-height:1.2}
+#new{margin:2px 12px 14px;height:36px;flex:none;display:flex;align-items:center;gap:9px;padding:0 10px;
+  border:1px solid var(--border);border-radius:10px;background:var(--card);box-shadow:var(--shadow-sm);
+  font-weight:500;transition:border-color .12s,transform .12s}
 #new:hover{border-color:var(--input)}
-#chats{flex:1;overflow-y:auto;padding:0 8px}
-.grouplabel{padding:10px 10px 4px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
-/* One line, 32px, truncated: the row shape every app in this class uses. A
+#new:active{transform:translateY(1px)}
+#new .plus{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;
+  background:var(--accent);color:var(--foreground)}
+#chats{flex:1;overflow-y:auto;padding:0 10px 12px}
+.grouplabel{padding:12px 10px 5px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:color-mix(in srgb,var(--muted-foreground) 80%,transparent)}
+/* One line, truncated: the row shape every app in this class uses. A
    second line of metadata turns a thread list into a feed reader. */
-.chat{position:relative;display:flex;align-items:center;height:32px;padding:0 10px;
-  border-radius:var(--control-radius);cursor:pointer;white-space:nowrap;overflow:hidden;
-  transition:background .1s}
-/* Inactive rows recede to secondary-label/70 and brighten on hover; only the
-   active thread is full-strength. Rendering every row at --foreground is what
-   makes a thread list read as a flat wall of equally loud text. */
-.chat span{overflow:hidden;text-overflow:ellipsis;
-  color:color-mix(in srgb, var(--muted-foreground) 70%, transparent);transition:color .1s}
+.chat{position:relative;display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;
+  border-radius:var(--control-radius);cursor:pointer;white-space:nowrap;transition:background .1s}
+/* Inactive rows recede and brighten on hover; only the active thread is
+   full-strength. Every row at --foreground reads as a flat wall. */
+.chat .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  color:color-mix(in srgb, var(--foreground) 72%, transparent);transition:color .1s}
+.chat .when{flex:none;font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
 .chat:hover{background:var(--sidebar-row-hover)}
-.chat:hover span{color:var(--foreground)}
-.chat.on{background:var(--sidebar-row-selected);box-shadow:0 0 0 1px var(--border)}
-.chat.on span{color:var(--foreground);font-weight:500}
-.chat .del{position:absolute;right:4px;top:4px;width:24px;height:24px;border-radius:6px;
-  display:none;place-items:center;color:var(--muted-foreground);font-size:15px;line-height:1}
+.chat:hover .ttl{color:var(--foreground)}
+.chat.on{background:var(--sidebar-row-selected);box-shadow:var(--shadow-sm),0 0 0 1px var(--border)}
+.chat.on .ttl{color:var(--foreground);font-weight:550}
+/* The thread with a run in flight says so in the sidebar too, in the same
+   sky the timeline uses, so "is it still going?" has one answer. */
+.chat .run{display:none;width:7px;height:7px;border-radius:50%;background:var(--working);flex:none;
+  animation:pulse 2s infinite}
+.chat.working .run{display:block}
+.chat .del{display:none;flex:none;width:22px;height:22px;margin-right:-5px;border-radius:6px;
+  place-items:center;color:var(--muted-foreground)}
 .chat:hover .del{display:grid}
+.chat:hover .when{display:none}
 .chat .del:hover{background:var(--accent);color:var(--error-foreground)}
-#chats{padding-bottom:10px}
-/* Everything that is machinery rather than conversation lives behind one
-   status control. A sidebar with three jobs reads as a debug console; this
-   one has exactly one, which is the threads. */
+.nochats{margin:6px 4px;padding:14px 12px;border:1px dashed var(--border);border-radius:10px;
+  font-size:12.5px;line-height:1.5;color:var(--muted-foreground);text-align:center}
+#sidefoot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 16px 14px;
+  font-size:11.5px;color:var(--muted-foreground);border-top:1px solid var(--border)}
+#sidefoot i{width:7px;height:7px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+#sidefoot.down i{background:var(--error-foreground);box-shadow:0 0 0 3px var(--error-surface)}
+
+/* ---------------- top bar ---------------- */
+main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;position:relative}
+#top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 16px 0 18px;
+  border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--background) 85%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);position:relative;z-index:6}
+#title{font-weight:600;font-size:14.5px;letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#toggle{flex:none;display:grid;place-items:center;width:30px;height:30px;margin-left:-6px;
+  border-radius:var(--control-radius);color:var(--muted-foreground)}
+#toggle:hover{background:var(--accent);color:var(--foreground)}
 #statuswrap{position:relative;flex:none}
-#pop{display:none;position:absolute;right:0;top:32px;z-index:20;width:232px;padding:9px;
-  border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
-  box-shadow:0 1px 2px rgb(0 0 0/5%),0 16px 32px -12px rgb(0 0 0/35%)}
-#pop.on{display:block}
-#pop h4{margin:0 0 7px;padding:0 3px;font-size:11px;font-weight:500;color:var(--muted-foreground)}
-#pop hr{margin:9px -9px;border:0;border-top:1px solid var(--border)}
-#wire{display:flex;flex-wrap:wrap;gap:4px;padding:0 3px}
-#wire button{height:24px;padding:0 9px;border:1px solid var(--border);border-radius:99px;
-  font-size:12px;color:var(--muted-foreground);white-space:nowrap}
-#wire button:hover{border-color:var(--input);color:var(--foreground)}
-.hint{display:block;padding:8px 3px 0;font-size:11px;line-height:1.45;color:var(--muted-foreground)}
-.popitem{display:flex;align-items:center;width:100%;height:30px;padding:0 8px;
-  border-radius:var(--control-radius);font-size:13px;color:var(--foreground)}
+/* What is connected, as the apps themselves. "2 hands" meant nothing to
+   anyone who had not read the code. */
+#hands{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 10px 0 8px;
+  border:1px solid var(--border);border-radius:99px;background:var(--card);font-size:12.5px;
+  color:var(--muted-foreground);box-shadow:var(--shadow-sm);transition:border-color .12s,color .12s}
+#hands:hover,#hands[aria-expanded="true"]{border-color:var(--input);color:var(--foreground)}
+#hands .dot{width:7px;height:7px;border-radius:50%;background:var(--muted-foreground);opacity:.6}
+#hands.live .dot{background:var(--ok);opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent)}
+#hands .stack:empty{display:none}
+#hands .lbl{max-width:15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------------- the status menu ----------------
+   Everything that is machinery rather than conversation lives behind one
+   control. A sidebar with three jobs reads as a debug console. */
+#pop{display:none;position:absolute;right:0;top:40px;z-index:30;width:304px;padding:8px;
+  border:1px solid var(--border);border-radius:14px;background:var(--surface-raised);box-shadow:var(--shadow-lg)}
+#pop.on{display:block;animation:rise .14s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(-4px)}}
+#pop h4{margin:6px 8px 8px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted-foreground)}
+#pop hr{margin:8px -8px;border:0;border-top:1px solid var(--border)}
+#wire{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 4px}
+#wire button{display:flex;align-items:center;gap:8px;min-width:0;height:40px;padding:0 9px;
+  border:1px solid var(--border);border-radius:10px;background:var(--card);text-align:left;
+  transition:border-color .12s,background .12s}
+#wire button:hover{border-color:var(--input);background:var(--accent)}
+#wire button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:500}
+.hint{display:block;padding:8px 8px 2px;font-size:11.5px;line-height:1.45;color:var(--muted-foreground)}
+.setrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 8px;
+  font-size:13px;min-height:34px}
+.seg{display:inline-flex;padding:2px;border-radius:9px;background:var(--accent);border:1px solid var(--border)}
+.seg button{display:grid;place-items:center;width:30px;height:24px;border-radius:7px;color:var(--muted-foreground)}
+.seg button:hover{color:var(--foreground)}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--foreground);box-shadow:var(--shadow-sm)}
+#contrast{width:112px;accent-color:var(--primary)}
+.popitem{display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 8px;
+  border-radius:var(--control-radius);font-size:13px;color:var(--foreground);text-align:left}
+.popitem svg{color:var(--muted-foreground)}
 .popitem:hover{background:var(--accent)}
-.popitem.danger{color:var(--error-foreground)}
+.popitem.danger,.popitem.danger svg{color:var(--error-foreground)}
+.popitem.danger:hover{background:var(--error-surface)}
 
-/* ---------------- main ---------------- */
-main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column}
-#top{height:var(--topbar);flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;
-  border-bottom:1px solid var(--border)}
-#title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hands{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
-  border:1px solid transparent;border-radius:99px;font-size:12px;color:var(--muted-foreground)}
-#hands:hover{border-color:var(--border);color:var(--foreground)}
-#hands i{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}
-#hands.live i{background:var(--ok)}
-#scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
-#tl{width:100%;max-width:48rem;margin:0 auto;padding:28px 24px 14px;flex:1;
-  display:flex;flex-direction:column;gap:22px}
-#tl.blank{justify-content:center;padding-bottom:12vh}
+/* ---------------- the conversation ---------------- */
+#scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column;position:relative}
+#tl{width:100%;max-width:var(--content-w);margin:0 auto;padding:30px 28px 16px;flex:1;
+  display:flex;flex-direction:column;gap:18px}
+#tl.blank{justify-content:center;padding-bottom:8vh}
 
-.you{align-self:flex-end;max-width:80%;background:var(--message-surface);
-  border-radius:var(--radius);padding:9px 13px;white-space:pre-wrap;word-break:break-word}
-/* Prose from the model. `pre-wrap` is gone: the renderer emits real
-   blocks now, and keeping it collapsed every list and table back into a
-   wall of preformatted text. */
-.bot{word-break:break-word;line-height:1.7}
+/* One participant is quoted, the other is speaking: the human's turn is a
+   bubble on the right, Syn's has no bubble and runs the column. */
+.you{align-self:flex-end;max-width:78%;background:var(--message-surface);
+  border-radius:18px 18px 6px 18px;padding:10px 15px;white-space:pre-wrap;word-break:break-word;
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--primary) 10%,transparent)}
+/* Everything Syn did in answer to one message, under one mark. The mark
+   says who is talking without a name on every paragraph. */
+.turn{position:relative;display:flex;flex-direction:column;gap:12px;padding-left:40px;min-width:0}
+.turn:empty{display:none}
+.turn::before{content:"";position:absolute;left:0;top:1px;width:26px;height:26px;border-radius:8px;
+  background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
+  box-shadow:inset 0 1px 0 rgb(255 255 255/25%)}
+.turn::after{content:"";position:absolute;left:6px;top:7px;width:14px;height:14px;background:#fff;
+  -webkit-mask:var(--spark) center/contain no-repeat;mask:var(--spark) center/contain no-repeat}
+:root{--spark:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2.5c.7 4.9 3.4 7.6 8.5 8.5-5.1.9-7.8 3.6-8.5 8.5-.7-4.9-3.4-7.6-8.5-8.5 5.1-.9 7.8-3.6 8.5-8.5z'/%3E%3C/svg%3E")}
+
+/* Prose from the model: real blocks, a readable measure, quiet chrome. */
+.bot{word-break:break-word;line-height:1.72;font-size:14.5px}
 .bot > :first-child{margin-top:0}
 .bot > :last-child{margin-bottom:0}
 .bot p{margin:0 0 .85em}
-.bot h2,.bot h3,.bot h4{margin:1.4em 0 .5em;line-height:1.35;font-weight:600}
-.bot h2{font-size:1.15em}
-.bot h3{font-size:1.05em}
+.bot h2,.bot h3,.bot h4{margin:1.35em 0 .5em;line-height:1.35;font-weight:650;letter-spacing:-.01em}
+.bot h2{font-size:1.2em}
+.bot h3{font-size:1.07em}
 .bot h4{font-size:1em;color:var(--muted-foreground)}
-.bot ul,.bot ol{margin:0 0 .85em;padding-left:1.35em}
-.bot li{margin:.2em 0}
-.bot li::marker{color:var(--muted-foreground)}
+.bot ul,.bot ol{margin:0 0 .85em;padding-left:1.4em}
+.bot li{margin:.25em 0;padding-left:.15em}
+.bot li::marker{color:color-mix(in srgb,var(--primary) 70%,var(--muted-foreground))}
 .bot ul ul,.bot ol ol{margin:.2em 0}
-.bot a{color:var(--primary);text-decoration:underline;text-underline-offset:2px}
-.bot blockquote{margin:0 0 .85em;padding:.1em 0 .1em .9em;
-  border-left:2px solid var(--border);color:var(--muted-foreground)}
-.bot hr{margin:1.3em 0;border:0;border-top:1px solid var(--border)}
+.bot a{color:var(--primary);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--primary) 40%,transparent);text-underline-offset:3px}
+.bot blockquote{margin:0 0 .9em;padding:.55em .95em;border-radius:0 10px 10px 0;
+  border-left:3px solid color-mix(in srgb,var(--primary) 55%,transparent);
+  background:color-mix(in srgb,var(--primary) 6%,transparent);color:var(--foreground)}
+.bot hr{margin:1.4em 0;border:0;border-top:1px solid var(--border)}
 /* A model that has just built a table usually answers with one. Showing
-   that as `|---|---|` is the single ugliest thing this page did. */
-.bot table{margin:0 0 .95em;border-collapse:collapse;font-size:13px;
-  display:block;max-width:100%;overflow-x:auto;width:max-content}
-.bot th,.bot td{padding:6px 11px;border:1px solid var(--border);text-align:left;vertical-align:top}
-.bot th{background:var(--accent);font-weight:600;white-space:nowrap}
-.bot tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--accent) 45%,transparent)}
+   that as `|---|---|` was the single ugliest thing this page did. */
+.bot table{margin:.2em 0 1em;border-collapse:separate;border-spacing:0;font-size:13px;
+  display:block;max-width:100%;overflow-x:auto;width:max-content;
+  border:1px solid var(--border);border-radius:10px;background:var(--card)}
+.bot th,.bot td{padding:7px 13px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border)}
+.bot th + th,.bot td + td{border-left:1px solid var(--border)}
+.bot tbody tr:last-child td{border-bottom:0}
+.bot th{background:var(--accent);font-weight:600;white-space:nowrap;font-size:12px;
+  color:var(--muted-foreground);letter-spacing:.01em}
+.bot tbody tr:hover td{background:color-mix(in srgb,var(--accent) 60%,transparent)}
+.bot td{font-variant-numeric:tabular-nums}
+/* Past the first column a cell is usually a figure, and "31.3 / %" broken
+   over two lines is worse than a table that scrolls sideways. */
+.bot td:not(:first-child),.bot th{white-space:nowrap}
 .bot td code{white-space:nowrap}
-.bot code{padding:1px 5px;border-radius:5px;background:var(--accent);
-  font:12.5px ui-monospace,SFMono-Regular,Consolas,monospace}
-.bot pre{margin:10px 0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);
-  background:var(--accent);overflow-x:auto;white-space:pre;
-  font:12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
-.bot strong{font-weight:600}
+.bot code{padding:1.5px 6px;border-radius:6px;background:var(--accent);border:1px solid var(--border);
+  font:12.5px var(--font-mono)}
+.bot pre{position:relative;margin:.3em 0 1em;padding:14px 16px;border:1px solid var(--border);
+  border-radius:12px;background:var(--card);overflow-x:auto;white-space:pre;
+  font:12.5px/1.65 var(--font-mono)}
+.bot pre[data-lang]{padding-top:32px}
+.bot pre[data-lang]::before{content:attr(data-lang);position:absolute;top:9px;left:16px;
+  font:600 10.5px var(--font-sans);letter-spacing:.05em;text-transform:uppercase;color:var(--muted-foreground)}
+.bot strong{font-weight:650}
 
-/* Tool calls: a thin list, never a stack of bubbles. A dozen of them must
-   still read as one quiet paragraph of activity. */
-/* The calls of one turn, grouped. Loose rows floating in the column read
-   as a debug log; a rail and a little inset say "this is the working,
-   the answer is below it" without shouting. */
-.acts{display:flex;flex-direction:column;gap:1px;margin:2px 0;padding:2px 0 2px 11px;
-  border-left:2px solid var(--border)}
-.act{display:flex;align-items:center;gap:7px;width:100%;height:26px;padding:0 6px;
-  border-radius:6px;font-size:13px;color:var(--muted-foreground);text-align:left;
-  transition:background .1s}
-.act:hover{background:var(--accent);color:var(--foreground)}
-.act .tw{flex:none;width:9px;font-size:9px;transition:transform .12s}
+/* ---------------- the work card ----------------
+   The calls of one turn, grouped under one sentence of what happened, the
+   way t3code's `summarizeToolGroup` reads: "Worked in Excel and
+   PowerPoint". The rows stay quiet single lines inside it -- a dozen of
+   them must still read as one paragraph of activity, not a log. */
+.acts{border:1px solid var(--border);border-radius:14px;background:var(--card);
+  box-shadow:var(--shadow-sm);overflow:hidden;--stack-ring:var(--card)}
+.acts-head{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:6px 12px 6px 10px;
+  text-align:left;font-size:13px;transition:background .12s}
+.acts-head:hover{background:var(--accent)}
+.acts-head .sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+.acts-head .meta{display:flex;align-items:center;gap:6px;flex:none;font-size:12px;color:var(--muted-foreground);
+  font-variant-numeric:tabular-nums}
+.acts-head .chev{display:grid;place-items:center;color:var(--muted-foreground);transition:transform .15s}
+.acts[data-open="0"] .acts-head .chev{transform:rotate(-90deg)}
+.acts[data-open="0"] .acts-list{display:none}
+.acts-list{display:flex;flex-direction:column;gap:1px;padding:2px 6px 6px;border-top:1px solid var(--border)}
+.acts .spinring{display:none}
+.acts[data-mode="live"]{border-color:color-mix(in srgb,var(--working) 35%,var(--border));
+  box-shadow:var(--shadow-sm),0 0 0 3px color-mix(in srgb,var(--working) 8%,transparent)}
+.acts[data-mode="live"] .spinring{display:block}
+.acts[data-mode="live"] .acts-head .sum{color:var(--working)}
+.acts-list:empty{display:none}
+.pill{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:99px;
+  font-size:11px;font-weight:550;background:var(--accent);color:var(--muted-foreground);white-space:nowrap}
+.pill.warn{background:var(--warning-surface);color:var(--warning-foreground)}
+.pill.err{background:var(--error-surface);color:var(--error-foreground)}
+.pill.model{max-width:13rem;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-mono);font-weight:500}
+
+.act{display:flex;align-items:center;gap:9px;width:100%;height:28px;padding:0 6px;
+  border-radius:8px;font-size:13px;color:var(--muted-foreground);text-align:left;transition:background .1s}
+.act:hover{background:var(--accent)}
+.act .tw{flex:none;display:grid;place-items:center;margin-left:auto;color:var(--muted-foreground);opacity:0;
+  transition:transform .12s,opacity .12s}
+.act:hover .tw,.act.open .tw{opacity:1}
 .act.open .tw{transform:rotate(90deg)}
 /* The sentence is the row. It truncates rather than wrapping, because a
    two-line tool row turns a list of twelve calls back into a wall. */
 .act .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--foreground);font-weight:500}
-.act .bad{flex:none;font-size:11px;padding:0 5px;border-radius:4px;text-transform:lowercase}
+  color:color-mix(in srgb,var(--foreground) 88%,transparent)}
+.act .bad{flex:none;font-size:11px;font-weight:550;padding:1px 7px;border-radius:99px}
 /* Three registers, not two. A refusal is the application saying no and the
    model can try again; a stop is the run being over. Colouring them alike
    is the conflation docs/DIGEST-08 §3 is about. */
 .act[data-status="refused"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
 .act[data-status="failed"] .bad{color:var(--warning-foreground);background:var(--warning-surface)}
 .act[data-status="stopped"] .bad{color:var(--error-foreground);background:var(--error-surface)}
-.act[data-status="running"] .nm{color:var(--muted-foreground)}
-.act[data-status="running"] .tw{animation:pulse 1.4s steps(4) infinite}
-@keyframes pulse{0%,40%{opacity:1}50%,90%{opacity:.4}100%{opacity:1}}
-/* What the whole run did, in one sentence, once it is over. */
-.did{align-self:flex-start;margin-top:2px;font-size:12px;color:var(--muted-foreground)}
-.body{margin:0 0 6px 16px;padding:6px 10px;border-left:2px solid var(--border);
-  font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted-foreground);
+.act[data-status="stopped"] .tile{box-shadow:0 0 0 2px var(--error-surface)}
+.act[data-status="running"] .tile{animation:pulse 2s infinite}
+/* t3code's live-tool-shine: the running row's text has light passing
+   through it, which says "now" more clearly than any spinner. Stepped, so
+   it costs a handful of frames per pass rather than one per vsync. */
+@media (prefers-reduced-motion:no-preference){
+  .act[data-status="running"] .nm{color:transparent;
+    background:linear-gradient(90deg,transparent,var(--foreground),transparent) -4.5rem 0/4.5rem 100% no-repeat,
+      linear-gradient(var(--muted-foreground),var(--muted-foreground));
+    -webkit-background-clip:text;background-clip:text;animation:shine 2.2s steps(30) infinite}
+}
+@keyframes shine{to{background-position:calc(100% + 4.5rem) 0,0 0}}
+@keyframes pulse{0%,40%{opacity:1;animation-timing-function:steps(6)}50%,90%{opacity:.45;animation-timing-function:steps(6)}100%{opacity:1}}
+.body{margin:2px 6px 8px 35px;padding:10px 12px;border-radius:10px;background:var(--accent);
+  font:11.5px/1.6 var(--font-mono);color:var(--foreground);
   white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
+.body .bk{margin:0 0 3px;font:600 10px/1.4 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground)}
+.body .bk ~ .bk{margin-top:10px}
+.body .bv{color:color-mix(in srgb,var(--foreground) 85%,transparent)}
 
-.note{align-self:center;font-size:12px;color:var(--muted-foreground)}
-.fail{font-size:13px;color:var(--error-foreground);background:var(--error-surface);
-  border-radius:var(--radius);padding:10px 13px}
-.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
-  margin:0 auto;max-width:28rem;text-align:center;text-wrap:balance}
-/* Their EmptyMedia "icon" variant: a small bordered card holding a glyph,
-   which is what stops an empty screen reading as a loading failure. */
-.empty .badge{display:grid;place-items:center;width:36px;height:36px;margin-bottom:24px;
-  border:1px solid var(--border);border-radius:var(--control-radius);background:var(--card);
-  box-shadow:0 1px 2px rgb(0 0 0/4%)}
-.empty h2{margin:0 0 8px;font-size:20px;font-weight:600}
-.empty p{margin:0;color:var(--muted-foreground)}
+/* What the whole run did, in one sentence, once it is over. */
+.did{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;
+  color:var(--muted-foreground)}
+.did::before{content:"";flex:none;width:15px;height:15px;border-radius:50%;
+  background:var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 12.5 4 4 8-9'/%3E%3C/svg%3E") center/10px no-repeat}
+.note{align-self:center;padding:3px 11px;border-radius:99px;background:var(--accent);
+  font-size:12px;color:var(--muted-foreground)}
+.fail{display:flex;gap:10px;font-size:13px;line-height:1.5;color:var(--error-foreground);
+  background:var(--error-surface);border:1px solid color-mix(in srgb,var(--error-foreground) 20%,transparent);
+  border-radius:12px;padding:10px 14px;word-break:break-word}
+.fail::before{content:"!";flex:none;display:grid;place-items:center;width:18px;height:18px;margin-top:1px;
+  border-radius:50%;background:var(--error-foreground);color:var(--background);font:700 12px/1 var(--font-sans)}
+/* The reply to a button in the status menu: the CLI's own words, framed as
+   a readout rather than dressed up as something Syn said. */
+.sys{border:1px solid var(--border);border-radius:12px;background:var(--card);overflow:hidden}
+.sys-h{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);
+  font-size:12px;font-weight:550;color:var(--muted-foreground)}
+.sys pre{margin:0;padding:10px 12px;font:12px/1.6 var(--font-mono);white-space:pre-wrap;word-break:break-word;
+  max-height:18rem;overflow:auto}
+
+/* ---------------- the first screen ----------------
+   An empty conversation is the one screen everybody sees, so it earns more
+   than a line of grey text: what Syn is, what it can touch, and four
+   things to try that go straight into the composer. */
+.empty{display:flex;flex-direction:column;align-items:center;margin:0 auto;width:100%;max-width:40rem;text-align:center}
+.hero{position:relative;display:grid;place-items:center;width:56px;height:56px;margin-bottom:22px;
+  border-radius:17px;color:#fff;background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
+  box-shadow:inset 0 1px 0 rgb(255 255 255/28%),0 14px 34px -10px color-mix(in srgb,var(--brand-to) 55%,transparent)}
+.hero svg{width:28px;height:28px}
+.hero::after{content:"";position:absolute;inset:-60px;z-index:-1;border-radius:50%;
+  background:radial-gradient(circle,color-mix(in srgb,var(--brand-from) 14%,transparent) 0,transparent 68%)}
+.empty h2{margin:0 0 10px;font-size:30px;line-height:1.15;font-weight:650;letter-spacing:-.025em;text-wrap:balance}
+.empty p{margin:0;max-width:30rem;color:var(--muted-foreground);font-size:15px;text-wrap:balance}
+.ideas{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;margin-top:30px}
+.idea{display:flex;align-items:flex-start;gap:12px;padding:13px 14px;border:1px solid var(--border);
+  border-radius:14px;background:var(--card);text-align:left;box-shadow:var(--shadow-sm);
+  transition:border-color .12s,transform .12s,box-shadow .12s}
+.idea:hover{border-color:var(--input);transform:translateY(-1px);box-shadow:var(--shadow-lg)}
+.idea b{display:block;font-size:13.5px;font-weight:600;line-height:1.35}
+.idea .sub{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--muted-foreground)}
+.works{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px 14px;margin-top:26px;
+  font-size:12px;color:var(--muted-foreground)}
+.works .w{display:inline-flex;align-items:center;gap:6px}
 
 /* ---------------- composer ---------------- */
-#dock{flex:none;padding:0 24px 16px}
-#comp{max-width:48rem;margin:0 auto;background:var(--card);border:1px solid var(--border);
-  border-radius:16px;box-shadow:0 1px 2px rgb(0 0 0/4%),0 12px 28px -18px rgb(0 0 0/25%);
-  transition:border-color .12s}
-#comp:focus-within{border-color:var(--input)}
-/* The approval attaches to the composer, where attention already is, and so
-   cannot scroll away the way a message can. */
-#ask{display:none;padding:11px 16px 12px;border-bottom:1px solid var(--border);
-  background:var(--warning-surface);border-radius:17px 17px 0 0}
-#ask.on{display:block}
-#ask{border-radius:15px 15px 0 0}
-#ask .hd{margin-bottom:6px;font-size:11px;font-weight:600;color:var(--warning-foreground)}
+#dock{flex:none;padding:0 24px 14px;position:relative;z-index:5}
+#dock::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:28px;pointer-events:none;
+  background:linear-gradient(transparent,var(--background))}
+/* The composer as a raised glass card: t3code's 22px corner, a hairline
+   outline, and in dark mode an inset top highlight. That single card is
+   most of why these apps feel like apps. */
+#comp{max-width:calc(var(--content-w) - 16px);margin:0 auto;border:1px solid var(--border);
+  border-radius:var(--composer-radius);background:var(--glass);
+  -webkit-backdrop-filter:blur(14px) saturate(1.1);backdrop-filter:blur(14px) saturate(1.1);
+  box-shadow:var(--shadow-lg),inset 0 1px 0 var(--composer-highlight);transition:border-color .15s,box-shadow .15s}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){#comp{background:var(--surface-raised)}}
+#comp:focus-within{border-color:color-mix(in srgb,var(--primary) 45%,var(--input));
+  box-shadow:var(--shadow-lg),0 0 0 4px color-mix(in srgb,var(--primary) 12%,transparent),inset 0 1px 0 var(--composer-highlight)}
+#box{display:block;width:100%;padding:15px 20px 4px;border:0;outline:0;resize:none;background:none;
+  min-height:30px;max-height:40vh;font-size:15px;line-height:1.55}
+#box:focus-visible{outline:0}
+#box::placeholder{color:var(--placeholder)}
+#bar{display:flex;align-items:center;gap:8px;padding:6px 10px 10px 14px}
+.pick{position:relative;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 4px 0 9px;
+  border:1px solid var(--border);border-radius:99px;background:var(--card);color:var(--muted-foreground);
+  font-size:12.5px;transition:border-color .12s,color .12s}
+.pick:hover,.pick:focus-within{border-color:var(--input);color:var(--foreground)}
+#task{height:28px;max-width:12rem;padding:0 20px 0 0;border:0;outline:0;background:none;appearance:none;
+  -webkit-appearance:none;font-size:12.5px;font-weight:500;color:inherit;cursor:pointer}
+.pick .caret{position:absolute;right:8px;pointer-events:none}
+#send{margin-left:auto;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;
+  color:#fff;background:linear-gradient(135deg,var(--brand-from),var(--brand-to));
+  box-shadow:inset 0 1px 0 rgb(255 255 255/22%),0 6px 16px -6px color-mix(in srgb,var(--brand-to) 70%,transparent);
+  transition:transform .12s,filter .12s,opacity .12s}
+#send:hover:not(:disabled){filter:brightness(1.08);transform:translateY(-1px)}
+#send:disabled{opacity:.35;box-shadow:none;cursor:default}
+#hint{display:none;max-width:var(--content-w);margin:9px auto 0;text-align:center;
+  font-size:11.5px;color:var(--muted-foreground)}
+#hint kbd{margin:0 1px}
+body.blank-chat #hint,body.busy #hint{display:block}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;
+  border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+body.busy #hint{color:var(--working)}
+
+/* ---------------- the approval ----------------
+   It attaches to the composer, where attention already is, and so cannot
+   scroll away the way a message can. `shell` always stops for a human:
+   this is the most important decision on the page and it looks it. */
+#ask{display:none;margin:8px 8px 0;padding:14px 16px 14px;border-radius:16px;
+  background:var(--warning-surface);border:1px solid color-mix(in srgb,var(--warning-foreground) 28%,transparent)}
+#ask.on{display:block;animation:rise .16s ease-out}
+#ask .hd{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:600;color:var(--warning-foreground)}
+#ask .hd small{font-weight:500;color:var(--muted-foreground)}
 /* Focusable and scrollable: a long command has to be readable before it
    is approved, and a keyboard user cannot scroll a box they cannot
    reach. `whitespace:pre` so nothing is silently re-wrapped into a
    different command than the one that will run. */
-#ask .cmd{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;
-  word-break:normal;max-height:5rem;overflow:auto;scrollbar-width:thin}
-#ask .cmd:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
-#ask .wy{margin-top:6px;font-size:12px;color:var(--muted-foreground)}
-#ask .btns{display:flex;gap:8px;margin-top:10px}
-.btn{height:32px;padding:0 12px;border:1px solid var(--border);border-radius:var(--control-radius);
-  background:var(--card);font-size:13px;font-weight:500;transition:.12s}
+#ask .cmd{padding:9px 12px;border-radius:10px;background:var(--card);border:1px solid var(--border);
+  font:12.5px/1.55 var(--font-mono);white-space:pre;word-break:normal;max-height:6rem;overflow:auto;scrollbar-width:thin}
+#ask .cmd::before{content:"$ ";color:var(--muted-foreground)}
+#ask .wy{margin-top:8px;font-size:12.5px;color:var(--muted-foreground)}
+#ask .wy:empty{display:none}
+#ask .btns{display:flex;gap:8px;margin-top:12px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border:1px solid var(--border);
+  border-radius:10px;background:var(--card);font-size:13px;font-weight:550;transition:.12s}
 .btn:hover{border-color:var(--input)}
-.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground);
-  box-shadow:inset 0 1px rgb(255 255 255/16%)}
+.btn.primary{background:var(--primary);border-color:transparent;color:var(--primary-foreground);
+  box-shadow:inset 0 1px rgb(255 255 255/16%),var(--shadow-sm)}
 .btn.primary:hover{filter:brightness(1.08)}
-#no:hover{color:var(--error-foreground);border-color:var(--error-foreground)}
-#box{width:100%;padding:11px 24px 1px;border:0;outline:0;resize:none;background:none;
-  min-height:24px;max-height:40vh;line-height:1.55}
-#box::placeholder{color:var(--muted-foreground)}
-#bar{display:flex;align-items:center;gap:8px;padding:0 16px 9px 21px}
-#task{height:26px;max-width:16rem;padding:0 6px;border:1px solid transparent;
-  border-radius:var(--control-radius);background:none;font-size:12px;color:var(--muted-foreground)}
-#task:hover{border-color:var(--border)}
-#send{margin-left:auto;display:grid;place-items:center;width:28px;height:28px;
-  border-radius:var(--control-radius);background:var(--primary);color:var(--primary-foreground);
-  font-size:15px;box-shadow:inset 0 1px rgb(255 255 255/16%);transition:.12s}
-#send:hover:not(:disabled){filter:brightness(1.08)}
-#send:disabled{opacity:.4;box-shadow:none}
-#hint{display:none;max-width:48rem;margin:8px auto 0;text-align:center;
-  font-size:11px;color:var(--muted-foreground)}
-body.blank-chat #hint,body.busy #hint{display:block}
-/* A run in progress is drawn as the same activity rows a finished one
-   leaves behind, so watching it happen and reading it afterwards look
-   like the same thing. The pulse marks the step being worked on now. */
-.live .act .nm{color:var(--foreground)}
-.live-head{align-self:center;font-size:12px;color:var(--muted-foreground);
-  display:flex;align-items:center;gap:7px;margin:4px 0}
-.live-head .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);
-  animation:pulse 1.4s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
-.spin{display:inline-block;width:9px;height:9px;border:1.5px solid currentColor;
-  border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
-@keyframes sp{to{transform:rotate(360deg)}}
+#no:hover{color:var(--error-foreground);border-color:color-mix(in srgb,var(--error-foreground) 40%,transparent)}
+
 /* Offcanvas, not display:none, so it slides rather than blinking out. */
-#side{transition:margin-left .16s ease}
 body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
-#toggle{flex:none;display:grid;place-items:center;width:28px;height:28px;margin-left:-6px;
-  border-radius:var(--control-radius);color:var(--muted-foreground)}
-#toggle:hover{background:var(--accent);color:var(--foreground)}
-@media(max-width:780px){:root{--sidebar-w:15rem}
-  #side{position:fixed;z-index:9;margin-left:calc(var(--sidebar-w) * -1)}
+#scrim{display:none}
+@media(max-width:780px){:root{--sidebar-w:17rem}
+  #side{position:fixed;z-index:40;margin-left:calc(var(--sidebar-w) * -1);box-shadow:var(--shadow-lg)}
   body:not(.hidden-side) #side{margin-left:0}
-  #tl,#comp,#hint{max-width:none}#dock{padding:0 14px 14px}}
+  body:not(.hidden-side) #scrim{display:block;position:fixed;inset:0;z-index:39;background:rgb(0 0 0/35%)}
+  #tl{padding:22px 16px 12px}
+  #comp,#hint{max-width:none}#dock{padding:0 12px 12px}
+  .turn{padding-left:0}.turn::before,.turn::after{display:none}
+  .ideas{grid-template-columns:1fr}
+  .empty h2{font-size:24px}
+  #hands .lbl{display:none}
+  .pill.model{display:none}
+  #pop{position:fixed;left:12px;right:12px;top:62px;width:auto}}
 
 /* ---------------- the timeline minimap ----------------
    docs/DIGEST-08 section 5. One tick per user turn in the left gutter,
@@ -354,8 +574,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 @media (pointer:coarse){#map{display:none}}
 /* The strip spans the scroll area, and each tick sits at the fraction of
    the timeline its turn actually occupies. Evenly spacing them would be a
-   table of contents, not a map: the ticks have to line up with the thing
-   they point at or following one is a surprise. */
+   table of contents, not a map. */
 #mapstrip{position:absolute;inset-block:14px;left:14px;width:34px;background:none}
 #mapstrip:focus-visible{outline:2px solid var(--ring);outline-offset:3px;border-radius:6px}
 .tick{position:absolute;left:0;height:2px;width:8px;border-radius:99px;
@@ -364,14 +583,13 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 .tick[data-near="0"]{width:24px;opacity:.85}
 .tick[data-near="1"]{width:16px;opacity:.6}
 .tick[data-near="2"]{width:10px;opacity:.45}
-.tick.here{background:var(--foreground);opacity:.9}
+.tick.here{background:var(--primary);opacity:1}
 #mappeek{position:absolute;left:44px;width:min(19rem, calc(var(--peek-room, 19rem)));padding:10px 12px;border-radius:12px;
-  background:var(--surface-raised);border:1px solid var(--border);
-  box-shadow:0 1px 2px rgb(0 0 0/5%),0 16px 32px -14px rgb(0 0 0/40%);
+  background:var(--surface-raised);border:1px solid var(--border);box-shadow:var(--shadow-lg);
   font-size:12.5px;line-height:1.5;pointer-events:none;display:none}
 #mappeek.on{display:block}
 #mappeek .n{display:block;margin-bottom:3px;font-size:10.5px;font-weight:600;
-  letter-spacing:.03em;text-transform:uppercase;color:var(--muted-foreground)}
+  letter-spacing:.04em;text-transform:uppercase;color:var(--muted-foreground)}
 #mappeek .t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
   overflow:hidden;color:var(--foreground)}
 
@@ -382,25 +600,23 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
    "Activity stays attached. Urgency and severity only order the notices
    behind it." What is happening right now outranks what went wrong,
    because the thing that went wrong is usually why it is happening. */
-#banners{display:flex;flex-direction:column;gap:6px;padding:9px 14px 0}
+#banners{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0}
 #banners:empty{display:none}
-.bn{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:12px;
+.bn{display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border-radius:14px;
   border:1px solid var(--border);background:var(--card);font-size:12.5px;line-height:1.5}
-.bn[data-variant="activity"]{background:var(--accent);border-color:transparent}
-.bn[data-variant="error"]{background:var(--error-surface);border-color:transparent;
-  color:var(--error-foreground)}
-.bn[data-variant="warning"]{background:var(--warning-surface);border-color:transparent;
-  color:var(--warning-foreground)}
-.bn[data-variant="info"]{background:var(--info-surface);border-color:transparent}
-.bn .ic{flex:none;margin-top:1px;width:14px;display:grid;place-items:center}
+.bn[data-variant="activity"]{background:var(--working-surface);border-color:transparent;color:var(--working)}
+.bn[data-variant="error"]{background:var(--error-surface);border-color:transparent;color:var(--error-foreground)}
+.bn[data-variant="warning"]{background:var(--warning-surface);border-color:transparent;color:var(--warning-foreground)}
+.bn[data-variant="info"]{background:var(--info-surface);border-color:transparent;color:var(--info-foreground)}
+.bn .ic{flex:none;margin-top:2px;width:15px;height:15px;display:grid;place-items:center}
 .bn .bd{flex:1;min-width:0}
-.bn .ti{font-weight:500}
+.bn .ti{font-weight:600}
 .bn .ds{color:var(--muted-foreground)}
-.bn .xx{flex:none;width:20px;height:20px;border-radius:6px;color:var(--muted-foreground);
-  display:grid;place-items:center;font-size:14px;line-height:1}
+.bn .xx{flex:none;width:22px;height:22px;border-radius:7px;color:var(--muted-foreground);
+  display:grid;place-items:center}
 .bn .xx:hover{background:var(--accent);color:var(--foreground)}
-#peek{align-self:flex-start;height:22px;padding:0 9px;border-radius:99px;
-  border:1px solid var(--border);font-size:11.5px;color:var(--muted-foreground)}
+#peek{align-self:flex-start;height:22px;padding:0 10px;border-radius:99px;
+  border:1px solid var(--border);background:var(--card);font-size:11.5px;color:var(--muted-foreground)}
 #peek:hover{border-color:var(--input);color:var(--foreground)}
 
 /* ---------------- a long pasted message folds away ----------------
@@ -411,7 +627,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   -webkit-mask-image:linear-gradient(#000 70%,transparent);
   mask-image:linear-gradient(#000 70%,transparent)}
 .you.tall.open{max-height:none;-webkit-mask-image:none;mask-image:none}
-.morebtn{align-self:flex-end;margin-top:-14px;height:24px;padding:0 10px;border-radius:99px;
+.morebtn{align-self:flex-end;margin-top:-10px;height:26px;padding:0 11px;border-radius:99px;
   border:1px solid var(--border);background:var(--card);font-size:11.5px;
   color:var(--muted-foreground)}
 .morebtn:hover{border-color:var(--input);color:var(--foreground)}
@@ -419,72 +635,74 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 /* ---------------- the seam where history was summarised ----------------
    The conversation visibly has a join, rather than the early part
    silently disappearing. */
-.seam{display:flex;align-items:center;gap:12px;margin:2px 0;
-  font-size:11.5px;color:var(--muted-foreground)}
+.seam{display:flex;align-items:center;gap:12px;margin:4px 0;
+  font-size:11.5px;font-weight:500;color:var(--muted-foreground)}
 .seam::before,.seam::after{content:"";flex:1;height:1px;background:var(--border)}
 
 /* ---------------- the budget meter ----------------
    docs/DIGEST-08 section 7. It says what will happen, not just where
    you are, and its slot is reserved while the number loads so the
    controls beside it do not jump. */
-#meter{display:flex;align-items:center;gap:7px;min-height:18px;font-size:11px;
+#meter{display:flex;align-items:center;gap:8px;min-height:18px;font-size:11.5px;
   color:var(--muted-foreground)}
-#meter .track{width:56px;height:3px;border-radius:99px;background:var(--border);overflow:hidden}
-#meter .fill{height:100%;width:0;border-radius:99px;background:var(--muted-foreground);
-  transition:width .3s}
+#meter .track{width:64px;height:5px;border-radius:99px;background:var(--accent);overflow:hidden;
+  box-shadow:inset 0 0 0 1px var(--border)}
+#meter .fill{display:block;height:100%;width:0;border-radius:99px;
+  background:linear-gradient(90deg,var(--brand-from),var(--brand-to));transition:width .3s}
 #meter[data-near="1"] .fill{background:var(--warning-foreground)}
 #meter[data-near="1"]{color:var(--warning-foreground)}
 /* The slot is reserved by width as well as by visibility: hiding an
    empty span still collapses it, and the send button beside it jumps
-   when the number finally lands. `ch` so it holds for any plausible
-   count without hard-coding pixels. */
-#meter .nums{min-width:14ch;text-align:right;font-variant-numeric:tabular-nums}
+   when the number finally lands. */
+#meter .nums{min-width:14ch;text-align:left;font-variant-numeric:tabular-nums}
 #meter.holding{visibility:hidden}
-
-/* The composer as a raised card: t3code's 22px corner, a hairline
-   outline, and in dark mode an inset top highlight. That single card is
-   most of why these apps feel like apps. */
-#comp{border-radius:var(--composer-radius);background:var(--surface-raised);
-  box-shadow:0 1px 2px rgb(0 0 0/5%),0 18px 36px -20px rgb(0 0 0/35%),
-    inset 0 1px 0 var(--composer-highlight)}
-#comp:focus-within{border-color:var(--input)}
-#ask{border-radius:21px 21px 0 0}
 
 /* A message typed while the agent is still working: queued, visibly, in
    the place it will appear. Not a disabled input. */
-.queued{align-self:flex-end;max-width:80%;padding:9px 13px;border-radius:var(--radius);
-  border:1px dashed var(--border);color:var(--muted-foreground);white-space:pre-wrap}
+.queued{align-self:flex-end;max-width:78%;padding:10px 15px;border-radius:18px 18px 6px 18px;
+  border:1px dashed var(--input);color:var(--muted-foreground);white-space:pre-wrap}
 .queued .qh{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px}
-
-#scroll{position:relative}
 </style></head>
 
 <body>
 <aside id="side">
-  <div id="brand"><i></i>Syn</div>
-  <button id="new">＋&nbsp;New chat</button>
+  <div id="brand">
+    <span class="logo" data-icon="spark"></span>
+    <span><b>Syn</b><small>Works in the apps you have open</small></span>
+  </div>
+  <button id="new" type="button"><span class="plus" data-icon="plus"></span>New chat</button>
   <div id="chats"></div>
+  <div id="sidefoot"><i></i><span>Running on this computer only</span></div>
 </aside>
+<div id="scrim"></div>
 
 <main>
   <div id="top">
-    <button id="toggle" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
-    </button>
+    <button id="toggle" type="button" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar" data-icon="sidebar"></button>
     <div id="title">New chat</div>
     <span style="flex:1"></span>
     <div id="statuswrap">
-      <button id="hands" aria-haspopup="menu" aria-expanded="false"><i></i><span>no hands</span></button>
+      <button id="hands" type="button" aria-haspopup="menu" aria-expanded="false"
+        ><span class="dot"></span><span class="stack"></span><span class="lbl">No apps connected</span
+        ><span data-icon="chevron-down"></span></button>
       <div id="pop" role="menu">
-        <h4>Connect a hand</h4>
+        <h4>Connect an app</h4>
         <div id="wire"></div>
         <span class="hint" id="wirehint">Reading your .env…</span>
         <hr>
-        <button class="popitem" id="handsbtn">Attached hands</button>
-        <button class="popitem" id="evbtn">Recent events</button>
-        <button class="popitem danger" id="killbtn">Stop everything</button>
+        <h4>Appearance</h4>
+        <div class="setrow"><span>Theme</span>
+          <span class="seg" id="theme" role="group" aria-label="Theme">
+            <button type="button" data-pref="system" title="Match the system" aria-label="System" data-icon="monitor"></button>
+            <button type="button" data-pref="light" title="Light" aria-label="Light" data-icon="sun"></button>
+            <button type="button" data-pref="dark" title="Dark" aria-label="Dark" data-icon="moon"></button>
+          </span></div>
+        <div class="setrow"><label for="contrast">Contrast</label>
+          <input id="contrast" type="range" min="50" max="160" step="5" value="100"></div>
+        <hr>
+        <button class="popitem" id="handsbtn" type="button"><span data-icon="plug"></span>Connected apps</button>
+        <button class="popitem" id="evbtn" type="button"><span data-icon="list"></span>Recent events</button>
+        <button class="popitem danger" id="killbtn" type="button"><span data-icon="stop"></span>Stop everything</button>
       </div>
     </div>
   </div>
@@ -501,25 +719,26 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
     <div id="comp">
       <div id="banners"></div>
       <div id="ask">
-        <div class="hd">Command approval</div>
+        <div class="hd"><span data-icon="shield"></span>Command approval <small>Syn wants to run a program</small></div>
         <div class="cmd" id="askcmd" tabindex="0" aria-label="The command awaiting approval"></div>
         <div class="wy" id="askwhy"></div>
         <div class="btns">
-          <button id="ok" class="btn primary">Approve</button>
-          <button id="no" class="btn">Deny</button>
+          <button id="ok" class="btn primary" type="button"><span data-icon="check"></span>Approve</button>
+          <button id="no" class="btn" type="button">Deny</button>
         </div>
       </div>
       <textarea id="box" rows="1" placeholder="Ask Syn to do something with your open apps…"></textarea>
       <div id="bar">
-        <select id="task" title="Which model to think with"></select>
+        <label class="pick" title="Which model to think with"><span data-icon="spark"></span
+          ><select id="task" aria-label="Model"></select><span class="caret" data-icon="chevron-down"></span></label>
         <div id="meter" class="holding" title="Step budget for this turn">
           <span class="track"><span class="fill"></span></span>
           <span class="nums"></span>
         </div>
-        <button id="send" title="Send">↑</button>
+        <button id="send" type="button" title="Send" aria-label="Send" data-icon="arrow-up"></button>
       </div>
     </div>
-    <div id="hint">Enter sends · Shift+Enter for a new line</div>
+    <div id="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</div>
   </div>
 </main>
 
@@ -561,6 +780,87 @@ function verdict(out) {
       .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, "")).pop(),
   };
 }
+
+/* ---------------- icons ----------------
+   Inline, stroke-drawn, in the idiom of the lucide set t3code uses. No
+   icon font and no sprite request: the page is one file served from
+   memory, and it stays that way. */
+const ICONS = {
+  spark: '<path fill="currentColor" stroke="none" d="M12 2.5c.7 4.9 3.4 7.6 8.5 8.5-5.1.9-7.8 3.6-8.5 8.5-.7-4.9-3.4-7.6-8.5-8.5 5.1-.9 7.8-3.6 8.5-8.5z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+  "chevron-right": '<path d="m9 6 6 6-6 6"/>',
+  "arrow-up": '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  window: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 9.5h18M6.5 7h.01M9 7h.01"/>',
+  terminal: '<path d="m5 8 4.5 4L5 16M12.5 17H19"/>',
+  dot: '<circle cx="12" cy="12" r="3.5" fill="currentColor"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+  plug: '<path d="M9 2.5v5M15 2.5v5M6 7.5h12v3a6 6 0 0 1-12 0zM12 16.5v5"/>',
+  list: '<path d="M8.5 6H20M8.5 12H20M8.5 18H20M4 6h.01M4 12h.01M4 18h.01"/>',
+  stop: '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/>',
+  shield: '<path d="M12 3 5 6v5.5c0 4.3 3 7.7 7 9.5 4-1.8 7-5.2 7-9.5V6z"/><path d="M12 8.5v4M12 15.5h.01"/>',
+  alert: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  "circle-alert": '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/>',
+};
+function svg(name, size = 16, sw = 1.9) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+    `stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+}
+// Static markup names its icon in `data-icon`; one pass fills them in.
+function paintIcons(root) {
+  for (const n of (root || document).querySelectorAll("[data-icon]")) {
+    const big = n.classList.contains("logo") || n.id === "send";
+    n.innerHTML = svg(n.dataset.icon, big ? (n.id === "send" ? 17 : 15) : n.dataset.icon === "chevron-down" ? 14 : 16,
+      n.id === "send" ? 2.4 : 1.9);
+  }
+}
+paintIcons();
+
+/* ---------------- the hands, as a human names them ----------------
+   Keyed off the `app` and `tool` fields core sends with every call -- the
+   handle's own prefix -- never off a verb, so nothing here can drift from
+   the tool surface (tests/console_contract.rs holds that line). */
+const APPS = {
+  excel: { name: "Excel", place: "Excel", glyph: "X" },
+  word: { name: "Word", place: "Word", glyph: "W" },
+  ppt: { name: "PowerPoint", place: "PowerPoint", glyph: "P" },
+  web: { name: "Browser", place: "the browser", icon: "globe" },
+  ui: { name: "Any window", place: "a window", icon: "window" },
+  shell: { name: "Terminal", place: "the terminal", icon: "terminal" },
+  syn: { name: "Syn", place: "", icon: "spark" },
+  other: { name: "App", place: "", icon: "dot" },
+};
+function appKey(app, tool) {
+  const a = String(app || "").toLowerCase();
+  if (a === "uia") return "ui";
+  if (a === "powerpoint") return "ppt";
+  if (a === "cdp") return "web";
+  if (APPS[a]) return a;
+  if (tool === "shell") return "shell";
+  // The loop's own tools -- reading the manual, keeping a plan -- touch no
+  // application, so they carry Syn's mark rather than a grey question.
+  if (tool === "manual" || tool === "plan") return "syn";
+  return "other";
+}
+function tile(key, size) {
+  const a = APPS[key] || APPS.other;
+  const t = el("span", "tile" + (size ? " " + size : ""));
+  t.dataset.k = key;
+  if (a.glyph) t.textContent = a.glyph;
+  else t.innerHTML = svg(a.icon, 12, 2.2);
+  t.title = a.name;
+  return t;
+}
+const listFmt = typeof Intl.ListFormat === "function" ? new Intl.ListFormat("en", { type: "conjunction" }) : null;
+const joinList = xs => (listFmt ? listFmt.format(xs) : xs.join(", "));
 
 // Minimal markdown. Escaping runs FIRST and everything after it operates on
 // text that can no longer contain markup, so a model that emits
@@ -704,6 +1004,7 @@ function md(src) {
   return out.join("").replace(/\u0000F(\d+)\u0000/g, (_, k) => fence(k));
 }
 
+
 const el = (t, cls, txt) => {
   const e = document.createElement(t);
   if (cls) e.className = cls;
@@ -711,13 +1012,13 @@ const el = (t, cls, txt) => {
   return e;
 };
 
-// Terse, the way their timestampFormat.ts writes it: "just now", "5m ago".
+// Terse, the way their timestampFormat.ts writes it: "now", "5m", "3h".
 const ago = s => {
   const d = Math.max(0, Math.floor(Date.now() / 1000) - s);
-  if (d < 60) return "just now";
-  if (d < 3600) return Math.floor(d / 60) + "m ago";
-  if (d < 86400) return Math.floor(d / 3600) + "h ago";
-  return Math.floor(d / 86400) + "d ago";
+  if (d < 60) return "now";
+  if (d < 3600) return Math.floor(d / 60) + "m";
+  if (d < 86400) return Math.floor(d / 3600) + "h";
+  return Math.floor(d / 86400) + "d";
 };
 
 // Whole LOCAL CALENDAR days, not 24-hour windows. A 24-hour window files a
@@ -734,6 +1035,8 @@ const band = s => {
   return d <= 0 ? "Today" : d === 1 ? "Yesterday" : d < 7 ? "This week" : "Earlier";
 };
 
+const scrollEnd = () => { scroll.scrollTop = scroll.scrollHeight; };
+
 /* ---------- what this deployment has ----------
    The picker and the hand buttons are built from what the CLI reports, not
    from names written into this page: a model swapped in .env appears here
@@ -746,11 +1049,16 @@ async function loadSlots() {
     const o = document.createElement("option");
     o.value = s.task;
     // The slot name is what a human picks by; the full id is the tooltip.
-    o.textContent = s.slot + " · " + s.task;
+    o.textContent = s.slot;
     o.title = s.model || "";
     if (s.task === cur) o.selected = true;
     sel.appendChild(o);
   }
+  slotTitle();
+}
+function slotTitle() {
+  const o = $("task").selectedOptions[0];
+  $("task").closest(".pick").title = o && o.title ? "Thinking with " + o.title : "Which model to think with";
 }
 
 async function loadWiring() {
@@ -758,21 +1066,30 @@ async function loadWiring() {
   host.textContent = "";
   for (const w of wires) {
     const cmd = w.kind === "cdp" ? `cdp ${w.at} ${w.app}` : `hand ${w.at} ${w.app}`;
-    const b = el("button", null, w.kind === "cdp" ? "Browser" : w.app);
+    const k = w.kind === "cdp" ? "web" : appKey(w.app);
+    const b = el("button");
+    b.type = "button";
     b.title = cmd;
+    b.append(tile(k), el("span", null, (APPS[k] || APPS.other).name));
     b.onclick = () => { closePop(); run(cmd); };
     host.appendChild(b);
   }
   $("wirehint").textContent = wires.length
-    ? "Each needs its sidecar running."
+    ? "Each needs its helper running on this computer."
     : "Nothing wired: set AGENT_PIPE_* or AGENT_CDP in .env.";
 }
 
 // Run one command and show what it said, for the buttons above.
 async function run(cmd) {
   const out = await cli(cmd);
-  tl.appendChild(el("div", "bot", out.trim() || "(no output)"));
-  scroll.scrollTop = scroll.scrollHeight;
+  clearBlank();
+  const card = el("div", "sys");
+  const h = el("div", "sys-h");
+  h.innerHTML = svg("terminal", 14);
+  h.appendChild(el("span", null, cmd));
+  card.append(h, el("pre", null, out.trim() || "(no output)"));
+  tl.appendChild(card);
+  scrollEnd();
   await hands();
 }
 
@@ -783,6 +1100,7 @@ async function openChat(id) {
   if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
   await loadChats();
   await refresh();
+  closeSideOnPhone();
 }
 
 async function loadChats() {
@@ -793,14 +1111,20 @@ async function loadChats() {
   const list = $("chats");
   list.textContent = "";
   let lastBand = null;
-  for (const c of tagged(out, "CHAT")) {
+  const all = tagged(out, "CHAT");
+  for (const c of all) {
     const b = band(c.updated);
     if (b !== lastBand) { list.appendChild(el("div", "grouplabel", b)); lastBand = b; }
-    const row = el("div", "chat" + (c.id === current ? " on" : ""));
+    const row = el("div", "chat" + (c.id === current ? " on" : "") + (busy && c.id === current ? " working" : ""));
     row.title = (c.title || "New chat") + " · " + ago(c.updated);
-    row.appendChild(el("span", null, c.title || "New chat"));
-    const x = el("button", "del", "×");
+    row.appendChild(el("span", "run"));
+    row.appendChild(el("span", "ttl", c.title || "New chat"));
+    row.appendChild(el("span", "when", ago(c.updated)));
+    const x = el("button", "del");
+    x.type = "button";
     x.title = "Delete";
+    x.setAttribute("aria-label", "Delete this chat");
+    x.innerHTML = svg("trash", 14);
     x.onclick = async e => {
       e.stopPropagation();
       await cli("chat del " + c.id);
@@ -810,6 +1134,9 @@ async function loadChats() {
     row.appendChild(x);
     row.onclick = () => { if (!busy) void openChat(c.id); };
     list.appendChild(row);
+  }
+  if (!all.length) {
+    list.appendChild(el("div", "nochats", "No conversations yet. Each one is saved here as you go."));
   }
 }
 
@@ -826,25 +1153,201 @@ async function loadChats() {
 // "running". A refusal is not a broken run and the two must not look the
 // same; conflating them is the mistake the capability grader made for
 // four experiments running.
-function activity(label, status, body, app) {
-  const wrap = el("div");
+//
+// `detail` is either the one-line result a live receipt carries, or, from
+// a saved transcript, `{ result, args }`, shown as two labelled sections.
+function activity(label, status, detail, app, tool) {
+  const wrap = el("div", "step");
   const b = el("button", "act");
+  b.type = "button";
   if (status) b.dataset.status = status;
   if (app) b.dataset.app = app;
-  b.appendChild(el("span", "tw", "▶"));
+  const k = appKey(app, tool);
+  b.dataset.k = k;
+  b.title = label;
+  b.appendChild(tile(k));
   b.appendChild(el("span", "nm", label));
   if (status && status !== "done" && status !== "running") {
     b.appendChild(el("span", "bad", status));
   }
-  const pre = el("div", "body", body || "(no output)");
+  const tw = el("span", "tw");
+  tw.innerHTML = svg("chevron-right", 13);
+  b.appendChild(tw);
+  const pre = el("div", "body");
+  if (detail && typeof detail === "object") {
+    pre.append(el("div", "bk", "Result"), el("div", "bv", detail.result || "(no output)"));
+    if (detail.args) pre.append(el("div", "bk", "Asked for"), el("div", "bv", detail.args));
+  } else {
+    pre.textContent = detail || "(no output)";
+  }
   pre.style.display = "none";
   b.onclick = () => {
     const open = pre.style.display === "none";
     pre.style.display = open ? "block" : "none";
     b.classList.toggle("open", open);
+    b.setAttribute("aria-expanded", String(open));
   };
+  b.setAttribute("aria-expanded", "false");
   wrap.append(b, pre);
   return wrap;
+}
+
+// Arguments as a person would read them: indented JSON, not one long line.
+function prettyArgs(s) {
+  try { return JSON.stringify(JSON.parse(s || "{}"), null, 2); } catch { return s || "{}"; }
+}
+
+/* The card one turn's calls live in. Its header is the sentence a human
+   actually wants -- where the work happened and whether anything said no
+   -- and the rows underneath are the evidence, one click away. */
+const COLLAPSE_OVER = 8;
+
+function workCard(mode, model) {
+  const card = el("div", "acts");
+  card.dataset.mode = mode;
+  card.dataset.open = "1";
+  if (model) card.dataset.model = model;
+  if (mode === "live") card.dataset.started = String(Date.now());
+  const head = el("button", "acts-head");
+  head.type = "button";
+  head.setAttribute("aria-expanded", "true");
+  const lead = el("span", "lead");
+  lead.style.display = "contents";
+  const ring = el("span", "spin spinring");
+  ring.style.color = "var(--working)";
+  lead.append(ring, el("span", "stack"));
+  const chev = el("span", "chev");
+  chev.innerHTML = svg("chevron-down", 15);
+  head.append(lead, el("span", "sum"), el("span", "meta"), chev);
+  head.onclick = () => {
+    const open = card.dataset.open !== "1";
+    card.dataset.open = open ? "1" : "0";
+    head.setAttribute("aria-expanded", String(open));
+  };
+  card.append(head, el("div", "acts-list"));
+  paintHead(card);
+  return card;
+}
+
+function addRow(card, row) {
+  card.querySelector(".acts-list").appendChild(row);
+  paintHead(card);
+}
+
+function paintHead(card) {
+  const rows = [...card.querySelectorAll(".act")];
+  const live = card.dataset.mode === "live";
+  const keys = [];
+  for (const r of rows) if (!keys.includes(r.dataset.k)) keys.push(r.dataset.k);
+  const stack = card.querySelector(".stack");
+  stack.textContent = "";
+  for (const k of keys.slice(0, 4)) stack.appendChild(tile(k, "sm"));
+  const places = keys.map(k => (APPS[k] || {}).place).filter(Boolean);
+  card.querySelector(".sum").textContent =
+    (live ? "Working" : "Worked") + (places.length ? " in " + joinList(places) : "");
+  const meta = card.querySelector(".meta");
+  meta.textContent = "";
+  const count = s => rows.filter(r => r.dataset.status === s).length;
+  for (const [s, cls] of [["refused", "warn"], ["failed", "warn"], ["stopped", "err"]]) {
+    const n = count(s);
+    if (n) meta.appendChild(el("span", "pill " + cls, `${n} ${s}`));
+  }
+  if (live) {
+    if (card.dataset.model) {
+      const m = el("span", "pill model", card.dataset.model);
+      m.title = "The model working on this turn";
+      meta.appendChild(m);
+    }
+    meta.appendChild(el("span", "timer", clock(card.dataset.started)));
+  } else if (rows.length) {
+    meta.appendChild(el("span", null, rows.length === 1 ? "1 step" : `${rows.length} steps`));
+  }
+}
+
+// "0:07", "2:41": how long the run has been going, ticking in place.
+function clock(started) {
+  const s = Math.max(0, Math.floor((Date.now() - Number(started || Date.now())) / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+setInterval(() => {
+  for (const c of document.querySelectorAll('.acts[data-mode="live"]')) {
+    const t = c.querySelector(".timer");
+    if (t) t.textContent = clock(c.dataset.started);
+  }
+}, 1000);
+
+// A long finished run folds to its one sentence, so reading back a
+// conversation is reading the answers, not scrolling past the working.
+function settleCard(card) {
+  card.dataset.mode = "done";
+  if (card.querySelectorAll(".act").length > COLLAPSE_OVER) {
+    card.dataset.open = "0";
+    card.querySelector(".acts-head").setAttribute("aria-expanded", "false");
+  }
+  paintHead(card);
+}
+
+// Everything Syn says in reply to one message sits in one `.turn`, under
+// one mark. A new turn starts after anything the human said.
+function assistantTurn() {
+  const last = tl.lastElementChild;
+  if (last && last.classList.contains("turn")) return last;
+  const t = el("div", "turn");
+  tl.appendChild(t);
+  return t;
+}
+
+function clearBlank() {
+  if (!tl.classList.contains("blank")) return;
+  tl.textContent = "";
+  tl.classList.remove("blank");
+  document.body.classList.remove("blank-chat");
+}
+
+const IDEAS = [
+  ["excel", "Summarise my spreadsheet", "Tell me what is in the open workbook.",
+    "Read the open workbook and tell me, in plain words, what it contains and what stands out."],
+  ["excel", "Chart the main numbers", "A titled chart on a sheet of its own.",
+    "Add a new sheet with a clear, titled chart of the main figures in the open workbook."],
+  ["word", "Draft a one-page memo", "From the numbers, into Word.",
+    "Write a one-page summary of the workbook's key findings into the open Word document, with headings."],
+  ["ppt", "Build a short deck", "A title slide and three that each make one point.",
+    "Build a title slide and three slides of key findings in the open PowerPoint deck, with speaker notes."],
+];
+
+function emptyState() {
+  const e = el("div", "empty");
+  const hero = el("div", "hero");
+  hero.innerHTML = svg("spark", 28);
+  e.appendChild(hero);
+  e.appendChild(el("h2", null, "What should Syn do?"));
+  e.appendChild(el("p", null,
+    "It works in the apps you already have open — Excel, Word, PowerPoint, your browser, any window — and shows you every step."));
+  const ideas = el("div", "ideas");
+  for (const [k, title, sub, prompt] of IDEAS) {
+    const b = el("button", "idea");
+    b.type = "button";
+    const txt = el("div");
+    txt.append(el("b", null, title), el("span", "sub", sub));
+    b.append(tile(k, "lg"), txt);
+    b.onclick = () => {
+      box.value = prompt;
+      box.dispatchEvent(new Event("input"));
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    };
+    ideas.appendChild(b);
+  }
+  e.appendChild(ideas);
+  const works = el("div", "works");
+  works.appendChild(el("span", null, "Works with"));
+  for (const k of ["excel", "word", "ppt", "web", "ui"]) {
+    const s = el("span", "w");
+    s.append(tile(k, "sm"), document.createTextNode(APPS[k].name));
+    works.appendChild(s);
+  }
+  e.appendChild(works);
+  return e;
 }
 
 function render(msgs, labels) {
@@ -858,17 +1361,7 @@ function render(msgs, labels) {
   tl.classList.toggle("blank", !msgs.length);
   document.body.classList.toggle("blank-chat", !msgs.length);
   if (!msgs.length) {
-    const e = el("div", "empty");
-    const badge = el("div", "badge");
-    badge.innerHTML =
-      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-      'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
-      '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 14l2 2 4-4"/></svg>';
-    e.appendChild(badge);
-    e.appendChild(el("h2", null, "What should Syn do?"));
-    e.appendChild(el("p", null,
-      "It drives the apps you already have open — Office, a browser, any window."));
-    tl.appendChild(e);
+    tl.appendChild(emptyState());
     drawMap();
     return;
   }
@@ -881,21 +1374,23 @@ function render(msgs, labels) {
     if (m.role === "calls") {
       let calls = [];
       try { calls = JSON.parse(m.text); } catch {}
-      if (!acts) { acts = el("div", "acts"); tl.appendChild(acts); }
+      if (!acts) { acts = workCard("done"); assistantTurn().appendChild(acts); }
       for (const c of calls) {
         const fn = c.function || {};
         const out = results[c.id] || "";
         // Keyed by call id, so a coalesced call -- two ids, one run --
         // still gets its own row saying what it asked for.
         const lb = labels[c.id];
-        acts.appendChild(activity(
+        addRow(acts, activity(
           lb ? lb.text : (fn.name || "tool"),
           lb ? lb.status : "done",
-          "arguments: " + (fn.arguments || "{}") + "\n\n" + out,
-          lb && lb.app));
+          { result: out, args: prettyArgs(fn.arguments) },
+          lb && lb.app,
+          fn.name));
       }
       continue;
     }
+    if (acts) settleCard(acts);
     acts = null;
     if (m.role === "user") {
       // The summariser's own question, which is a seam in the history
@@ -911,9 +1406,10 @@ function render(msgs, labels) {
     } else {
       const d = el("div", "bot");
       d.innerHTML = md(m.text);
-      tl.appendChild(d);
+      assistantTurn().appendChild(d);
     }
   }
+  if (acts) settleCard(acts);
   drawMap();
 }
 
@@ -924,7 +1420,7 @@ function showAsk(p) {
   $("askcmd").textContent = p.preview;
   // The model's stated reason is untrusted text: shown as a quote beside the
   // command it argues for, never as an instruction.
-  $("askwhy").textContent = p.why ? "reason given: " + p.why : "";
+  $("askwhy").textContent = p.why ? "Reason given: " + p.why : "";
 }
 
 let refresh = async function refresh() {
@@ -940,7 +1436,7 @@ let refresh = async function refresh() {
   showAsk(tagged(out, "PENDING")[0] || null);
   const first = msgs.find(m => m.role === "user");
   $("title").textContent = first ? first.text.split("\n")[0].slice(0, 80) : "New chat";
-  scroll.scrollTop = scroll.scrollHeight;
+  scrollEnd();
 }
 
 // The console prints a RECEIPT per operation as it goes. /events hands
@@ -948,33 +1444,40 @@ let refresh = async function refresh() {
 // happening instead of a spinner and a guess.
 let tailAt = 0, tailTimer = null;
 
-let tailSrc = null, liveBlock = null, liveActs = null;
+let tailSrc = null, liveTurn = null, liveActs = null, liveNodes = [];
 
 // The console prints one line per turn of the loop. Drawn as raw text it
-// is a log; drawn as the activity rows the finished transcript uses, it is
-// the run happening. Same shape either way, so watching and reading back
-// do not look like two different things.
-function liveOpen(label) {
+// is a log; drawn as the card a finished transcript uses, it is the run
+// happening. Same shape either way, so watching and reading back do not
+// look like two different things. The card says "Working" in sky with a
+// clock running until the run ends, then settles into "Worked in ...".
+function liveOpen(model) {
   liveClose();
-  liveBlock = el("div", "live");
-  const head = el("div", "live-head");
-  head.appendChild(el("span", "dot"));
-  head.appendChild(el("span", null, label));
-  liveBlock.appendChild(head);
-  liveActs = el("div", "acts");
-  liveBlock.appendChild(liveActs);
-  tl.appendChild(liveBlock);
+  clearBlank();
+  liveTurn = assistantTurn();
+  liveActs = workCard("live", model);
+  liveTurn.appendChild(liveActs);
+  liveNodes = [liveActs];
+  scrollEnd();
 }
 
 function liveClose() {
-  liveBlock = null;
+  if (liveActs) {
+    // A turn that answered without touching anything leaves no card: an
+    // empty "Worked" header is a claim about nothing.
+    if (!liveActs.querySelector(".act")) liveActs.remove();
+    else settleCard(liveActs);
+  }
+  liveTurn = null;
   liveActs = null;
+  liveNodes = [];
 }
 
 function liveRow(node) {
-  if (!liveBlock) liveOpen("working");
-  liveBlock.appendChild(node);
-  scroll.scrollTop = scroll.scrollHeight;
+  if (!liveTurn) { clearBlank(); liveTurn = assistantTurn(); }
+  liveTurn.appendChild(node);
+  liveNodes.push(node);
+  scrollEnd();
 }
 
 function liveStep(line) {
@@ -984,7 +1487,7 @@ function liveStep(line) {
     setBanner("retry", null);
     setBanner("run", null);
     setBanner("busy", { variant: "activity", priority: "activity", title: "Working on " + m[1], dismiss: false });
-    return void liveOpen("running on " + m[1]);
+    return void liveOpen(m[1]);
   }
 
   // RECEIPT step {"label","tool","app","status","detail"} -- one call,
@@ -997,9 +1500,9 @@ function liveStep(line) {
   if (m) {
     let d = null;
     try { d = JSON.parse(m[1]); } catch { return; }
-    if (!liveActs) liveOpen("working");
-    liveActs.appendChild(activity(d.label, d.status, d.detail || "(no output)", d.app));
-    scroll.scrollTop = scroll.scrollHeight;
+    if (!liveActs) liveOpen(null);
+    addRow(liveActs, activity(d.label, d.status, d.detail || "(no output)", d.app, d.tool));
+    scrollEnd();
     return;
   }
   // RECEIPT did {"text"} -- what the whole run did, in one sentence.
@@ -1038,6 +1541,7 @@ function liveStep(line) {
       title: "That model was busy",
       description: "Retrying with " + m[1] + ".",
     });
+    if (liveActs) { liveActs.dataset.model = m[1]; paintHead(liveActs); }
     return;
   }
   // RECEIPT budget {"step","max"} -- what the model is told about its own
@@ -1055,10 +1559,7 @@ function liveStep(line) {
 // claiming to be in progress.
 function liveState(running) {
   if (!running) setBanner("busy", null);
-  if (!running && liveBlock) {
-    liveBlock.querySelector(".live-head .dot")?.remove();
-    liveClose();
-  }
+  if (!running && liveActs) liveClose();
 }
 
 // A different run took over. Start it from the top rather than splicing it
@@ -1067,8 +1568,11 @@ function liveSource(name) {
   tailSrc = name;
   tailAt = 0;
   setBanner("run", null);
-  if (liveBlock) liveBlock.remove();
-  liveClose();
+  for (const n of liveNodes) n.remove();
+  if (liveTurn && !liveTurn.children.length) liveTurn.remove();
+  liveTurn = null;
+  liveActs = null;
+  liveNodes = [];
 }
 
 /* ---------------- the run, pushed ----------------
@@ -1171,12 +1675,14 @@ async function tail() {
   } catch { /* a dropped poll is not worth a message; the next one retries */ }
 }
 
+const HINT_IDLE = "<kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line";
+
 function thinking(on) {
   busy = on;
   document.body.classList.toggle("busy", on);
   $("send").disabled = on;
-  $("hint").innerHTML = on ? '<span class="spin"></span> working…'
-    : "Enter sends · Shift+Enter for a new line";
+  $("hint").innerHTML = on ? '<span class="spin"></span>&nbsp; Syn is working…' : HINT_IDLE;
+  document.querySelector(".chat.on")?.classList.toggle("working", on);
   // Nothing to pace when the stream is up: the server pushes, and the
   // pace is whatever the run is doing.
   if (sseOK) return;
@@ -1191,26 +1697,29 @@ async function send() {
   box.value = ""; box.style.height = "auto";
   // Paint the turn at once: a chat that goes blank while the model thinks
   // feels broken even when it is working.
+  clearBlank();
   tl.appendChild(el("div", "you", v));
-  scroll.scrollTop = scroll.scrollHeight;
+  if ($("title").textContent === "New chat") $("title").textContent = v.split("\n")[0].slice(0, 80);
+  scrollEnd();
   thinking(true);
   try {
     const r = verdict(await cli("say " + v.replace(/\n/g, " ")));
     await refresh();
     if (r.answered && r.retried) {
-      tl.appendChild(el("div", "note", "that model was busy — answered with " + r.retried));
+      tl.appendChild(el("div", "note", "That model was busy, so " + r.retried + " answered instead"));
     } else if (!r.answered && r.failure) {
       tl.appendChild(el("div", "fail", r.failure));
     }
     await loadChats();
   } catch (e) {
     tl.appendChild(el("div", "fail", "Console unreachable: " + e.message));
+    $("sidefoot").classList.add("down");
   } finally {
     thinking(false);
     // A turn can attach or lose a hand, so the pill is only honest if it is
     // re-read afterwards rather than left as it was at boot.
     await hands();
-    scroll.scrollTop = scroll.scrollHeight;
+    scrollEnd();
     box.focus();
   }
 }
@@ -1223,13 +1732,33 @@ async function decide(yes) {
   finally { thinking(false); }
 }
 
+// What is connected, said as the applications themselves: "Excel · Word"
+// with their tiles, not "2 hands". A hand that claims everything shows as
+// one neutral tile rather than pretending to know which apps it will get.
 async function hands() {
   try {
-    const n = (await cli("hands")).split("\n").filter(l => l.startsWith("HAND ")).length;
+    const lines = (await cli("hands")).split("\n").filter(l => l.startsWith("HAND "));
+    const keys = [];
+    for (const l of lines) {
+      const claims = (l.match(/claims=(\S+)/) || [])[1] || "any";
+      for (const c of claims.split(",")) {
+        const k = c === "any" ? "other" : appKey(c);
+        if (!keys.includes(k)) keys.push(k);
+      }
+    }
     const p = $("hands");
-    p.classList.toggle("live", n > 0);
-    p.lastChild.textContent = n ? n + (n === 1 ? " hand" : " hands") : "no hands";
-  } catch {}
+    p.classList.toggle("live", lines.length > 0);
+    const st = p.querySelector(".stack");
+    st.textContent = "";
+    for (const k of keys.slice(0, 4)) st.appendChild(tile(k, "sm"));
+    const names = keys.map(k => (APPS[k] || APPS.other).name);
+    p.querySelector(".lbl").textContent = !lines.length ? "No apps connected"
+      : names.length <= 2 ? names.join(" · ") : `${names.length} apps connected`;
+    p.title = lines.length ? "Connected: " + names.join(", ") : "Connect an app";
+    $("sidefoot").classList.remove("down");
+  } catch {
+    $("sidefoot").classList.add("down");
+  }
 }
 
 box.addEventListener("input", () => {
@@ -1237,13 +1766,13 @@ box.addEventListener("input", () => {
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + "px";
 });
 box.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
 $("send").onclick = send;
 $("ok").onclick = () => decide(true);
 $("no").onclick = () => decide(false);
-$("task").onchange = e => cli("task " + e.target.value);
-$("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); box.focus(); };
+$("task").onchange = e => { slotTitle(); cli("task " + e.target.value); };
+$("new").onclick = async () => { await cli("chat new"); await loadChats(); await refresh(); closeSideOnPhone(); box.focus(); };
 window.addEventListener("hashchange", () => {
   const id = location.hash.slice(1);
   if (id && id !== current && !busy) void openChat(id);
@@ -1267,7 +1796,9 @@ function setSide(hidden) {
   document.body.classList.toggle("hidden-side", hidden);
   try { localStorage.setItem("syn.side", hidden ? "0" : "1"); } catch {}
 }
+function closeSideOnPhone() { if (window.innerWidth <= 780) document.body.classList.add("hidden-side"); }
 $("toggle").onclick = () => setSide(!document.body.classList.contains("hidden-side"));
+$("scrim").onclick = () => document.body.classList.add("hidden-side");
 try {
   if (localStorage.getItem("syn.side") === "0") document.body.classList.add("hidden-side");
 } catch {}
@@ -1279,6 +1810,26 @@ window.addEventListener("keydown", e => {
   }
 });
 
+/* ---------------- theme ----------------
+   System, light or dark, pinned per viewer. "System" follows the OS live,
+   so a laptop that flips to dark at sunset takes the page with it. */
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function setTheme(pref) {
+  pref = pref === "light" || pref === "dark" ? pref : "system";
+  const root = document.documentElement;
+  root.dataset.pref = pref;
+  root.dataset.theme = pref === "system" ? (darkQuery.matches ? "dark" : "light") : pref;
+  for (const b of $("theme").children) b.setAttribute("aria-pressed", String(b.dataset.pref === pref));
+  try { localStorage.setItem("syn.theme", pref); } catch {}
+  return pref;
+}
+darkQuery.addEventListener("change", () => {
+  if (document.documentElement.dataset.pref === "system") setTheme("system");
+});
+for (const b of $("theme").children) b.onclick = () => setTheme(b.dataset.pref);
+setTheme(document.documentElement.dataset.pref);
+$("contrast").addEventListener("input", e => setContrast(e.target.value));
+
 (async () => {
   try {
     // Read the requested thread before loadChats() rewrites the hash to
@@ -1288,7 +1839,10 @@ window.addEventListener("keydown", e => {
     if (want && want !== current) await openChat(want); else await refresh();
     await hands();
   }
-  catch (e) { tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message)); }
+  catch (e) {
+    tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message));
+    $("sidefoot").classList.add("down");
+  }
   box.focus();
   // Watch from the moment the page opens: whatever run is printing now is
   // the one worth showing, whoever started it. Last, because it touches
@@ -1316,6 +1870,8 @@ function setContrast(v) {
   r.setProperty("--contrast-boost", Math.max(n - 100, 0) + "%");
   r.setProperty("--contrast-border-boost", Math.max(n - 100, 0) / 4 + "%");
   try { localStorage.setItem("contrast", String(n)); } catch { /* private window */ }
+  const slider = $("contrast");
+  if (slider && Number(slider.value) !== n) slider.value = String(n);
   return n;
 }
 try { const c = localStorage.getItem("contrast"); if (c) setContrast(c); } catch { /* fine */ }
@@ -1362,16 +1918,17 @@ function bannerRow(b) {
   row.setAttribute("role", b.variant === "error" ? "alert" : "status");
   const ic = el("span", "ic");
   if (b.variant === "activity") ic.appendChild(el("span", "spin"));
-  else ic.textContent = b.variant === "error" ? "!" : b.variant === "warning" ? "!" : "i";
+  else ic.innerHTML = svg(b.variant === "error" ? "circle-alert" : b.variant === "warning" ? "alert" : "info", 15, 2.1);
   row.appendChild(ic);
   const bd = el("div", "bd");
   bd.appendChild(el("div", "ti", b.title));
   if (b.description) bd.appendChild(el("div", "ds", b.description));
   row.appendChild(bd);
   if (b.dismiss !== false) {
-    const x = el("button", "xx", "×");
+    const x = el("button", "xx");
     x.type = "button";
     x.setAttribute("aria-label", "Dismiss");
+    x.innerHTML = svg("x", 13, 2.2);
     x.onclick = () => setBanner(b.id, null);
     row.appendChild(x);
   }
@@ -1511,9 +2068,9 @@ function foldIfLong(node) {
    version of the stream specs read `window.sseOK`, got `undefined`, and
    failed for that reason alone.
 
-   Deliberately small, and deliberately read-mostly: the three writers are
-   the ones a test needs to force a transport, and each is something the
-   page already does to itself. */
+   Deliberately small, and deliberately read-mostly: the writers are the
+   ones a test needs to force a transport or stage a state, and each is
+   something the page already does to itself. */
 window.live = {
   /** Is the server pushing, rather than the page asking? */
   get sse() { return sseOK; },
@@ -1546,6 +2103,9 @@ window.live = {
   render: (msgs, labels) => render(msgs, labels),
   budget: (step, max) => setBudget(step, max),
   contrast: v => setContrast(v),
+  theme: p => setTheme(p),
+  /** Show or clear the approval panel, as a PENDING line would. */
+  ask: p => showAsk(p),
   fold: node => foldIfLong(node),
   /** Drop to polling, the way a proxy that eats event-streams would. */
   toPolling(ms) {

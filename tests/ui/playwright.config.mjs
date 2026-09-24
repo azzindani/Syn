@@ -15,5 +15,9 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
     colorScheme: "dark",
     screenshot: "only-on-failure",
+    // A machine whose preinstalled Chromium is not the build this
+    // Playwright pins (a cloud sandbox, say) points at it here rather than
+    // downloading another: PW_CHROMIUM=/opt/pw-browsers/chromium npm test
+    launchOptions: process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {},
   },
 });

@@ -56,7 +56,7 @@ software hands (Office first) in one live session, any model via OpenRouter.
 - `tests/capability/` — the v0.1.0 capability test: brief, rubric, scorers,
   and every recorded run (`SPEC-v3.md`).
 - `tests/ui/` — Playwright specs that drive the real console.
-- `docs/` — 00→10, DIGEST-00→08, PRD, ideas, runbook-windows.
+- `docs/` — 00→10, DIGEST-00→09, PRD, ideas, runbook-windows.
 - `.tmp/repos/` — gitignored; local clones of the sources this was ported
   from (`docs/DIGEST-00-inventory.md`).
 
@@ -159,21 +159,27 @@ Reproduce with `scripts/live-uia-smoke.ps1`.
 powershell -File scripts\console.ps1 -WithUia
 ```
 
-Starts the app (and the UIA sidecar), prints a tokenised URL and opens it.
+Starts the app (and the UIA sidecar), prints its address and opens it.
 A thread list down the side, a conversation in the middle, a composer at the
-bottom. Tool calls render as quiet one-line rows you can expand, so a run
-that makes a dozen of them still reads as a conversation rather than a log.
-An approval attaches to the composer with Approve / Deny, where your
-attention already is, instead of scrolling past as a message.
+bottom. Each turn's tool calls sit in one card headed by a sentence —
+"Working in Word" with a running clock while it runs, "Worked in Excel and
+PowerPoint · 1 refused · 6 steps" when it is done — and every row inside
+carries the colour of the app it touched, so a run that makes a dozen calls
+still reads as a conversation rather than a log. An approval attaches to the
+composer with Approve / Deny, where your attention already is, instead of
+scrolling past as a message. The status menu top right connects apps,
+switches between system, light and dark, and sets contrast. The visual
+design is digested from t3code in `docs/DIGEST-09-t3code-visual.md`.
 
 Conversations are saved to `.agent/chats` after every turn and listed newest
 first. Switching the model slot applies to the next turn of the conversation
 you are in, which is what makes a 429 on a free-tier model survivable.
 
-It binds 127.0.0.1 and every request carries a per-run token in a custom
-header. A custom header forces a CORS preflight, which the server refuses,
-so a page you happen to visit cannot post commands to this port — and a
-request that arrives with any `Origin` header is rejected outright.
+It binds 127.0.0.1 only, and a command is refused unless its `Origin` is
+the console's own (and refused outright with none). Browsers attach
+`Origin` to every cross-origin POST and cannot forge it, so a page you
+happen to visit cannot post commands to this port; preflights are refused
+too. See the header of `core/src/bin/ui.rs`.
 
 Stop it with `Get-Process ui, uia-host | Stop-Process`.
 

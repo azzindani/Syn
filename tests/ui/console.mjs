@@ -7,6 +7,9 @@ export const repo = path.resolve(here, "..", "..");
 export const urlFile = path.join(here, ".console-url.txt");
 export const stateFile = path.join(here, ".console.json");
 
+/** The console binary. `ui.exe` on Windows, plain `ui` everywhere else. */
+export const uiBin = path.join(repo, "core", "target", "debug", process.platform === "win32" ? "ui.exe" : "ui");
+
 export function readState() {
   return JSON.parse(fs.readFileSync(stateFile, "utf8"));
 }
@@ -24,7 +27,7 @@ export function readState() {
 export async function startConsole({ port, tail } = {}) {
   const { spawn } = await import("node:child_process");
   const os = await import("node:os");
-  const ui = path.join(repo, "core", "target", "debug", "ui.exe");
+  const ui = uiBin;
   if (!fs.existsSync(ui)) throw new Error("build it first: cd core && cargo build --bins");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "syn-console-"));

@@ -278,3 +278,85 @@ test("a malformed receipt is skipped rather than blanking the page", async ({ pa
   const alive = await page.evaluate(() => typeof window.live.step === "function");
   expect(alive).toBe(true);
 });
+
+test("a turn's work reads as one sentence of where it happened", async ({ page }) => {
+  await say(page, "RECEIPT say model=vendor/model-x open=2");
+  await say(page, step({ label: "Read data!A1:H6", tool: "read", app: "excel", status: "done", detail: "6x8" }));
+  await say(page, step({ label: "Created slide 1", tool: "struct", app: "ppt", status: "done", detail: "s1" }));
+  await say(page, step({ label: "Tried to add Scorecard", tool: "struct", app: "excel", status: "refused", detail: "exists" }));
+
+  // While it runs, the card says so, in the present tense, with the apps.
+  const card = page.locator(".acts").last();
+  await expect(card).toHaveAttribute("data-mode", "live");
+  await expect(card.locator(".acts-head .sum")).toHaveText("Working in Excel and PowerPoint");
+  await expect(card.locator(".acts-head .pill.warn")).toHaveText("1 refused");
+
+  // Each row carries its application, so Excel rows look like Excel.
+  const tiles = await card.locator(".act .tile").evaluateAll((els) => els.map((e) => e.dataset.k));
+  expect(tiles).toEqual(["excel", "ppt", "excel"]);
+
+  // When the answer lands, it settles into the past tense and counts.
+  await say(page, "ANSWER Done.");
+  await expect(card).toHaveAttribute("data-mode", "done");
+  await expect(card.locator(".acts-head .sum")).toHaveText("Worked in Excel and PowerPoint");
+  await expect(card.locator(".acts-head .meta")).toContainText("3 steps");
+});
+
+test("a turn that touched nothing leaves no empty card behind", async ({ page }) => {
+  await say(page, "RECEIPT say model=vendor/model-x open=0");
+  await expect(page.locator(".acts")).toHaveCount(1);
+  await say(page, "ANSWER Nothing to do: the sheet is already sorted.");
+  await expect(page.locator(".acts")).toHaveCount(0);
+  await expect(page.locator(".bot")).toContainText("already sorted");
+});
+
+test("a long finished run folds to its sentence, and opens again", async ({ page }) => {
+  const calls = Array.from({ length: 12 }, (_, i) => ({
+    id: `c${i}`,
+    function: { name: "read", arguments: JSON.stringify({ handle: "excel:p.xlsx:S1", selector: `A${i}` }) },
+  }));
+  const labels = Object.fromEntries(calls.map((c, i) => [c.id, { text: `Read A${i}`, status: "done", app: "excel" }]));
+  await page.evaluate(
+    ([calls, labels]) =>
+      window.live.render(
+        [
+          { role: "user", text: "read everything" },
+          { role: "calls", text: JSON.stringify(calls) },
+          { role: "assistant", text: "Read it all." },
+        ],
+        labels,
+      ),
+    [calls, labels],
+  );
+  const card = page.locator(".acts");
+  await expect(card).toHaveAttribute("data-open", "0");
+  await expect(page.locator(".act").first()).toBeHidden();
+  await expect(card.locator(".acts-head .meta")).toContainText("12 steps");
+
+  await card.locator(".acts-head").click();
+  await expect(card).toHaveAttribute("data-open", "1");
+  await expect(page.locator(".act").first()).toBeVisible();
+});
+
+test("a saved call opens to what it returned and what it asked for", async ({ page }) => {
+  await page.evaluate(() =>
+    window.live.render(
+      [
+        { role: "user", text: "read it" },
+        {
+          role: "calls",
+          text: JSON.stringify([
+            { id: "a", function: { name: "read", arguments: '{"handle":"excel:p.xlsx:S1","selector":"A1:B2"}' } },
+          ]),
+        },
+        { role: "tool", id: "a", text: "grid S1: 2x2" },
+      ],
+      { a: { text: "Read A1:B2", status: "done", app: "excel" } },
+    ),
+  );
+  await page.locator(".act").first().click();
+  const body = page.locator(".body").first();
+  await expect(body).toContainText("grid S1: 2x2");
+  // Indented, not one long line of JSON.
+  await expect(body).toContainText('"selector": "A1:B2"');
+});

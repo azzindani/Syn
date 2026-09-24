@@ -19,7 +19,7 @@ import path from "node:path";
 
 import { test, expect } from "@playwright/test";
 
-import { repo } from "./console.mjs";
+import { repo, uiBin } from "./console.mjs";
 
 const PORT = Number(process.env.SYN_STREAM_TEST_PORT ?? 7801);
 
@@ -35,7 +35,7 @@ function emit(line) {
 const step = (o) => "RECEIPT step " + JSON.stringify(o);
 
 test.beforeAll(async () => {
-  const ui = path.join(repo, "core", "target", "debug", "ui.exe");
+  const ui = uiBin;
   if (!fs.existsSync(ui)) throw new Error(`build it first: cd core && cargo build --bins`);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "syn-stream-"));

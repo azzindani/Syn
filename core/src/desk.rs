@@ -638,9 +638,12 @@ mod no_inherit {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
 
+    // std, not core: this crate is itself named `core`, and the doctest
+    // build links it as `--extern core`, which hides the real one. Windows
+    // CI failed on exactly that while every lib build passed.
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn SetHandleInformation(h: *mut core::ffi::c_void, mask: u32, flags: u32) -> i32;
+        fn SetHandleInformation(h: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
     }
     const HANDLE_FLAG_INHERIT: u32 = 1;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;

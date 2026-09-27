@@ -30,7 +30,7 @@ the CLI's `attach`) returns:
 | App | Handle | Selectors |
 |---|---|---|
 | Excel | `excel:plan.xlsx:workbook` | `Sheet1!A1:D10`; `'Q3 sales'!B2` when the sheet name has a space; `data!5:7` (rows), `data!C:E` (columns); a bare sheet name for the used range |
-| Word | `word:report.docx:body` | `body` (the whole text, numbered); `p3` (one paragraph); `p3:p9` (several). `p0` is the first paragraph |
+| Word | `word:report.docx:body` | `body` (the whole text, numbered); `p3` (one paragraph); `p3:p9` (several). `p0` is the first paragraph. `t2` is the second table, `t2.r1` its first row (`t2.r2:r9` several), `t2.c3` a column |
 | PowerPoint | `ppt:deck.pptx:deck` | `deck`; `s3` (slide 3, the title for `write`/`format`); `s3.body`; `s3.notes` |
 | A window | `ui:Calculator::self` | `:tree`; `id=num7Button`, `name=Seven`, `type=Button`, joined with `,` |
 | A web page | `web:Example Domain::doc` | CSS: `h1`, `#total`, `table tr:nth-child(2)`; `body` for the page text |
@@ -54,7 +54,10 @@ read {"handle":"excel:plan.xlsx:workbook","selector":"data!A1:C5"}
 - **Word** returns numbered paragraphs, each tagged with its style when it
   has one: `paras=12 | p0 [Title]: Site visit | p1: Prepared for …`. A long
   document stops after 60 paragraphs (or 6,000 characters) and names the
-  range to read next.
+  range to read next. A table is one entry naming the paragraphs its cells
+  take and which table it is: `p9:p68 [table t1, 12x4]: Site|Records;North|24,869;…`
+  (Word counts every cell, and the end of every row, as a paragraph).
+  `export` summary lists the tables the same way.
 - **PowerPoint** `deck` lists the slides and their titles; `s3` lists a
   slide's text; `s3.notes` its speaker notes.
 
@@ -85,7 +88,7 @@ Writes over the bulk cap are refused.
 | App | Selector | Keys |
 |---|---|---|
 | Excel | a range, rows or columns | `bold`, `italic`, `underline`, `strike`, `size`, `font`, `color`, `fill` (hex), `numberFormat`, `width`, `height`, `autofit`, `autofitSheet`, `wrap`, `merge`, `border`, `align` (left/center/right), `valign` (top/center/bottom), `indent`, `rotate` (degrees), `hidden` (hide the rows or columns named), `freeze` (freeze panes above and left of the selector) |
-| Word | a paragraph `p3` | `style` (e.g. `Heading 1`), `bold`, `italic`, `underline`, `size`, `font`, `color`, `highlight` (yellow, green, cyan, pink, red, blue, gray, none), `align`, `spaceBefore`, `spaceAfter`, `lineSpacing` (1.5), `indent` |
+| Word | a paragraph `p3` or a range `p3:p9`; a table `t2`, its rows `t2.r1` or `t2.r2:r9`, its columns `t2.c3` or `t2.c2:c4` | `style` (e.g. `Heading 1`), `bold`, `italic`, `underline`, `size`, `font`, `color`, `highlight` (yellow, green, cyan, pink, red, blue, gray, none), `fill` (a paragraph or cell colour, or none), `align`, `spaceBefore`, `spaceAfter`, `lineSpacing` (1.5), `indent`; on a whole table also `tableStyle` (e.g. `Grid Table 4 - Accent 1`), `banded` and `header` (1 or 0), `autofit` (content, window or fixed) |
 | PowerPoint | `s3` (title) or `s3.body` | `bold`, `italic`, `underline`, `size`, `font`, `color`, `align` |
 
 ```
@@ -108,6 +111,8 @@ application is asked, with the list of verbs that app does have.
 | `pageSetup` | `style`, `selector` (Excel: the sheet) | `orientation=landscape`, `paper=A4` or `Letter`, `margin=0.75` (inches); Excel adds `fitWide`, `fitTall`; a deck takes `size=16:9`, `4:3`, `16:10`, `A4`, `Letter` and `orientation`. |
 | `pageNumbers` | `text` (optional footer text) | Excel: every sheet's footer. Word: the footer. PowerPoint: slide numbers. |
 | `picture` | `text` (file path), `selector`, `name` | Excel: the range it fills. Word: `name` is the width in points. PowerPoint: `selector` is the slide, `name` the box `left,top,width,height` in points. |
+| `save` | — | Writes the document to its own file, in its own format: never a Save As. Refused for a document never saved, one open read-only, and a CSV (it keeps one sheet's values); `export` writes a copy instead. |
+| `close` | — | Closes a document Syn opened, once saved. Refused with unsaved changes and for anything the user already had open. Never quits the application. Its handles leave the registry. |
 
 ### Excel
 
@@ -137,7 +142,9 @@ application is asked, with the list of verbs that app does have.
 | Verb | Fields | Notes |
 |---|---|---|
 | `insertParagraph` | `text`, `name` (style), `at` | Appends, or goes before paragraph `at` and becomes it. Styles by their built-in names (`Heading 1`, `Title`, `Quote`, `List Bullet`, `List Number`) work in any language of Word. |
-| `insertTable` | `rows` (`a|b;c|d`), `name` (style), `at` | |
+| `insertTable` | `rows` (`a|b;c|d`), `name` (table style), `at` | Appends, or goes before paragraph `at`. The cells are Normal text whatever they were put in front of. The reply names the table and its paragraphs: `table t2 added, 3x4 [Table Grid], as p9:p24`. |
+| `delete` | `selector` | A paragraph `p3`, a range `p3:p5`, or a whole table `t2`. |
+| `embedChart` | `from` (a workbook handle), `source` (`Summary!2`, the second chart on Summary), `name` (width in points), `at`, `style` | A real chart from an open workbook, still a chart that can be edited, linked to the workbook so it follows its numbers (`link=0` embeds a copy instead). `from` must be a handle this session opened, and passes the same gates as any Excel call. The chart travels by the clipboard; text you had copied is put back. |
 | `header` | `name` (`header`/`footer`), `text` | Replaces what is there; add `pageNumbers` after a footer. |
 | `pageBreak` | `name` (`page`/`section`) | |
 | `contents` | `title` | A table of contents; calling it again refreshes it. |
@@ -171,7 +178,21 @@ copies typed data between two handles with its provenance recorded.
 the workbook first, because running VBA clears Excel's own undo list. A
 built-in filter refuses obviously dangerous calls (`Shell`, `CreateObject`,
 `Kill`, `SendKeys`, `Declare`, …); it is a safeguard against careless code,
-not a security boundary.
+not a security boundary. Code that starts itself (`Auto_Open`,
+`Workbook_Open`, …) and code with `MsgBox` or `InputBox`, which would wait
+for a click nobody makes, is refused when it is written.
+
+Only `write`, `read` and `list` need the Trust Center setting; `run` calls a
+macro already in the workbook, and always this workbook's (by its full
+name, never a same-named macro elsewhere). A macro that fails does not hang
+the run: VBA's error box is read, closed as if End (or OK, for a compile
+error) had been pressed, and its words come back as the error, e.g.
+`stopped with a VBA error: Run-time error '11': Division by zero`. The model
+is told in its environment whether VBA is on for the session.
+
+A macro written into an `.xlsx` lives only while the workbook is open: the
+format cannot hold VBA, so `save` keeps what the macro did and drops the
+macro itself.
 
 ## export
 

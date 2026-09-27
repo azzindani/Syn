@@ -104,18 +104,7 @@ namespace Syn.Sidecar
             dynamic app = AttachOrStart(_app);
             try
             {
-                // Neither of these is worth dying for. Excel rejects a
-                // property set with 0x800A03EC whenever it is momentarily
-                // busy -- a cell left in edit mode is enough -- and an
-                // unhandled exception here took the whole sidecar down at
-                // startup, before it had served a single call. A hand that
-                // cannot dismiss alerts still drives the application.
-                // PowerPoint takes enums where the other two take booleans:
-                // Visible is an MsoTriState and DisplayAlerts is ppAlertsNone,
-                // so the boolean form fails the cast rather than the call.
-                var ppt = _app == "powerpoint";
-                Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
-                Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
+                Prepare(app);
                 // Serve clients one after another. The first version served
                 // exactly one and exited on its disconnect, so the sidecar
                 // died the moment anything reconnected -- which is precisely
@@ -134,9 +123,22 @@ namespace Syn.Sidecar
                     new Thread(Listen) { IsBackground = true, Name = $"pipe-{i}" }.Start();
                 foreach (var job in Jobs.GetConsumingEnumerable())
                 {
-                    string reply;
-                    try { reply = Dispatch(app, job.Line); }
-                    catch (Exception e) { reply = Fail($"{e.GetType().Name}: {e.Message}"); }
+                    var reply = Serve(app, job.Line);
+                    // The application this helper attached to can go away
+                    // under it: the human quits Word, or Word crashes. Every
+                    // call after that failed with 0x800706BA "The RPC server
+                    // is unavailable" for the rest of the helper's life, and
+                    // the console kept reattaching to the same dead helper,
+                    // so Word was unusable from Syn until someone killed the
+                    // process by hand. A call that failed that way never
+                    // reached the application, so it is safe to make once
+                    // more against a fresh one.
+                    if (AppGone(reply))
+                    {
+                        Console.WriteLine($"{_app} went away; attaching to a fresh one");
+                        app = Reattach(app);
+                        reply = Serve(app, job.Line);
+                    }
                     job.Reply.TrySetResult(reply);
                 }
             }
@@ -206,6 +208,53 @@ namespace Syn.Sidecar
         // Office says "busy" by refusing a property set, not by blocking, so
         // the MessageFilter never sees it and has nothing to retry. Give it a
         // few moments to finish whatever it is doing, then carry on without.
+        private static void Prepare(dynamic app)
+        {
+            // Neither of these is worth dying for. Excel rejects a
+            // property set with 0x800A03EC whenever it is momentarily
+            // busy -- a cell left in edit mode is enough -- and an
+            // unhandled exception here took the whole sidecar down at
+            // startup, before it had served a single call. A hand that
+            // cannot dismiss alerts still drives the application.
+            // PowerPoint takes enums where the other two take booleans:
+            // Visible is an MsoTriState and DisplayAlerts is ppAlertsNone,
+            // so the boolean form fails the cast rather than the call.
+            var ppt = _app == "powerpoint";
+            Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
+            Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
+            if (_app == "excel") SweepOrphanScratch((object)app);
+        }
+
+        private static string Serve(dynamic app, string line)
+        {
+            try { return Dispatch(app, line); }
+            catch (Exception e) { return Fail($"{e.GetType().Name}: {e.Message}"); }
+        }
+
+        // RPC_S_SERVER_UNAVAILABLE and RPC_E_DISCONNECTED: the process behind
+        // the proxy has exited. Not RPC_S_CALL_FAILED (0x800706BE), which can
+        // mean it died partway through a call that had already changed things.
+        private static readonly string[] GoneCodes = { "0x800706BA", "0x80010108" };
+
+        private static bool AppGone(string reply) =>
+            reply.StartsWith("{\"ok\":false", StringComparison.Ordinal)
+            && GoneCodes.Any(c => reply.Contains(c, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Let go of a dead application and take the running one, or
+        /// start one, exactly as a helper does at startup. What this helper
+        /// knew about the old one's documents -- undo copies, which ones it
+        /// opened -- went with it, so that is dropped too: a close must not
+        /// be allowed on a same-named document someone else opens later.</summary>
+        private static dynamic Reattach(dynamic dead)
+        {
+            try { DropAllUndo(); } catch { }
+            OpenedHere.Clear();
+            try { Marshal.FinalReleaseComObject(dead); } catch { }
+            dynamic app = AttachOrStart(_app);
+            Prepare(app);
+            return app;
+        }
+
         private static void Settle(Action set, string what)
         {
             for (var attempt = 0; attempt < 5; attempt++)
@@ -365,6 +414,7 @@ namespace Syn.Sidecar
                                 return Ok($"already open: {name}");
                         app.Visible = true;
                         app.Documents.Open(full);
+                        OpenedHere.Add(name);
                         return Ok($"opened {name}, {(int)app.Documents.Count} document(s)");
                     }
                     case "excel":
@@ -374,6 +424,7 @@ namespace Syn.Sidecar
                                 return Ok($"already open: {name}");
                         app.Visible = true;
                         app.Workbooks.Open(full);
+                        OpenedHere.Add(name);
                         return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s)");
                     }
                     case "powerpoint":
@@ -386,6 +437,7 @@ namespace Syn.Sidecar
                         // fails the cast rather than the call.
                         app.Visible = -1;
                         app.Presentations.Open(full);
+                        OpenedHere.Add(name);
                         return Ok($"opened {name}, {(int)app.Presentations.Count} presentation(s)");
                     }
                     default:
@@ -424,7 +476,11 @@ namespace Syn.Sidecar
                     "contents" => Contents(doc, handle, JsonField(args, "title")),
                     "pageNumbers" => PageNumbers(doc, handle, JsonField(args, "text")),
                     "picture" => Picture(doc, handle, JsonField(args, "text"), JsonField(args, "name")),
+                    "embedChart" => EmbedChart(doc, handle, JsonField(args, "from"), JsonField(args, "source"),
+                                               JsonField(args, "at"), JsonField(args, "name"), JsonField(args, "style")),
                     "format" => FormatWord(doc, handle, selector, JsonField(line, "payload")),
+                    "save" => SaveWord(doc),
+                    "close" => CloseWord(doc),
                     _ => throw new InvalidOperationException($"unsupported word.{method} sel={selector}"),
                 };
             });
@@ -456,16 +512,41 @@ namespace Syn.Sidecar
                     throw new InvalidOperationException($"p{from} does not exist: the document has {total} paragraph(s), p0 to p{total - 1}");
                 to = Math.Min(to, total - 1);
                 if (from == to)
-                    return $"para {from}: {Trunc((string)doc.Paragraphs[from + 1].Range.Text, 4000)}";
+                {
+                    var one = TableSpans(docO).FirstOrDefault(s => from >= s.First && from <= s.Last);
+                    var where = "";
+                    if (one != null)
+                    {
+                        dynamic cellRange = doc.Paragraphs[from + 1].Range;
+                        try { where = $" (table t{one.Index}, row {(int)cellRange.Cells[1].RowIndex}, column {(int)cellRange.Cells[1].ColumnIndex})"; }
+                        catch { where = $" (in table t{one.Index}, p{one.First}:p{one.Last})"; }
+                    }
+                    return $"para {from}{where}: {Trunc((string)doc.Paragraphs[from + 1].Range.Text, 4000)}";
+                }
             }
+            var spans = TableSpans(docO);
             var sb = new StringBuilder($"paras={total}");
             var chars = 0;
+            var entries = 0;
             for (var i = from; i <= to; i++)
             {
-                if (i - from >= ReadParaCap || chars >= ReadCharCap)
+                if (entries >= ReadParaCap || chars >= ReadCharCap)
                 {
                     sb.Append($" | ... p{i} to p{to} not shown: read p{i}:p{Math.Min(to, i + ReadParaCap - 1)} next");
                     break;
+                }
+                entries++;
+                // A table is one entry naming the paragraphs it takes. Shown
+                // cell by cell it was sixty unlabelled lines, and a model
+                // deleted real tables three times taking them for loose text.
+                var span = SpanAt(spans, i);
+                if (span != null)
+                {
+                    var entry = TableEntry(span, 3000);
+                    chars += entry.Length;
+                    sb.Append(" | ").Append(entry);
+                    i = span.Last;
+                    continue;
                 }
                 dynamic p = doc.Paragraphs[i + 1];
                 var text = ((string)p.Range.Text).TrimEnd('\r', '\a', '\n');
@@ -595,9 +676,13 @@ namespace Syn.Sidecar
             if (rows.Length == 0) throw new InvalidOperationException("insertTable needs rows: cells by |, rows by ;");
             int nc = 0;
             foreach (var r in rows) nc = Math.Max(nc, r.Length);
-            dynamic anchor = string.IsNullOrWhiteSpace(at)
-                ? AppendParagraph(doc, "")
-                : ParagraphBefore(doc, ParaBefore((object)doc, at, "insertTable"));
+            var before = string.IsNullOrWhiteSpace(at) ? -1 : ParaBefore((object)doc, at, "insertTable");
+            dynamic anchor = before < 0 ? AppendParagraph(doc, "") : ParagraphBefore(doc, before);
+            // The anchor is made in front of a paragraph and takes its style,
+            // and every cell of the table takes the anchor's: a table put
+            // before a section heading came out Heading 1 in every cell, and
+            // its numbers filled the document's outline.
+            ApplyStyle(anchor, "Normal");
             dynamic t = doc.Tables.Add(anchor.Range, rows.Length, nc);
             for (int r = 0; r < rows.Length; r++)
                 for (int c = 0; c < nc; c++)
@@ -606,7 +691,15 @@ namespace Syn.Sidecar
             // A long table is unreadable across a page break without this.
             try { t.Rows[1].HeadingFormat = true; } catch { }
             doc.Saved = false;
-            return Ok($"table {doc.Tables.Count} added, {rows.Length}x{nc}{note}");
+            // Which table it is and where, counted the way every selector
+            // counts: "table 2 added" was the count of tables, wrong for one
+            // put in front of the others, and said nothing of the sixty
+            // paragraph numbers it had just taken.
+            int start = t.Range.Start;
+            var span = TableSpans((object)doc).FirstOrDefault(s => (int)((dynamic)s.Table).Range.Start == start);
+            if (span == null) return Ok($"table added, {rows.Length}x{nc}{note}");
+            return Ok($"table t{span.Index} added, {rows.Length}x{nc}{note}, as p{span.First}:p{span.Last}"
+                      + (before < 0 ? "" : $"; what was p{before} is now p{span.Last + 1}"));
         }
 
         private static string PageBreak(dynamic doc, string handle, string kind)
@@ -728,72 +821,6 @@ namespace Syn.Sidecar
             return Ok($"picture {doc.InlineShapes.Count} added from {Path.GetFileName(full)}");
         }
 
-        private static string FormatWord(dynamic doc, string handle, string selector, string styles)
-        {
-            Snapshot(handle);
-            if (!selector.StartsWith("p") || !int.TryParse(selector[1..], out var n))
-                throw new InvalidOperationException($"word format needs a paragraph like p3, not {selector}");
-            dynamic para = doc.Paragraphs[n + 1];
-            dynamic range = para.Range;
-            var did = new List<string>();
-            foreach (var pair in (styles ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var i = pair.IndexOf('=');
-                if (i < 0) continue;
-                var key = pair[..i].Trim().ToLowerInvariant();
-                var val = pair[(i + 1)..].Trim();
-                var on = !(val == "0" || val.Equals("false", StringComparison.OrdinalIgnoreCase));
-                switch (key)
-                {
-                    case "style": ApplyStyle(para, val); break;
-                    case "bold": range.Font.Bold = on ? 1 : 0; break;
-                    case "italic": range.Font.Italic = on ? 1 : 0; break;
-                    case "size": range.Font.Size = double.Parse(val, CultureInfo.InvariantCulture); break;
-                    case "font": range.Font.Name = val; break;
-                    // wdAlignParagraphLeft 0, Center 1, Right 2, Justify 3
-                    case "align":
-                        range.ParagraphFormat.Alignment = val.ToLowerInvariant() switch
-                        {
-                            "left" => 0,
-                            "center" => 1,
-                            "centre" => 1,
-                            "right" => 2,
-                            "justify" => 3,
-                            _ => throw new InvalidOperationException($"align does not know {val}"),
-                        };
-                        break;
-                    case "underline": range.Font.Underline = on ? 1 : 0; break; // wdUnderlineSingle
-                    case "color": range.Font.Color = OleColor(val); break;
-                    // WdColorIndex: the highlighter's own colours, by name.
-                    case "highlight":
-                        range.HighlightColorIndex = val.ToLowerInvariant() switch
-                        {
-                            "yellow" => 7, "green" => 4, "cyan" or "turquoise" => 3, "pink" => 5,
-                            "red" => 6, "blue" => 2, "gray" or "grey" => 16, "none" or "0" => 0,
-                            _ => throw new InvalidOperationException(
-                                $"highlight does not know {val}: yellow, green, cyan, pink, red, blue, gray or none"),
-                        };
-                        break;
-                    case "spacebefore": range.ParagraphFormat.SpaceBefore = double.Parse(val, CultureInfo.InvariantCulture); break;
-                    case "spaceafter": range.ParagraphFormat.SpaceAfter = double.Parse(val, CultureInfo.InvariantCulture); break;
-                    // wdLineSpaceMultiple 5, in lines of 12 points: 1.5 is one
-                    // and a half lines whatever the font.
-                    case "linespacing":
-                        range.ParagraphFormat.LineSpacingRule = 5;
-                        range.ParagraphFormat.LineSpacing = 12.0 * double.Parse(val, CultureInfo.InvariantCulture);
-                        break;
-                    case "indent": range.ParagraphFormat.LeftIndent = double.Parse(val, CultureInfo.InvariantCulture); break;
-                    default:
-                        throw new InvalidOperationException(
-                            $"word format does not know {key}: it knows style, bold, italic, underline, size, font, color, "
-                            + "highlight, align, spaceBefore, spaceAfter, lineSpacing, indent");
-                }
-                did.Add(key);
-            }
-            doc.Saved = false;
-            return Ok($"formatted {selector}: {string.Join(", ", did)}");
-        }
-
         // A copy, never SaveAs2: that moves the open document to the export's
         // path, so the user's own file stops being the one on screen and the
         // handle stops finding it.
@@ -842,17 +869,22 @@ namespace Syn.Sidecar
         {
             dynamic doc = docO;
             int n = doc.Paragraphs.Count;
+            var spans = TableSpans(docO);
             var heads = new List<string>();
             for (var i = 1; i <= n && heads.Count < 30; i++)
             {
+                // A heading style inside a table is a cell, not a section.
+                var span = SpanAt(spans, i - 1);
+                if (span != null) { i = span.Last + 1; continue; }
                 dynamic p = doc.Paragraphs[i];
                 int level = 10;
                 try { level = (int)p.OutlineLevel; } catch { }
                 if (level <= 3) heads.Add($"p{i - 1} {Trunc(((string)p.Range.Text).Trim())}");
             }
-            int tables = 0;
-            try { tables = doc.Tables.Count; } catch { }
-            return $"{(string)doc.Name}: paras={n}, tables={tables}" + (heads.Count > 0 ? "; headings: " + string.Join(" | ", heads) : "");
+            var tables = spans.Select(s => $"t{s.Index} p{s.First}:p{s.Last} {s.Rows}x{s.Cols}").ToList();
+            return $"{(string)doc.Name}: paras={n}, tables={spans.Count}"
+                   + (heads.Count > 0 ? "; headings: " + string.Join(" | ", heads) : "")
+                   + (tables.Count > 0 ? "; tables: " + string.Join(", ", tables) : "");
         }
 
         /// Calls VBA has no business making on this project's behalf.
@@ -904,7 +936,18 @@ namespace Syn.Sidecar
                 foreach (var bad in VbaAutoRun)
                     if (code.IndexOf(bad, StringComparison.OrdinalIgnoreCase) >= 0)
                         return Fail($"refused: {bad} runs by itself, so it would execute without anyone asking");
+                // A box that waits for a click stops the run until someone
+                // clicks it, and nobody is there to.
+                foreach (var bad in new[] { "MsgBox", "InputBox" })
+                    if (code.IndexOf(bad, StringComparison.OrdinalIgnoreCase) >= 0)
+                        return Fail($"refused: {bad} waits for someone to click, and the run would wait with it: write the result to a cell and read it back instead");
             }
+
+            // Running needs no VBA project access: Application.Run calls a
+            // macro already in the workbook, Trust Center setting or not. It
+            // sat below the VBProject check, so on a machine with that
+            // setting off, a workbook's own macros could not be run either.
+            if (action.Equals("run", StringComparison.OrdinalIgnoreCase)) return RunMacro(wb, name);
 
             dynamic? proj;
             try
@@ -932,28 +975,6 @@ namespace Syn.Sidecar
                     if (c is null) return Fail($"no module named {module}");
                     int lines = c.CodeModule.CountOfLines;
                     return Ok(lines == 0 ? $"{module} is empty" : $"{module}:\n{c.CodeModule.Lines(1, lines)}");
-                }
-                case "run":
-                {
-                    if (string.IsNullOrWhiteSpace(name)) return Fail("run needs the macro name in `title`");
-                    // Before the macro, never after: running VBA clears
-                    // Excel's undo stack, so this copy is the only way
-                    // back from a macro that does the wrong thing.
-                    var saved = BackupWorkbook(wb);
-                    var note = saved.Length > 0 ? $" (copy at {saved})" : " (NO BACKUP: the copy failed)";
-                    try
-                    {
-                        wb.Application.Run(name);
-                        return Ok($"ran {name}{note}");
-                    }
-                    catch (Exception e)
-                    {
-                        // The error IS the product: this is the half of
-                        // the write-run-fix loop that teaches the model
-                        // anything, so it comes back whole rather than as
-                        // "macro failed".
-                        return Fail($"{name} raised: {e.Message}{note}");
-                    }
                 }
                 case "write":
                 {
@@ -983,6 +1004,38 @@ namespace Syn.Sidecar
                 default:
                     return Fail($"macro: unknown action {action}, expected write, run, read or list");
             }
+        }
+
+        private static string RunMacro(dynamic wb, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return Fail("run needs the macro name in `title`");
+            // This workbook's macro, by its full name. Unqualified, Excel
+            // looks in whichever workbook it likes -- the active one, or the
+            // user's Personal workbook -- and runs a same-named macro there.
+            var full = name.Contains('!') ? name : $"'{(string)wb.Name}'!{name}";
+            // Before the macro, never after: running VBA clears
+            // Excel's undo stack, so this copy is the only way
+            // back from a macro that does the wrong thing.
+            var saved = BackupWorkbook(wb);
+            var note = saved.Length > 0 ? $" (copy at {saved})" : " (NO BACKUP: the copy failed)";
+            Exception? raised = null;
+            var dialog = WithVbaWatch((object)wb.Application, () =>
+            {
+                try { wb.Application.Run(full); }
+                catch (Exception e) { raised = e; }
+            });
+            // The error IS the product: this is the half of the
+            // write-run-fix loop that teaches the model anything, so it
+            // comes back whole rather than as "macro failed".
+            // Compiling first would be tidier, but Debug > Compile reports
+            // itself disabled while the editor is hidden, so a compile error
+            // is met on the run instead: the watcher closes it and resets.
+            if (dialog != null && dialog.StartsWith("Compile error", StringComparison.Ordinal))
+                return Fail($"{name} did not run: the code does not compile: {dialog}. Fix it with macro write, then run it again{note}");
+            if (dialog != null)
+                return Fail($"{name} stopped with a VBA error: {dialog} -- Syn pressed End, so nothing after that point ran{note}");
+            if (raised != null) return Fail($"{name} raised: {raised.Message}{note}");
+            return Ok($"ran {name}{note}");
         }
 
         private static dynamic? FindComponent(dynamic proj, string module)
@@ -1036,6 +1089,8 @@ namespace Syn.Sidecar
                     "picture" => SheetPicture(wb, handle, selector, JsonField(args, "text")),
                     "find" => ExcelFind(wb, selector, JsonField(args, "text")),
                     "replace" => ExcelReplace(wb, handle, selector, JsonField(args, "text"), JsonField(args, "with")),
+                    "save" => SaveExcel(wb),
+                    "close" => CloseExcel(wb),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
             });
@@ -1741,6 +1796,8 @@ namespace Syn.Sidecar
                     "pageSetup" => SlidePageSetup(pres, handle, JsonField(args, "style")),
                     "find" => DeckFind(pres, JsonField(args, "text")),
                     "replace" => DeckReplace(pres, handle, JsonField(args, "text"), JsonField(args, "with")),
+                    "save" => SavePres(pres),
+                    "close" => ClosePres(pres),
                     _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
                 };
             });

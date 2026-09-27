@@ -20,6 +20,8 @@ pub struct ChatMeta {
     /// Unix seconds of the last write, for "most recent first".
     pub updated: u64,
     pub turns: usize,
+    /// The folder this chat works in; empty for everywhere.
+    pub workspace: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,10 +208,11 @@ pub fn save(chat: &Chat) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(&d)?;
     let path = d.join(format!("{}.jsonl", chat.meta.id));
     let mut out = format!(
-        "{{\"v\":1,\"id\":\"{}\",\"title\":\"{}\",\"updated\":{}}}\n",
+        "{{\"v\":1,\"id\":\"{}\",\"title\":\"{}\",\"updated\":{},\"workspace\":\"{}\"}}\n",
         esc(&chat.meta.id),
         esc(&chat.meta.title),
-        chat.meta.updated
+        chat.meta.updated,
+        esc(&chat.meta.workspace)
     );
     for m in &chat.msgs {
         out.push_str(&msg_json(m));
@@ -236,6 +239,7 @@ pub fn load(id: &str) -> std::io::Result<Chat> {
             title: field(head, "title").unwrap_or_else(|| title_from(&msgs)),
             updated: num(head, "updated").unwrap_or(0),
             turns,
+            workspace: field(head, "workspace").unwrap_or_default(),
         },
         msgs,
     })
@@ -268,11 +272,12 @@ pub fn delete(id: &str) -> std::io::Result<()> {
 
 pub fn meta_json(m: &ChatMeta) -> String {
     format!(
-        "{{\"id\":\"{}\",\"title\":\"{}\",\"updated\":{},\"turns\":{}}}",
+        "{{\"id\":\"{}\",\"title\":\"{}\",\"updated\":{},\"turns\":{},\"workspace\":\"{}\"}}",
         esc(&m.id),
         esc(&m.title),
         m.updated,
-        m.turns
+        m.turns,
+        esc(&m.workspace)
     )
 }
 
@@ -385,7 +390,7 @@ mod tests {
         // SAFETY: single-threaded test, and the value is restored below.
         unsafe { std::env::set_var("AGENT_HOME", &tmp) };
         let chat = Chat {
-            meta: ChatMeta { id: new_id(), title: "Quarterly".into(), updated: now(), turns: 1 },
+            meta: ChatMeta { id: new_id(), title: "Quarterly".into(), updated: now(), turns: 1, workspace: "D:\\Work\\Q3 \"final\"".into() },
             msgs: vec![Msg::System("rules".into()), Msg::User("hi".into()), Msg::Assistant("hello".into())],
         };
         save(&chat).unwrap();
@@ -393,6 +398,7 @@ mod tests {
         assert_eq!(back.msgs, chat.msgs);
         assert_eq!(back.meta.title, "Quarterly");
         assert_eq!(back.meta.turns, 1);
+        assert_eq!(back.meta.workspace, "D:\\Work\\Q3 \"final\"", "the workspace comes back as it was, backslashes and all");
         assert!(list().iter().any(|m| m.id == chat.meta.id));
         delete(&chat.meta.id).unwrap();
         assert!(load(&chat.meta.id).is_err());

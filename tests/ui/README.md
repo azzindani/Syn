@@ -13,6 +13,11 @@ On a machine that already has a Chromium Playwright can drive (a cloud
 sandbox, say), skip the install and point at it instead:
 `PW_CHROMIUM=/opt/pw-browsers/chromium npm test`.
 
+On Windows a console you left running from `core/target/debug` locks that
+build. Build elsewhere and point the specs at it instead:
+`CARGO_TARGET_DIR=<dir> cargo build --bins`, then
+`SYN_UI_BIN=<dir>/debug/ui.exe npm test`.
+
 `chat.spec.mjs` "the machinery sits behind the status control" needs at
 least one hand wired, i.e. a `.env` with an `AGENT_PIPE_*` or `AGENT_CDP`
 line; copying `.env.example` to `.env` is enough.

@@ -29,13 +29,47 @@ port).
 - **The model button** opens a searchable list of every model your provider
   serves that can call tools, with context size, price and whether it can
   reason. The list comes from the provider's own `/models`, refreshed every
-  15 minutes and on demand. OpenRouter is listed by default; OpenCode Zen
-  appears once `AGENT_API_KEY_OPENCODE` is set. "Automatic" means the model in
-  `.env`.
+  15 minutes and on demand. OpenRouter, OpenCode Zen and OpenCode Go are
+  always listed, each in its own tab, because their catalogs are public; a
+  provider whose key is not set yet says so beside its models, and a turn
+  sent to it is refused until a key is added in Settings, or
+  `AGENT_API_KEY_OPENCODE` (Zen), `AGENT_API_KEY_OPENCODE_GO` (Go) or
+  `AGENT_API_KEY_OPENROUTER` is set.
+  The exception is Zen's free models (tagged free): with no Zen key they go
+  with the key `public`, as OpenCode sends them. Zen keeps some of them to
+  OpenCode's own app, and refuses those with "OpenCode's free tier can only
+  be used from within OpenCode".
+  "Automatic" means the model in `.env`.
 - **The thinking level** (auto, low, medium, high) sets how hard the model
   reasons before it answers.
-- **The status menu** (top right) connects the applications named in `.env`,
-  switches between system, light and dark themes, and sets contrast.
+- **The workspace button** (a folder, "Everywhere" until you choose) picks
+  the folder the chat works in. Paste a path, pick a recent one, or browse
+  from your usual folders and drives. Once set, `search` looks only there
+  and `open` refuses files outside it (`open` also takes a name or a path
+  relative to the workspace). Before every turn the model is shown the
+  documents the folder holds: names, sizes and dates, never their
+  contents. Each chat keeps its own workspace, and a new chat starts with
+  the one on screen. Apps you already have open keep working.
+  "Everywhere" goes back to looking in Desktop, Documents, Downloads,
+  OneDrive and the folder Syn started in.
+- **Nothing to connect.** Ask for a file by name ("open last month's sales
+  deck") and the model finds it (`search`), opens it (`open`) and works in
+  it. A helper that is already running is attached before every turn; one
+  that is not is started the first time a task needs its application.
+  `AGENT_LAUNCH=0` turns the starting off.
+- **The status pill** (top right) shows the apps that are live, with a
+  green dot that breathes slowly while they are, and three breathing dots
+  while a run is going. Its menu switches between system, light and dark
+  themes, sets contrast, and opens Settings.
+- **Settings** holds the API keys, one row per provider (OpenRouter,
+  OpenCode Zen, OpenCode Go). Paste a key and press Save. A key is never
+  shown again once saved: each row says only where its key comes from
+  (saved here, from `.env`, or none yet) and its last four characters.
+  A saved key is used before one in `.env`, and Remove goes back to the
+  `.env` one if there is one. With no key anywhere, the composer says so
+  and links to Settings, and a provider in the model list with no key has
+  an "Add key" button. See [configuration.md](configuration.md#api-keys)
+  for where keys are kept.
 - **Runs from elsewhere show up too.** A run started from a terminal or by an
   MCP client writes to the same live log, and the console shows it as it
   happens.
@@ -67,17 +101,19 @@ It reads one command per line and answers with lines that start with a tag:
 | `think low\|medium\|high\|auto` | Choose the thinking level. |
 | `models <search>` | Search the providers' model lists. |
 | `slots`, `config` | Show what resolved where (never the key). |
-| `chat new\|list\|open <id>\|del <id>\|msgs` | Manage saved conversations. |
+| `chat new\|list\|open <id>\|del <id>\|msgs` | Manage saved conversations. `chat open` also restores that chat's workspace. |
+| `workspace <folder>` / `workspace off` / `workspace` | Set the folder this chat works in (a full path), go back to everywhere, or show which. |
+| `dirs [folder]` | The subfolders of a folder, or with none the usual places and drives: what the workspace picker shows. |
 | `shellallow <program>` | Allow one program for `shell` in this session (the list starts empty). |
 
 ### Connecting and opening
 
 | Command | Does |
 |---|---|
-| `hand <pipe> [app…]` | Connect to a running helper; with apps, it serves those apps. |
-| `cdp <host:port> web` | Connect to a browser or Electron app's DevTools port. |
-| `hands`, `wiring` | Show connected helpers, and what `.env` names. |
-| `open <app> <path>` | Open a file through a connected helper (idempotent). |
+| `open <app> <path>` | Open a file, or take up one already open: starts the helper if needed, registers the handle and binds it live, as the model's `open` does. Idempotent. |
+| `hands`, `wiring` | Show connected helpers (attaching any that are running first), and what `.env` names. |
+| `hand <pipe> [app…]` | Connect to a running helper by hand; with apps, it serves those apps. Rarely needed now. |
+| `cdp <host:port> web` | Connect to a browser or Electron app's DevTools port by hand. |
 | `attach excel <file> <sheet>`, `attach word <file>`, `attach ppt <file>` | Register a document; without `live` it uses Syn's in-memory model, which needs no Office. |
 | `live <handle>` | Bind a registered handle to its application. |
 | `page web <title-or-url> [unit]`, `win ui <title> [unit]` | Register a web page or a window. |
@@ -96,6 +132,8 @@ through exactly the same gates as the agent's calls.
 | `pause`, `resume` | Stop taking calls, and carry on. |
 | `kill` | Latch the kill switch: nothing more is dispatched until a fresh session. |
 | `allow <app…>` | Restrict this session to those applications. |
+| `keys` | Where each provider's key comes from (saved, `.env` or none) and its last four characters. Never the key. |
+| `key <provider> <key>` / `key <provider> off` | Save a key for `openrouter`, `opencode` or `opencode-go`, or forget the saved one. The line is never journaled or kept in history, and the reply never repeats the key. |
 | `journal <path>` / `journal off` | Record every command to a file. |
 | `replay <path>` | Run a recorded journal again. |
 

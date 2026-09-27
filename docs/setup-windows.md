@@ -44,6 +44,9 @@ AGENT_PIPE_UIA=hand-uia
 ```
 
 Everything else has a working default; see [configuration.md](configuration.md).
+The key can instead be pasted into the console's Settings (the menu on the
+status pill), which keeps it sealed to your Windows account; a key saved
+there is used before the one in `.env`.
 
 ## Run
 
@@ -51,20 +54,16 @@ Everything else has a working default; see [configuration.md](configuration.md).
 client at `core\target\release\mcpgate.exe`. It starts the Office helper for
 an application the first time it is needed. See [mcp.md](mcp.md).
 
-**The console** (chat with a model that works in your open apps) connects to
-helpers that are already running. Start one per application, each in its own
-window, then the console:
+**The console** (chat with a model that works in your apps):
 
 ```
-$h = "sidecar-csharp\Host\bin\Release\net8.0-windows\office-host.exe"
-Start-Process $h "--pipe hand-excel --app excel"
-Start-Process $h "--pipe hand-word --app word"
-Start-Process $h "--pipe hand-powerpoint --app powerpoint"
 powershell -File scripts\console.ps1            # add -WithUia for native windows
 ```
 
-The console prints its address (`http://127.0.0.1:7777/`) and opens it; the
-status menu at the top right connects the apps. See
+It prints its address (`http://127.0.0.1:7777/`) and opens it. There is
+nothing to connect: ask for a file and the model finds it, opens it and
+works in it, starting the Office helper the first time an application is
+needed. Helpers you started yourself are attached as they are. See
 [console-and-cli.md](console-and-cli.md).
 
 A helper attaches to the application if it is already running, so Syn works

@@ -224,10 +224,11 @@ kbd{display:inline-block;min-width:1.5em;padding:0 5px;border:1px solid var(--bo
 .chat.on{background:var(--sidebar-row-selected);box-shadow:var(--shadow-sm),0 0 0 1px var(--border)}
 .chat.on .ttl{color:var(--foreground);font-weight:550}
 /* The thread with a run in flight says so in the sidebar too, in the same
-   sky the timeline uses, so "is it still going?" has one answer. */
-.chat .run{display:none;width:7px;height:7px;border-radius:50%;background:var(--working);flex:none;
-  animation:pulse 2s infinite}
-.chat.working .run{display:block}
+   sky the timeline uses, so "is it still going?" has one answer: breathing
+   dots, the same sign as the thread's and the status pill's. */
+.chat .run{display:none;flex:none;color:var(--working);gap:2px}
+.chat .run i{width:4px;height:4px}
+.chat.working .run{display:inline-flex}
 .chat .del{display:none;flex:none;width:22px;height:22px;margin-right:-5px;border-radius:6px;
   place-items:center;color:var(--muted-foreground)}
 .chat:hover .del{display:grid}
@@ -259,6 +260,17 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 #hands:hover,#hands[aria-expanded="true"]{border-color:var(--input);color:var(--foreground)}
 #hands .dot{width:7px;height:7px;border-radius:50%;background:var(--muted-foreground);opacity:.6}
 #hands.live .dot{background:var(--ok);opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent)}
+/* While a run is going the pill says so with three breathing dots, where
+   the person is already looking, instead of a spinner somewhere else. */
+#hands .dots{display:none;color:var(--working)}
+/* `busy` is a turn this page sent; `running` is any live run, including one
+   started from a terminal, an MCP client, or another window. */
+body.busy #hands .dots,body.running #hands .dots{display:inline-flex}
+.breath{display:flex;align-items:center;min-height:24px;color:var(--working)}
+.breath .dots{gap:4px}
+.breath .dots i{width:7px;height:7px}
+/* The reply is being written: the words are the sign of life now. */
+.turn .draft ~ .breath{display:none}
 #hands .stack:empty{display:none}
 #hands .lbl{max-width:15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -272,12 +284,6 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 #pop h4{margin:6px 8px 8px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
   color:var(--muted-foreground)}
 #pop hr{margin:8px -8px;border:0;border-top:1px solid var(--border)}
-#wire{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 4px}
-#wire button{display:flex;align-items:center;gap:8px;min-width:0;height:40px;padding:0 9px;
-  border:1px solid var(--border);border-radius:10px;background:var(--card);text-align:left;
-  transition:border-color .12s,background .12s}
-#wire button:hover{border-color:var(--input);background:var(--accent)}
-#wire button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:500}
 .hint{display:block;padding:8px 8px 2px;font-size:11.5px;line-height:1.45;color:var(--muted-foreground)}
 .setrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 8px;
   font-size:13px;min-height:34px}
@@ -505,6 +511,79 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 #mpick #mname{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 #mpick[aria-expanded="true"]{border-color:var(--input);color:var(--foreground)}
 .pick.off{opacity:.55}
+/* The workspace: the third pill, the folder the chat works in. Tinted
+   when set, so a confined chat never looks like one that roams. */
+#wpick{padding-right:26px;cursor:pointer}
+#wpick #wname{max-width:12rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+#wpick[aria-expanded="true"]{border-color:var(--input);color:var(--foreground)}
+#wpick.set{color:var(--foreground);border-color:color-mix(in srgb,var(--primary) 45%,var(--input));
+  background:color-mix(in srgb,var(--primary) 8%,var(--card))}
+#wpick.set [data-icon="folder"]{color:var(--primary)}
+#spaces{display:none;position:absolute;left:8px;bottom:calc(100% + 8px);z-index:35;
+  width:min(470px,calc(100% - 16px));max-height:min(480px,62vh);flex-direction:column;
+  border:1px solid var(--border);border-radius:16px;background:var(--surface-raised);box-shadow:var(--shadow-lg);overflow:hidden}
+#spaces.on{display:flex;animation:rise .14s ease-out}
+#spaces .mtop{display:flex;align-items:center;gap:8px;padding:10px 10px 8px 14px;border-bottom:1px solid var(--border)}
+#spaces .mtop [data-icon]{color:var(--muted-foreground);display:grid}
+#wpath{flex:1;min-width:0;height:30px;border:0;outline:0;background:none;font:13px var(--font-mono)}
+#wpath::placeholder{color:var(--placeholder);font-family:inherit}
+#wlist{flex:1;min-height:0;overflow:auto;padding:6px;scrollbar-width:thin}
+#wlist .wh{padding:8px 10px 4px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-foreground)}
+#wlist .crumb{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:6px 8px;font-size:12.5px}
+#wlist .crumb button{padding:2px 6px;border-radius:6px;color:var(--muted-foreground)}
+#wlist .crumb button:hover{background:var(--accent);color:var(--foreground)}
+#wlist .crumb button:last-child{color:var(--foreground);font-weight:550}
+.wrow{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border-radius:10px;text-align:left;cursor:pointer;font-size:13.5px}
+.wrow:hover,.wrow:focus-visible{background:var(--accent);outline:0}
+.wrow[aria-selected="true"]{background:color-mix(in srgb,var(--primary) 12%,transparent)}
+.wrow [data-icon]{display:grid;color:var(--muted-foreground)}
+.wrow .wn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wrow .wp{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:11.5px var(--font-mono);color:var(--muted-foreground)}
+#wlist .none{padding:18px 12px;text-align:center;font-size:13px;color:var(--muted-foreground)}
+#wfoot{display:flex;flex-direction:column;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+#wfoot #wuse{align-self:flex-start}
+#wfoot #wuse[hidden]{display:none}
+#wnote{margin:0;font-size:11.5px;line-height:1.45;color:var(--muted-foreground)}
+#wnote.err{color:var(--error-foreground)}
+
+/* ---------------- settings ----------------
+   A compiled Syn has no .env its user will open: keys go in here. A native
+   dialog, so the backdrop, focus trap and Escape come from the browser. */
+#settings{width:min(560px,calc(100vw - 32px));max-height:min(720px,calc(100dvh - 48px));padding:0;
+  border:1px solid var(--border);border-radius:16px;background:var(--surface-raised);color:var(--foreground);
+  box-shadow:var(--shadow-lg)}
+#settings[open]{display:flex;flex-direction:column;animation:rise .14s ease-out}
+#settings::backdrop{background:rgb(0 0 0/42%)}
+#settings .shd{display:flex;align-items:center;justify-content:space-between;margin:0;
+  padding:12px 12px 10px 20px;border-bottom:1px solid var(--border)}
+#settings h2{margin:0;font-size:15.5px;font-weight:600}
+#settings .xx{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;color:var(--muted-foreground)}
+#settings .xx:hover{background:var(--accent);color:var(--foreground)}
+#settings section{padding:14px 20px 18px;overflow:auto}
+#settings h3{margin:0 0 4px;font-size:13px;font-weight:600}
+#settings .lead{margin:0 0 10px;font-size:12.5px;line-height:1.55;color:var(--muted-foreground)}
+.krow{padding:12px 0;border-top:1px solid var(--border)}
+.krow .kh{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13.5px;font-weight:550}
+.kst{margin-left:auto;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:500;
+  background:var(--accent);color:var(--muted-foreground);white-space:nowrap}
+.kst.ok{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.kst.env{background:var(--info-surface);color:var(--info-foreground)}
+.krow .kin{display:flex;gap:8px}
+.krow input{flex:1;min-width:0;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:9px;
+  background:var(--card);color:var(--foreground);font:13px var(--font-mono)}
+.krow input:focus{outline:0;border-color:var(--ring)}
+.krow input::placeholder{color:var(--placeholder);font-family:var(--font-sans)}
+.krow .kmsg{margin-top:6px;font-size:12px;line-height:1.45;color:var(--muted-foreground)}
+.krow .kmsg:empty{display:none}
+.krow .kmsg.err{color:var(--error-foreground)}
+#settings .fine{margin:10px 0 0;font-size:11.5px;color:var(--muted-foreground);overflow-wrap:anywhere}
+#mfoot .addkey{margin-left:4px;padding:1px 8px;border:1px solid var(--border);border-radius:7px;background:var(--card);
+  font-size:11.5px;font-weight:500;color:var(--foreground)}
+#mfoot .addkey:hover{border-color:var(--input)}
+.bn .ba{align-self:center;margin-left:auto;height:28px;padding:0 12px;border:1px solid var(--border);border-radius:8px;
+  background:var(--card);font-size:12.5px;font-weight:500;white-space:nowrap}
+.bn .ba:hover{border-color:var(--input)}
 
 /* ---------------- the model picker ----------------
    Hundreds of models is a search problem, not a dropdown: type a few
@@ -560,11 +639,24 @@ main{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;positio
 #hint{display:none;max-width:var(--content-w);margin:9px auto 0;text-align:center;
   font-size:11.5px;color:var(--muted-foreground)}
 #hint kbd{margin:0 1px}
-body.blank-chat #hint,body.busy #hint{display:block}
-.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;
-  border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
-@keyframes sp{to{transform:rotate(360deg)}}
-body.busy #hint{color:var(--working)}
+body.blank-chat #hint{display:block}
+/* Breathing, not spinning. A spinner says "loading"; a live session is
+   not loading, it is on and working, and it breathes: three dots rising
+   and falling in turn, and the connected dot swelling slowly. Still when
+   the person has asked for less motion -- the dots then sit at full
+   strength, so the sign is still there. */
+.dots{display:inline-flex;align-items:center;gap:3px;vertical-align:1px}
+.dots i{width:5px;height:5px;border-radius:50%;background:currentColor}
+@media (prefers-reduced-motion:no-preference){
+  .dots i{animation:breathe-dot 1.4s ease-in-out infinite}
+  .dots i:nth-child(2){animation-delay:.18s}
+  .dots i:nth-child(3){animation-delay:.36s}
+  #hands.live .dot{animation:breathe-live 2.8s ease-in-out infinite}
+}
+@keyframes breathe-dot{0%,80%,100%{opacity:.25;transform:scale(.75)}40%{opacity:1;transform:scale(1)}}
+@keyframes breathe-live{
+  0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 22%,transparent)}
+  50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--ok) 8%,transparent)}}
 
 /* ---------------- the approval ----------------
    It attaches to the composer, where attention already is, and so cannot
@@ -607,8 +699,13 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   .pill.model{display:none}
   /* Still anchored to the composer, not fixed: its backdrop-filter makes
      it the containing block, so a fixed panel landed below the screen. */
-  #models{left:0;right:0;width:auto;max-height:calc(100dvh - 190px)}
+  #models{left:0;right:0;width:auto;max-height:calc(100dvh - 236px)}
+  #spaces{left:0;right:0;width:auto;max-height:calc(100dvh - 236px)}
   #mpick #mname{max-width:8rem}
+  #wpick #wname{max-width:6rem}
+  /* Three pills and the send button are wider than a phone: the bar wraps
+     rather than pushing the whole page sideways. */
+  #bar{flex-wrap:wrap;row-gap:6px}
   #pop{position:fixed;left:12px;right:12px;top:62px;width:auto}}
 
 /* ---------------- the timeline minimap ----------------
@@ -693,23 +790,6 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   font-size:11.5px;font-weight:500;color:var(--muted-foreground)}
 .seam::before,.seam::after{content:"";flex:1;height:1px;background:var(--border)}
 
-/* ---------------- the budget meter ----------------
-   docs/design/DIGEST-08 section 7. It says what will happen, not just where
-   you are, and its slot is reserved while the number loads so the
-   controls beside it do not jump. */
-#meter{display:flex;align-items:center;gap:8px;min-height:18px;font-size:11.5px;
-  color:var(--muted-foreground)}
-#meter .track{width:64px;height:5px;border-radius:99px;background:var(--accent);overflow:hidden;
-  box-shadow:inset 0 0 0 1px var(--border)}
-#meter .fill{display:block;height:100%;width:0;border-radius:99px;
-  background:linear-gradient(90deg,var(--brand-from),var(--brand-to));transition:width .3s}
-#meter[data-near="1"] .fill{background:var(--warning-foreground)}
-#meter[data-near="1"]{color:var(--warning-foreground)}
-/* The slot is reserved by width as well as by visibility: hiding an
-   empty span still collapses it, and the send button beside it jumps
-   when the number finally lands. */
-#meter .nums{min-width:14ch;text-align:left;font-variant-numeric:tabular-nums}
-#meter.holding{visibility:hidden}
 
 /* A message typed while the agent is still working: queued, visibly, in
    the place it will appear. Not a disabled input. */
@@ -737,12 +817,12 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
     <span style="flex:1"></span>
     <div id="statuswrap">
       <button id="hands" type="button" aria-haspopup="menu" aria-expanded="false"
-        ><span class="dot"></span><span class="stack"></span><span class="lbl">No apps connected</span
+        ><span class="dot"></span><span class="stack"></span><span class="lbl">Ready</span
+        ><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span
         ><span data-icon="chevron-down"></span></button>
       <div id="pop" role="menu">
-        <h4>Connect an app</h4>
-        <div id="wire"></div>
-        <span class="hint" id="wirehint">Reading your .env…</span>
+        <h4>Apps</h4>
+        <span class="hint" id="appshint">Nothing to connect. Syn opens Excel, Word, PowerPoint and your files by itself when a task needs them, and finds a file you name.</span>
         <hr>
         <h4>Appearance</h4>
         <div class="setrow"><span>Theme</span>
@@ -754,6 +834,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
         <div class="setrow"><label for="contrast">Contrast</label>
           <input id="contrast" type="range" min="50" max="160" step="5" value="100"></div>
         <hr>
+        <button class="popitem" id="setbtn" type="button"><span data-icon="key"></span>Settings</button>
         <button class="popitem" id="handsbtn" type="button"><span data-icon="plug"></span>Connected apps</button>
         <button class="popitem" id="evbtn" type="button"><span data-icon="list"></span>Recent events</button>
         <button class="popitem danger" id="killbtn" type="button"><span data-icon="stop"></span>Stop everything</button>
@@ -779,6 +860,16 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
         <div id="mlist" role="listbox" aria-label="Models"></div>
         <div id="mfoot"></div>
       </div>
+      <div id="spaces" role="dialog" aria-label="Choose a workspace folder">
+        <div class="mtop"><span data-icon="folder"></span
+          ><input id="wpath" type="text" placeholder="Paste a folder path, e.g. D:\Projects\Q3" autocomplete="off" spellcheck="false"
+          ><button id="wgo" type="button" class="mchip">Use</button></div>
+        <div id="wlist" role="listbox" aria-label="Folders"></div>
+        <div id="wfoot">
+          <button id="wuse" type="button" class="btn primary" hidden><span data-icon="check"></span>Use this folder</button>
+          <p id="wnote">Syn looks for files, and opens them, only inside the workspace. Apps you already have open keep working.</p>
+        </div>
+      </div>
       <div id="banners"></div>
       <div id="ask">
         <div class="hd"><span data-icon="shield"></span>Command approval <small>Syn wants to run a program</small></div>
@@ -801,16 +892,28 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
             <option value="medium">Thinking: medium</option>
             <option value="high">Thinking: high</option>
           </select><span class="caret" data-icon="chevron-down"></span></label>
-        <div id="meter" class="holding" title="Step budget for this turn">
-          <span class="track"><span class="fill"></span></span>
-          <span class="nums"></span>
-        </div>
+        <button id="wpick" class="pick" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="spaces"
+          title="Everywhere: Syn may look for files in your usual folders"><span data-icon="folder"></span><span id="wname">Everywhere</span
+          ><span class="caret" data-icon="chevron-down"></span></button>
         <button id="send" type="button" title="Send" aria-label="Send" data-icon="arrow-up"></button>
       </div>
     </div>
     <div id="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</div>
   </div>
 </main>
+
+<dialog id="settings" aria-labelledby="settitle">
+  <form method="dialog" class="shd"><h2 id="settitle">Settings</h2
+    ><button class="xx" value="close" aria-label="Close settings" data-icon="x"></button></form>
+  <section>
+    <h3>API keys</h3>
+    <p class="lead">Syn sends what you ask to a model provider, which needs a key. Paste the key for the provider
+      you use. It is saved on this computer<span id="sealnote">, encrypted so only your Windows account can read it,</span>
+      and sent to that provider alone. A key is never shown again once saved.</p>
+    <div id="keylist"></div>
+    <p class="fine" id="keyfile"></p>
+  </section>
+</dialog>
 
 <script>
 "use strict";
@@ -848,6 +951,9 @@ function verdict(out) {
     retried: (out.match(/^RECEIPT retry model=(\S+)/m) || [])[1],
     failure: lines.filter(l => l.startsWith("ERROR") || l.startsWith("STOPPED"))
       .map(l => l.replace(/^(ERROR|STOPPED)\s+(provider:\s*)?/, "")).pop(),
+    // A STOPPED turn is recorded in the conversation itself and drawn from
+    // there; only an ERROR (a refused command) exists nowhere else.
+    stopped: lines.some(l => l.startsWith("STOPPED")),
   };
 }
 
@@ -860,6 +966,8 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2h5c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4"/><path d="m10.4 12.6 9.1-9.1M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  folder: '<path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.8l2 2.2h7.2a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
   refresh: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
@@ -877,6 +985,7 @@ const ICONS = {
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
   plug: '<path d="M9 2.5v5M15 2.5v5M6 7.5h12v3a6 6 0 0 1-12 0zM12 16.5v5"/>',
   list: '<path d="M8.5 6H20M8.5 12H20M8.5 18H20M4 6h.01M4 12h.01M4 18h.01"/>',
+  square: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>',
   stop: '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/>',
   shield: '<path d="M12 3 5 6v5.5c0 4.3 3 7.7 7 9.5 4-1.8 7-5.2 7-9.5V6z"/><path d="M12 8.5v4M12 15.5h.01"/>',
   alert: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/>',
@@ -908,6 +1017,7 @@ const APPS = {
   web: { name: "Browser", place: "the browser", icon: "globe" },
   ui: { name: "Any window", place: "a window", icon: "window" },
   shell: { name: "Terminal", place: "the terminal", icon: "terminal" },
+  files: { name: "Files", place: "your files", icon: "search" },
   syn: { name: "Syn", place: "", icon: "spark" },
   other: { name: "App", place: "", icon: "dot" },
 };
@@ -918,6 +1028,8 @@ function appKey(app, tool) {
   if (a === "cdp") return "web";
   if (APPS[a]) return a;
   if (tool === "shell") return "shell";
+  // `search` looks through folders, not an application.
+  if (tool === "search") return "files";
   // The loop's own tools -- reading the manual, keeping a plan -- touch no
   // application, so they carry Syn's mark rather than a grey question.
   if (tool === "manual" || tool === "plan") return "syn";
@@ -1199,6 +1311,7 @@ async function chooseModel(m, quiet) {
 }
 
 function openModels() {
+  closeSpaces(false);
   $("models").classList.add("on");
   $("mpick").setAttribute("aria-expanded", "true");
   $("msearch").value = "";
@@ -1282,8 +1395,16 @@ function paintModels() {
     }
     if (!prov.ready) {
       foot.appendChild(el("br"));
-      const w = el("span", "warn", "No key for this provider yet: add it to .env to use these. ");
+      // Zen's free models go without a key, as OpenCode sends them; the
+      // provider can still keep some to its own app, and says so if it does.
+      const w = el("span", "warn", prov.free_without_key
+        ? "No key yet: models tagged free can be tried now (OpenCode may keep some to its own app). Add a key for the rest."
+        : "No key for this provider yet.");
       foot.appendChild(w);
+      const add = el("button", "addkey", "Add key");
+      add.type = "button";
+      add.onclick = () => openSettings(prov.name);
+      foot.appendChild(add);
     }
   }
 }
@@ -1333,25 +1454,12 @@ function moveActive(d) {
   rows[picker.at].scrollIntoView({ block: "nearest" });
 }
 
-async function loadWiring() {
-  const out = await cli("wiring"), wires = tagged(out, "WIRE"), host = $("wire");
-  host.textContent = "";
-  for (const w of wires) {
-    const cmd = w.kind === "cdp" ? `cdp ${w.at} ${w.app}` : `hand ${w.at} ${w.app}`;
-    const k = w.kind === "cdp" ? "web" : appKey(w.app);
-    const b = el("button");
-    b.type = "button";
-    b.title = cmd;
-    b.append(tile(k), el("span", null, (APPS[k] || APPS.other).name));
-    b.onclick = () => { closePop(); run(cmd); };
-    host.appendChild(b);
-  }
-  $("wirehint").textContent = wires.length
-    ? "Each needs its helper running on this computer."
-    : "Nothing wired: set AGENT_PIPE_* or AGENT_CDP in .env.";
-}
+// There were "connect" buttons here, one per app, and a person had to
+// press the right one before asking for anything. The console now attaches
+// every helper that is running and starts the one a task needs, so there
+// is nothing to press.
 
-// Run one command and show what it said, for the buttons above.
+// Run one command and show what it said, for the menu's buttons.
 async function run(cmd) {
   const out = await cli(cmd);
   clearBlank();
@@ -1365,9 +1473,228 @@ async function run(cmd) {
   await hands();
 }
 
+/* ---------------- the workspace ----------------
+   The folder a chat works in: `search` looks only there, `open` refuses
+   anything outside it, and the model is shown what the folder holds. The
+   CLI keeps it with the chat; this only asks and shows. A browser will not
+   give a page the real path of a folder, so the folders to choose from come
+   from the CLI's `dirs`, and a path can be pasted. */
+const spaces = { path: "", at: null };
+const RECENT_SPACES = "syn.workspaces";
+
+function recentSpaces() {
+  try { return JSON.parse(localStorage.getItem(RECENT_SPACES) || "[]").filter(p => typeof p === "string"); } catch { return []; }
+}
+function rememberSpace(p) {
+  if (!p) return;
+  const list = [p, ...recentSpaces().filter(x => x.toLowerCase() !== p.toLowerCase())].slice(0, 6);
+  try { localStorage.setItem(RECENT_SPACES, JSON.stringify(list)); } catch { /* a private window */ }
+}
+const leaf = p => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+
+// Paint the pill from a CLI reply that carries `RECEIPT workspace {...}`.
+function paintSpace(out) {
+  const m = (out || "").match(/^RECEIPT workspace (\{.*\})$/m);
+  if (m) try { spaces.path = JSON.parse(m[1]).path || ""; } catch { /* keep what we had */ }
+  const b = $("wpick"), set = !!spaces.path;
+  b.classList.toggle("set", set);
+  $("wname").textContent = set ? leaf(spaces.path) : "Everywhere";
+  b.title = set ? `Workspace: ${spaces.path}. Syn looks for and opens files only here.` : "Everywhere: Syn may look for files in your usual folders";
+}
+
+function spaceNote(text, err) {
+  const n = $("wnote");
+  n.textContent = text || "Syn looks for files, and opens them, only inside the workspace. Apps you already have open keep working.";
+  n.classList.toggle("err", !!err);
+}
+
+async function useSpace(p) {
+  const out = await cli(p ? "workspace " + p : "workspace off");
+  const err = (out.match(/^ERROR (.*)$/m) || [])[1];
+  if (err) { spaceNote(err.replace(/^workspace:\s*/, ""), true); return; }
+  paintSpace(out);
+  rememberSpace(spaces.path);
+  closeSpaces(true);
+}
+
+function spaceRow(icon, name, path, onpick) {
+  const r = el("button", "wrow");
+  r.type = "button";
+  r.setAttribute("role", "option");
+  const i = el("span"); i.dataset.icon = icon; r.appendChild(i);
+  r.appendChild(el("span", "wn", name));
+  if (path) r.appendChild(el("span", "wp", path));
+  r.onclick = onpick;
+  paintIcons(r);
+  return r;
+}
+
+// The first page: everywhere, what this browser used lately, where to start.
+async function spacesHome() {
+  spaces.at = null;
+  $("wuse").hidden = true;
+  const list = $("wlist");
+  list.textContent = "";
+  const every = spaceRow("globe", "Everywhere", "", () => useSpace(""));
+  every.setAttribute("aria-selected", String(!spaces.path));
+  list.appendChild(every);
+  const recent = recentSpaces();
+  if (recent.length) {
+    list.appendChild(el("div", "wh", "Recent"));
+    for (const p of recent) {
+      const r = spaceRow("folder", leaf(p), p, () => useSpace(p));
+      r.setAttribute("aria-selected", String(p === spaces.path));
+      list.appendChild(r);
+    }
+  }
+  list.appendChild(el("div", "wh", "Browse"));
+  const out = await cli("dirs");
+  for (const d of tagged(out, "DIR")) list.appendChild(spaceRow("folder", d.name, d.path, () => browseSpace(d.path)));
+}
+
+// One folder's subfolders, with the way back up and "Use this folder".
+async function browseSpace(path) {
+  const out = await cli("dirs " + path);
+  const err = (out.match(/^ERROR (.*)$/m) || [])[1];
+  if (err) { spaceNote(err.replace(/^workspace:\s*/, ""), true); return; }
+  spaceNote("");
+  spaces.at = path;
+  $("wuse").hidden = false;
+  const list = $("wlist");
+  list.textContent = "";
+  const crumb = el("div", "crumb");
+  const home = el("button", "", "Places");
+  home.type = "button";
+  home.onclick = () => spacesHome();
+  crumb.appendChild(home);
+  // Each step of the path is a way back to it; a drive root keeps its slash.
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  const sep = path.includes("\\") ? "\\" : "/";
+  let acc = path.startsWith("/") ? "/" : "";
+  for (const part of parts) {
+    acc = acc && !acc.endsWith(sep) ? acc + sep + part : acc + part + (/^[A-Za-z]:$/.test(part) ? sep : "");
+    const to = acc;
+    crumb.appendChild(el("span", "", "›"));
+    const b = el("button", "", part);
+    b.type = "button";
+    b.onclick = () => browseSpace(to);
+    crumb.appendChild(b);
+  }
+  list.appendChild(crumb);
+  const dirs = tagged(out, "DIR");
+  if (!dirs.length) list.appendChild(el("div", "none", "No folders inside. Use this one, or go back."));
+  for (const d of dirs) list.appendChild(spaceRow("folder", d.name, "", () => browseSpace(d.path)));
+}
+
+function openSpaces() {
+  closeModels(false);
+  $("spaces").classList.add("on");
+  $("wpick").setAttribute("aria-expanded", "true");
+  $("wpath").value = spaces.path;
+  spaceNote("");
+  void spacesHome();
+  $("wpath").focus();
+  $("wpath").select();
+}
+function closeSpaces(refocus) {
+  if (!$("spaces").classList.contains("on")) return;
+  $("spaces").classList.remove("on");
+  $("wpick").setAttribute("aria-expanded", "false");
+  if (refocus) $("wpick").focus();
+}
+
+/* ---------------- settings: API keys ----------------
+   The key goes from the input straight into one `key` command and the
+   input is cleared: the page never holds it after that, and the CLI never
+   says it back. What comes back is where each provider's key is from and
+   its last four characters. */
+async function paintKeys(focus) {
+  const out = await cli("keys");
+  const meta = tagged(out, "RECEIPT keys")[0] || {};
+  $("sealnote").hidden = !meta.sealed;
+  $("keyfile").textContent = meta.file ? `Saved in ${meta.file}` : "";
+  const list = $("keylist");
+  list.textContent = "";
+  for (const k of tagged(out, "KEY")) list.appendChild(keyRow(k));
+  const want = focus && list.querySelector(`.krow[data-provider="${CSS.escape(focus)}"] input`);
+  (want || list.querySelector("input"))?.focus();
+  return tagged(out, "KEY");
+}
+
+function keyRow(k) {
+  const r = el("div", "krow");
+  r.dataset.provider = k.provider;
+  const h = el("div", "kh");
+  h.appendChild(el("span", null, k.label));
+  const ends = k.tail ? ` · ends ${k.tail}` : "";
+  h.appendChild(el("span", "kst" + (k.source === "saved" ? " ok" : k.source === "env" ? " env" : ""),
+    k.source === "saved" ? "Saved" + ends : k.source === "env" ? "From .env" + ends : "No key yet"));
+  r.appendChild(h);
+  const row = el("div", "kin");
+  const inp = el("input");
+  inp.type = "password";
+  inp.autocomplete = "off";
+  inp.spellcheck = false;
+  inp.placeholder = k.source === "none" ? "Paste your API key" : "Paste a new key to replace it";
+  inp.setAttribute("aria-label", `API key for ${k.label}`);
+  const save = el("button", "btn primary", "Save");
+  save.type = "button";
+  const msg = el("div", "kmsg", k.source === "env" ? `Read from .env (${k.from}). A key saved here is used instead.` : "");
+  save.onclick = async () => {
+    const v = inp.value.trim();
+    if (!v) { inp.focus(); return; }
+    save.disabled = true;
+    const out = await cli(`key ${k.provider} ${v}`);
+    inp.value = "";
+    save.disabled = false;
+    const err = (out.match(/^ERROR key: (.*)$/m) || [])[1];
+    if (err) { msg.textContent = err; msg.classList.add("err"); inp.focus(); return; }
+    await keysChanged(k.provider);
+  };
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save.click(); } });
+  row.append(inp, save);
+  if (k.source === "saved") {
+    const rm = el("button", "btn", "Remove");
+    rm.type = "button";
+    rm.onclick = async () => { await cli(`key ${k.provider} off`); await keysChanged(k.provider); };
+    row.appendChild(rm);
+  }
+  r.append(row, msg);
+  return r;
+}
+
+// A key saved or removed changes which providers are ready, everywhere the
+// page shows it: the rows, the model list, and the first-run banner.
+async function keysChanged(focus) {
+  const keys = await paintKeys(focus);
+  await fetchCatalog();
+  if ($("models").classList.contains("on")) paintModels();
+  noKeyBanner(keys);
+}
+
+function openSettings(focus) {
+  closeModels(false);
+  closeSpaces(false);
+  const d = $("settings");
+  if (!d.open) d.showModal();
+  void paintKeys(focus);
+}
+
+// Nothing can answer without a key, except the free models that need none;
+// a first start says so where the person is about to type.
+function noKeyBanner(keys) {
+  const none = !keys.some(k => k.source !== "none");
+  setBanner("nokey", none ? {
+    variant: "warning",
+    title: "Add an API key to start",
+    description: "Syn needs a key from a model provider to answer. Models tagged free work without one.",
+    action: { label: "Open settings", run: () => openSettings() },
+  } : null);
+}
+
 /* ---------------- threads ---------------- */
 async function openChat(id) {
-  await cli("chat open " + id);
+  paintSpace(await cli("chat open " + id));
   current = id;
   if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
   await loadChats();
@@ -1387,9 +1714,13 @@ async function loadChats() {
   for (const c of all) {
     const b = band(c.updated);
     if (b !== lastBand) { list.appendChild(el("div", "grouplabel", b)); lastBand = b; }
-    const row = el("div", "chat" + (c.id === current ? " on" : "") + (busy && c.id === current ? " working" : ""));
+    const row = el("div", "chat" + (c.id === current ? " on" : ""));
+    row.dataset.id = c.id;
     row.title = (c.title || "New chat") + " · " + ago(c.updated);
-    row.appendChild(el("span", "run"));
+    const dots = el("span", "run dots");
+    dots.setAttribute("aria-hidden", "true");
+    dots.innerHTML = "<i></i><i></i><i></i>";
+    row.appendChild(dots);
     row.appendChild(el("span", "ttl", c.title || "New chat"));
     row.appendChild(el("span", "when", ago(c.updated)));
     const x = el("button", "del");
@@ -1409,6 +1740,33 @@ async function loadChats() {
   }
   if (!all.length) {
     list.appendChild(el("div", "nochats", "No conversations yet. Each one is saved here as you go."));
+  }
+  markRunning();
+}
+
+// Which thread in the sidebar breathes: the one a live run names
+// (`RECEIPT say ... chat=<id>`), whichever process it is running in, and
+// the one this page just sent into before the run's first line arrives.
+let runningChat = null, lastSent = "";
+function markRunning() {
+  const list = $("chats");
+  // A chat is listed once its first turn is saved, so the first run of a
+  // new conversation -- the moment anyone looks for the sign -- had no row
+  // to light. It gets one now, titled with what this page sent when it was
+  // this page, and the real list replaces it when the run ends.
+  if (runningChat && !list.querySelector(`.chat[data-id="${CSS.escape(runningChat)}"]`)) {
+    const row = el("div", "chat pending" + (runningChat === current ? " on" : ""));
+    row.dataset.id = runningChat;
+    const dots = el("span", "run dots");
+    dots.setAttribute("aria-hidden", "true");
+    dots.innerHTML = "<i></i><i></i><i></i>";
+    row.append(dots, el("span", "ttl", (runningChat === current && lastSent) || "New chat"));
+    list.querySelector(".nochats")?.remove();
+    const first = list.querySelector(".chat");
+    if (first) list.insertBefore(row, first); else list.appendChild(row);
+  }
+  for (const r of list.querySelectorAll(".chat")) {
+    r.classList.toggle("working", r.dataset.id === runningChat || (busy && r.dataset.id === current));
   }
 }
 
@@ -1645,6 +2003,14 @@ function render(msgs, labels) {
       tl.appendChild(you);
       foldIfLong(you);
       turns.push({ text: m.text, node: you });
+    } else if (m.text === `[run stopped: ${STOPPED_BY_YOU}]`) {
+      // The saved record of a Stop: the same quiet line the live view drew.
+      assistantTurn().appendChild(el("div", "note", "Stopped"));
+    } else if (m.text.startsWith("[run stopped: ") && m.text.endsWith("]")) {
+      // Why a run ended, drawn once, as the error it is -- not as a reply
+      // in brackets with a second copy of it underneath.
+      const why = m.text.slice("[run stopped: ".length, -1).replace(/^provider:\s*/, "");
+      assistantTurn().appendChild(el("div", "fail", why));
     } else {
       const d = el("div", "bot");
       d.innerHTML = md(m.text);
@@ -1700,10 +2066,38 @@ function liveOpen(model) {
   liveActs = workCard("live", model);
   liveTurn.appendChild(liveActs);
   liveNodes = [liveActs];
+  breathe(true);
   scrollEnd();
 }
 
+// Syn's place in the thread while a run is live: three breathing dots where
+// its next words will land. The work card says what was done; between steps
+// -- a model thinking, an application slow to answer -- the thread itself
+// showed nothing, and a live session looked like a stalled one. Kept last in
+// the turn, and hidden by CSS once the reply itself is being written.
+let breathEl = null;
+function breathe(on) {
+  document.body.classList.toggle("running", on);
+  paintSend();
+  if (!on) {
+    breathEl?.remove(); breathEl = null; runningChat = null;
+    // A placeholder row stood in for a chat not yet saved: it is saved now.
+    if (document.querySelector("#chats .chat.pending")) void loadChats().catch(() => {});
+    else markRunning();
+    return;
+  }
+  if (!liveTurn) return;
+  if (!breathEl) {
+    breathEl = el("div", "breath");
+    breathEl.setAttribute("role", "status");
+    breathEl.setAttribute("aria-label", "Syn is working");
+    breathEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+  }
+  liveTurn.appendChild(breathEl);
+}
+
 function liveClose() {
+  breathe(false);
   if (liveActs) {
     // A turn that answered without touching anything leaves no card: an
     // empty "Worked" header is a claim about nothing.
@@ -1719,6 +2113,8 @@ function liveRow(node) {
   if (!liveTurn) { clearBlank(); liveTurn = assistantTurn(); }
   liveTurn.appendChild(node);
   liveNodes.push(node);
+  // The dots stay below whatever arrived, where the next thing will.
+  if (breathEl) liveTurn.appendChild(breathEl);
   scrollEnd();
 }
 
@@ -1766,7 +2162,17 @@ function onDelta(d) {
   });
 }
 
+// Set once this page has redrawn a finished turn from the saved chat. The
+// stream can deliver that turn's last lines a moment after the redraw, and
+// they were drawn again on top of it: the answer showed twice. Everything
+// until the next turn begins is already on screen.
+let settledRun = false;
+
 function liveStep(line) {
+  if (settledRun) {
+    if (!/^RECEIPT say /.test(line)) return;
+    settledRun = false;
+  }
   // RECEIPT delta {"kind","text"} -- the reply, as it is being written.
   let m0 = line.match(/^RECEIPT delta (\{[\s\S]*\})$/);
   if (m0) {
@@ -1782,8 +2188,12 @@ function liveStep(line) {
   if (m) {
     setBanner("retry", null);
     setBanner("run", null);
-    setBanner("busy", { variant: "activity", priority: "activity", title: "Working on " + m[1], dismiss: false });
-    return void liveOpen(m[1]);
+    // No "Working on <model>" banner: the work card names the model, and
+    // the dots say it is working. A banner is kept for what needs reading.
+    liveOpen(m[1]);
+    runningChat = (line.match(/ chat=(\S+)/) || [])[1] || null;
+    markRunning();
+    return;
   }
 
   // RECEIPT step {"label","tool","app","status","detail"} -- one call,
@@ -1819,6 +2229,12 @@ function liveStep(line) {
     return void liveClose();
   }
   m = line.match(/^STOPPED (.*)$/);
+  if (m && m[1] === STOPPED_BY_YOU) {
+    // Asked for, so not an error: one quiet line where the work ended.
+    setBanner("busy", null);
+    liveRow(el("div", "note", "Stopped"));
+    return void liveClose();
+  }
   if (m) {
     setBanner("busy", null);
     setBanner("run", { variant: "error", priority: "urgent", title: "The run stopped", description: m[1] });
@@ -1840,21 +2256,16 @@ function liveStep(line) {
     if (liveActs) { liveActs.dataset.model = m[1]; paintHead(liveActs); }
     return;
   }
-  // RECEIPT budget {"step","max"} -- what the model is told about its own
-  // budget, told to the human too.
-  m = line.match(/^RECEIPT budget (\{[\s\S]*\})$/);
-  if (m) {
-    let d = null;
-    try { d = JSON.parse(m[1]); } catch { return; }
-    setBudget(d.step, d.max);
-    return;
-  }
+  // RECEIPT budget {"step","max"} is for the model, not the reader: a
+  // "37 steps left" meter beside the composer read as a countdown on the
+  // person's own turn, so it was taken out and the line is ignored here.
+  // The loop still stops at its budget (AGENT_MAX_STEPS).
 }
 
 // A run that has stopped printing leaves its steps on screen but stops
 // claiming to be in progress.
 function liveState(running) {
-  if (!running) { setBanner("busy", null); dropDraft(); }
+  if (!running) { setBanner("busy", null); dropDraft(); breathe(false); }
   if (!running && liveActs) liveClose();
 }
 
@@ -2005,14 +2416,20 @@ async function tail() {
   } catch { /* a dropped poll is not worth a message; the next one retries */ }
 }
 
+// What the CLI says when a turn ends because the person pressed Stop
+// (`core::stop::STOPPED`): shown as a quiet "Stopped", never as an error.
+const STOPPED_BY_YOU = "you pressed Stop";
 const HINT_IDLE = "<kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line";
 
 function thinking(on) {
   busy = on;
   document.body.classList.toggle("busy", on);
-  $("send").disabled = on;
-  $("hint").innerHTML = on ? '<span class="spin"></span>&nbsp; Syn is working…' : HINT_IDLE;
-  document.querySelector(".chat.on")?.classList.toggle("working", on);
+  paintSend();
+  // No "Syn is working…" here any more: the breathing dots in the thread,
+  // the status pill and the sidebar already say it, and the button beside
+  // the box now says what to do about it (Stop).
+  $("hint").innerHTML = HINT_IDLE;
+  markRunning();
   // Nothing to pace when the stream is up: the server pushes, and the
   // pace is whatever the run is doing.
   if (sseOK) return;
@@ -2029,15 +2446,24 @@ async function send() {
   // feels broken even when it is working.
   clearBlank();
   tl.appendChild(el("div", "you", v));
-  if ($("title").textContent === "New chat") $("title").textContent = v.split("\n")[0].slice(0, 80);
+  lastSent = v.split("\n")[0].slice(0, 80);
+  if ($("title").textContent === "New chat") $("title").textContent = lastSent;
   scrollEnd();
   thinking(true);
   try {
+    // The model shown beside the box is the one this message goes to. The
+    // console's choice is shared, and something else -- a terminal, another
+    // window -- can change it; a turn then went to the .env model while the
+    // picker still named the one the person had chosen.
+    const c = picker.chosen;
+    await cli(c ? `model ${c.p} ${c.id}` : "model auto");
     const r = verdict(await cli("say " + v.replace(/\n/g, " ")));
     await refresh();
+    settledRun = true;
+    liveClose();
     if (r.answered && r.retried) {
       tl.appendChild(el("div", "note", "That model was busy, so " + r.retried + " answered instead"));
-    } else if (!r.answered && r.failure) {
+    } else if (!r.answered && r.failure && !r.stopped) {
       tl.appendChild(el("div", "fail", r.failure));
     }
     await loadChats();
@@ -2082,9 +2508,11 @@ async function hands() {
     st.textContent = "";
     for (const k of keys.slice(0, 4)) st.appendChild(tile(k, "sm"));
     const names = keys.map(k => (APPS[k] || APPS.other).name);
-    p.querySelector(".lbl").textContent = !lines.length ? "No apps connected"
+    // "No apps connected" read as a job left for the person. Nothing being
+    // connected yet is simply ready: the first task connects what it needs.
+    p.querySelector(".lbl").textContent = !lines.length ? "Ready"
       : names.length <= 2 ? names.join(" · ") : `${names.length} apps connected`;
-    p.title = lines.length ? "Connected: " + names.join(", ") : "Connect an app";
+    p.title = lines.length ? "Live: " + names.join(", ") : "Apps connect by themselves when a task needs them";
     $("sidefoot").classList.remove("down");
   } catch {
     $("sidefoot").classList.add("down");
@@ -2098,7 +2526,38 @@ box.addEventListener("input", () => {
 box.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
-$("send").onclick = send;
+// The send button is the Stop button while a run is going: a turn that had
+// gone wrong could only be left by closing the page. Stop asks the run to
+// end between steps; one that cannot hear it -- stuck inside an application
+// that is not answering -- is ended by the console restarting its CLI, and
+// the page reloads onto the same conversation.
+function paintSend() {
+  const stopping = busy || document.body.classList.contains("running");
+  const b = $("send");
+  if (b.classList.contains("stop") === stopping && b.firstChild) return;
+  b.classList.toggle("stop", stopping);
+  b.disabled = false;
+  b.title = stopping ? "Stop" : "Send";
+  b.setAttribute("aria-label", stopping ? "Stop" : "Send");
+  b.innerHTML = svg(stopping ? "square" : "arrow-up", 17, 2.4);
+}
+async function stopRun() {
+  const b = $("send");
+  b.disabled = true;
+  try {
+    const r = await (await fetch("/stop", { method: "POST" })).json();
+    if (r.stopped === "restarted") { location.reload(); return; }
+    if (r.stopped === "idle" && !busy) {
+      setBanner("run", { variant: "warning", priority: "urgent", title: "That run is in another program",
+        description: "It was started from a terminal or an MCP client; stop it there." });
+    }
+  } catch (e) {
+    setBanner("run", { variant: "error", priority: "urgent", title: "Could not stop the run", description: e.message });
+  } finally {
+    b.disabled = false;
+  }
+}
+$("send").onclick = () => ($("send").classList.contains("stop") ? stopRun() : send());
 $("ok").onclick = () => decide(true);
 $("no").onclick = () => decide(false);
 $("mpick").onclick = () => $("models").classList.contains("on") ? closeModels(true) : openModels();
@@ -2119,7 +2578,16 @@ $("mrefresh").onclick = async () => {
 };
 document.addEventListener("pointerdown", e => {
   if (!e.target.closest("#models,#mpick")) closeModels(false);
+  if (!e.target.closest("#spaces,#wpick")) closeSpaces(false);
 });
+$("wpick").onclick = () => $("spaces").classList.contains("on") ? closeSpaces(true) : openSpaces();
+$("wgo").onclick = () => useSpace($("wpath").value.trim());
+$("wuse").onclick = () => spaces.at && useSpace(spaces.at);
+$("wpath").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); useSpace($("wpath").value.trim()); }
+  else if (e.key === "Escape") { e.stopPropagation(); closeSpaces(true); }
+});
+$("spaces").addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); closeSpaces(true); } });
 $("think").onchange = async e => {
   const out = await cli("think " + e.target.value);
   if (!/^ERROR/m.test(out)) try { localStorage.setItem("syn.think", e.target.value); } catch {}
@@ -2142,6 +2610,7 @@ window.addEventListener("keydown", e => { if (e.key === "Escape") { closePop(); 
 $("killbtn").onclick = () => { closePop(); run("kill"); };
 $("handsbtn").onclick = () => { closePop(); run("hands"); };
 $("evbtn").onclick = () => { closePop(); run("events"); };
+$("setbtn").onclick = () => { closePop(); openSettings(); };
 // Collapsed state is a per-viewer convenience, so localStorage is the right
 // home for it — and it must survive the accessor throwing in a private window.
 function setSide(hidden) {
@@ -2187,9 +2656,14 @@ $("contrast").addEventListener("input", e => setContrast(e.target.value));
     // Read the requested thread before loadChats() rewrites the hash to
     // whatever the CLI considers current.
     const want = location.hash.slice(1);
-    await loadModels(); await loadWiring(); await loadChats();
-    if (want && want !== current) await openChat(want); else await refresh();
+    await loadModels(); await loadChats();
+    noKeyBanner(tagged(await cli("keys"), "KEY"));
+    if (want && want !== current) await openChat(want); else { paintSpace(await cli("workspace")); await refresh(); }
     await hands();
+    // A helper someone else started -- an MCP client, a script, an earlier
+    // run -- shows up on its own. Only while idle: a command waits behind
+    // a running turn, and a status check must never queue behind one.
+    setInterval(() => { if (!busy && !document.hidden) hands(); }, 5000);
   }
   catch (e) {
     tl.appendChild(el("div", "fail", "Cannot reach the console: " + e.message));
@@ -2269,13 +2743,23 @@ function bannerRow(b) {
   row.dataset.bannerId = b.id;
   row.setAttribute("role", b.variant === "error" ? "alert" : "status");
   const ic = el("span", "ic");
-  if (b.variant === "activity") ic.appendChild(el("span", "spin"));
+  if (b.variant === "activity") {
+    const d = el("span", "dots");
+    d.innerHTML = "<i></i><i></i><i></i>";
+    ic.appendChild(d);
+  }
   else ic.innerHTML = svg(b.variant === "error" ? "circle-alert" : b.variant === "warning" ? "alert" : "info", 15, 2.1);
   row.appendChild(ic);
   const bd = el("div", "bd");
   bd.appendChild(el("div", "ti", b.title));
   if (b.description) bd.appendChild(el("div", "ds", b.description));
   row.appendChild(bd);
+  if (b.action) {
+    const a = el("button", "ba", b.action.label);
+    a.type = "button";
+    a.onclick = b.action.run;
+    row.appendChild(a);
+  }
   if (b.dismiss !== false) {
     const x = el("button", "xx");
     x.type = "button";
@@ -2287,24 +2771,6 @@ function bannerRow(b) {
   return row;
 }
 
-/* ---------------- the step budget ----------------
-   Says what will happen, not only where you are. The slot is held while
-   the number is unknown so the send button beside it does not jump.
-   docs/design/DIGEST-08 section 7. */
-function setBudget(step, max) {
-  const m = $("meter");
-  if (!m) return;
-  if (!max) { m.classList.add("holding"); return; }
-  m.classList.remove("holding");
-  const left = Math.max(0, max - step);
-  const frac = Math.min(1, step / max);
-  m.querySelector(".fill").style.width = (frac * 100).toFixed(1) + "%";
-  m.querySelector(".nums").textContent = `${left} steps left`;
-  m.dataset.near = frac > 0.8 ? "1" : "0";
-  m.title = left === 0
-    ? "The budget is spent; the run will stop after a closing summary."
-    : `Step ${step} of ${max}. At ${max} the run stops and summarises what it did.`;
-}
 
 /* ---------------- the minimap ----------------
    One tick per user turn, in the gutter, tapering by distance from the
@@ -2458,7 +2924,8 @@ window.live = {
   banner: (id, b) => setBanner(id, b),
   /** Repaint the timeline from a transcript, as `refresh()` does. */
   render: (msgs, labels) => render(msgs, labels),
-  budget: (step, max) => setBudget(step, max),
+  /** What send() does once it has redrawn a finished turn. */
+  settle: () => { settledRun = true; liveClose(); },
   contrast: v => setContrast(v),
   theme: p => setTheme(p),
   /** Show or clear the approval panel, as a PENDING line would. */

@@ -3,8 +3,8 @@
 // docs/design/DIGEST-08 named five things beyond the tool rows: the three-layer
 // contrast tokens (section 8), the timeline minimap (section 5), the
 // banner stack with activity outranking error (section 6), the budget
-// meter that says what will happen (section 7), and long messages folding
-// away (section 9). Writing the digest is not building them, and this is
+// meter (section 7, since taken out of the page: the check below now
+// holds it out), and long messages folding away (section 9). Writing the digest is not building them, and this is
 // what says which of the two happened.
 //
 // Its own console, pinned to a log it owns: any other console on the
@@ -110,39 +110,103 @@ test("a banner can be dismissed, and the activity one cannot", async ({ page }) 
   expect(shown.map((b) => b.title)).toEqual(["Working"]);
 });
 
+test("a live run breathes in the thread, below its work, until it answers", async ({ page }) => {
+  // Between steps the thread showed nothing, and a run started from
+  // elsewhere (a terminal, an MCP client) never lit the status pill either.
+  const say = (l) => page.evaluate((x) => window.live.step(x), l);
+  const breath = page.locator("#tl .breath");
+  const pill = page.locator("#hands .dots");
+  await say("RECEIPT say model=vendor/x open=0");
+  await expect(breath).toBeVisible();
+  await expect(breath.locator("i")).toHaveCount(3);
+  await expect(pill).toBeVisible();
+
+  await say('RECEIPT step {"label":"Read data!A1","tool":"read","app":"excel","status":"done","detail":"x"}');
+  const last = () => page.evaluate(() => {
+    const b = document.querySelector("#tl .breath");
+    return !!b && b === b.parentElement.lastElementChild;
+  });
+  expect(await last()).toBe(true);
+
+  // While the reply is being written, the words are the sign of life.
+  await say('RECEIPT delta {"kind":"text","text":"Here is"}');
+  await expect(breath).toBeHidden();
+
+  await say("ANSWER Here is the answer.");
+  await expect(breath).toHaveCount(0);
+  await expect(pill).toBeHidden();
+});
+
+test("the first run of a new conversation breathes in the sidebar before the chat is saved", async ({ page }) => {
+  // A chat is listed once its first turn is saved, so the first run of a
+  // new conversation had no row to light: the live check found none.
+  const say = (l) => page.evaluate((x) => window.live.step(x), l);
+  await say("RECEIPT say model=vendor/x open=0 chat=c1-notsavedyet");
+  const row = page.locator('#chats .chat[data-id="c1-notsavedyet"]');
+  await expect(row).toHaveClass(/pending/);
+  await expect(row).toHaveClass(/working/);
+  await expect(row.locator(".run")).toBeVisible();
+  await say("ANSWER done");
+  // The real list comes back, and a chat that was never saved is not in it.
+  await expect(row).toHaveCount(0);
+});
+
+test("the thread a run is in breathes in the sidebar, and only that one", async ({ page }) => {
+  // The chat list is the shared one in .agent/chats; the run names its chat.
+  const rows = page.locator("#chats .chat");
+  test.skip((await rows.count()) < 2, "needs two saved chats to tell them apart");
+  const id = await rows.nth(1).getAttribute("data-id");
+  const say = (l) => page.evaluate((x) => window.live.step(x), l);
+  await say(`RECEIPT say model=vendor/x open=0 chat=${id}`);
+  await expect(page.locator(`#chats .chat[data-id="${id}"] .run`)).toBeVisible();
+  await expect(page.locator("#chats .chat.working")).toHaveCount(1);
+  await expect(page.locator(`#chats .chat[data-id="${id}"] .run i`)).toHaveCount(3);
+  // Seen live: a stray comment-closer broke the rule that hides the rest,
+  // and every thread in the list breathed.
+  await expect(page.locator("#chats .chat:not(.working) .run").first()).toBeHidden();
+  await say("ANSWER done");
+  await expect(page.locator("#chats .chat.working")).toHaveCount(0);
+});
+
 test("the run's lifecycle drives the banners without being told twice", async ({ page }) => {
   const say = (l) => page.evaluate((x) => window.live.step(x), l);
   await say("RECEIPT say model=qwen/qwen3-coder");
-  expect(await page.evaluate(() => window.live.banners)).toHaveLength(1);
-  expect((await page.evaluate(() => window.live.banners))[0].variant).toBe("activity");
+  // No "Working on <model>" banner: asked for its removal, because the dots
+  // and the work card already say it. A banner is kept for what needs reading.
+  expect(await page.evaluate(() => window.live.banners)).toHaveLength(0);
 
   await say("RECEIPT retry model=z-ai/glm-4.6");
   let shown = await page.evaluate(() => window.live.banners);
-  expect(shown[0].variant).toBe("activity"); // still, even with a warning behind it
+  expect(shown.map((b) => b.variant)).toEqual(["warning"]);
 
   await say("ANSWER done");
   shown = await page.evaluate(() => window.live.banners);
   expect(shown.every((b) => b.variant !== "activity")).toBe(true);
 });
 
-test("the budget says what will happen, and holds its slot until it knows", async ({ page }) => {
-  // Held, not collapsed: the send button beside it must not jump when the
-  // number arrives.
-  const meter = page.locator("#meter");
-  await expect(meter).toHaveClass(/holding/);
-  const before = await meter.boundingBox();
+test("while a run is going the send button is Stop, and it goes back after", async ({ page }) => {
+  // A stuck turn could only be left by closing the page: "Stop everything"
+  // queued behind the very turn it was meant to stop.
+  const say = (l) => page.evaluate((x) => window.live.step(x), l);
+  const btn = page.locator("#send");
+  await expect(btn).toHaveAttribute("aria-label", "Send");
+  await say("RECEIPT say model=vendor/x open=0");
+  await expect(btn).toHaveAttribute("aria-label", "Stop");
+  await expect(btn).toBeEnabled();
+  await expect(page.locator("#hint")).not.toContainText("working");
+  await say("ANSWER done");
+  await expect(btn).toHaveAttribute("aria-label", "Send");
+});
 
+test("the step budget stays with the model and is not counted down beside the composer", async ({ page }) => {
+  // "37 steps left" next to the send button read as a countdown on the
+  // person's own turn. The loop keeps its budget; the page says nothing.
+  const send = await page.locator("#send").boundingBox();
   await page.evaluate(() => window.live.step('RECEIPT budget {"step":3,"max":40}'));
-  await expect(meter).not.toHaveClass(/holding/);
-  const after = await meter.boundingBox();
-  expect(Math.abs(after.width - before.width)).toBeLessThan(2);
-
-  await expect(meter.locator(".nums")).toHaveText("37 steps left");
-  expect(await meter.getAttribute("title")).toContain("the run stops and summarises");
-
-  // And it warns before it runs out, rather than after.
-  await page.evaluate(() => window.live.step('RECEIPT budget {"step":38,"max":40}'));
-  expect(await meter.getAttribute("data-near")).toBe("1");
+  await expect(page.locator("#meter")).toHaveCount(0);
+  await expect(page.getByText(/steps? left/)).toHaveCount(0);
+  const after = await page.locator("#send").boundingBox();
+  expect(Math.abs(after.x - send.x)).toBeLessThan(1);
 });
 
 test("a long pasted message folds instead of pushing the run off the screen", async ({ page }) => {
@@ -286,7 +350,6 @@ test("evidence: the shell with everything up at once", async ({ page }) => {
       ],
       {},
     );
-    window.live.budget(31, 40);
     window.live.banner("busy", { variant: "activity", priority: "activity", title: "Working on qwen3-coder", dismiss: false });
     window.live.banner("retry", {
       variant: "warning",

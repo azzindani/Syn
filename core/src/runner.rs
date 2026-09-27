@@ -38,6 +38,41 @@ pub struct Runner {
     hands: Vec<Attached>,
     /// handle -> name of the hand it is bound to.
     live: HashMap<String, String>,
+    /// How a document that is not open yet becomes one, when this runner
+    /// has a way. `None` in tests and in the in-memory REPL: `open` is then
+    /// refused, the way it was before a model could ask for it.
+    door: Option<Box<dyn Door>>,
+}
+
+/// The way from "a file on disk" to "a handle bound live", for a caller
+/// that holds no desk of its own: the loop.
+///
+/// The console asked a person to connect a hand, attach a handle and bind
+/// it live, three commands with an order to get right, before the model
+/// could touch a file. A model asked to "open plan.xlsx" had no tool for
+/// it, tried `shell excel.exe`, was refused, and told the person to do it
+/// by hand. MCP already had one call that did the lot (`desk::Desk::open`);
+/// this is the same door, fitted to the runner so the loop reaches it
+/// without a second road to a document.
+///
+/// A door works on the runner it is fitted to, so it is lent the runner
+/// and the relay rather than holding either. Everything it opens is bound
+/// through `mark_live` and read through `run`, gates included.
+pub trait Door: std::fmt::Debug {
+    /// Open `target` in `app` (or find it already open), register it and
+    /// bind it live. The document comes back whole rather than as a
+    /// sentence: its summary was read out of the file and is untrusted,
+    /// its handle and next step are ours, and the caller fences one and
+    /// not the other.
+    fn open(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> std::result::Result<crate::desk::Doc, String>;
+    /// Files whose names match `query`, under `folder` or the usual places.
+    fn find(&self, query: &str, folder: Option<&str>) -> std::result::Result<String, String>;
+    /// Attach every wired helper that is already running, starting none.
+    /// Returns the apps newly connected.
+    fn connect_running(&mut self, relay: &mut Relay, runner: &mut Runner) -> Vec<String>;
+    /// Keep `open` and `search` inside these folders; empty lifts the limit.
+    /// The console's workspace, and MCP's AGENT_MCP_ROOTS, are this.
+    fn confine(&mut self, _roots: Vec<std::path::PathBuf>) {}
 }
 
 /// One attached hand and the apps it claims.
@@ -63,6 +98,7 @@ impl Runner {
             guard: Guard::open(),
             hands: Vec::new(),
             live: HashMap::new(),
+            door: None,
         }
     }
 
@@ -70,6 +106,69 @@ impl Runner {
         let mut r = Self::new(session);
         r.guard = guard;
         r
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
+    /// Fit the door the loop's `open`, `search` and the console's
+    /// `open` go through.
+    pub fn set_door(&mut self, door: Box<dyn Door>) {
+        self.door = Some(door);
+    }
+
+    pub fn has_door(&self) -> bool {
+        self.door.is_some()
+    }
+
+    /// Confine the door to these folders (empty: everywhere).
+    pub fn confine(&mut self, roots: Vec<std::path::PathBuf>) {
+        if let Some(d) = self.door.as_mut() {
+            d.confine(roots);
+        }
+    }
+
+    /// Lend the door this runner and the relay for one call.
+    ///
+    /// Taken out and put back rather than borrowed: the door needs the
+    /// whole runner (to attach hands, bind handles and read through the
+    /// gates), and it lives inside it.
+    fn through_door<T>(
+        &mut self,
+        relay: &mut Relay,
+        f: impl FnOnce(&mut dyn Door, &mut Relay, &mut Runner) -> std::result::Result<T, String>,
+    ) -> std::result::Result<T, String> {
+        let Some(mut door) = self.door.take() else {
+            return Err("nothing here can open files: this session has no desk (start it from the console or cli, not a test harness)".into());
+        };
+        let out = f(door.as_mut(), relay, self);
+        self.door = Some(door);
+        out
+    }
+
+    /// Open a document through the door. The gates are checked here as
+    /// well as inside, so a killed run or a disallowed app is refused
+    /// before a helper is started for it.
+    pub fn open_doc(&mut self, relay: &mut Relay, app: &str, target: &str) -> std::result::Result<crate::desk::Doc, String> {
+        if let Some(key) = crate::desk::app_key(app) {
+            self.permits(key).map_err(|e| e.to_string())?;
+        }
+        self.through_door(relay, |d, relay, runner| d.open(relay, runner, app, target))
+    }
+
+    pub fn find_files(&mut self, query: &str, folder: Option<&str>) -> std::result::Result<String, String> {
+        match &self.door {
+            Some(d) => d.find(query, folder),
+            None => Err("nothing here can search for files: this session has no desk".into()),
+        }
+    }
+
+    /// Attach whatever helpers are already running. Cheap when they are
+    /// not (a pipe or a port that is not there fails at once), so it is
+    /// safe to call before every turn.
+    pub fn connect_running(&mut self, relay: &mut Relay) -> Vec<String> {
+        self.through_door(relay, |d, relay, runner| Ok(d.connect_running(relay, runner))).unwrap_or_default()
     }
 
     /// Bind a hand under `name`, claiming `apps` (empty = any app).
@@ -282,6 +381,19 @@ impl Runner {
             return Ok(None);
         };
         self.guard.check(app_of(&job.handle))?;
+        // embedChart reads a chart out of a second document, named in its
+        // `from`. That document gets the gates its own calls would: an app
+        // the policy has off stays off, and a workbook the model was never
+        // given is refused rather than found by name in whatever is open.
+        if let crate::ops::Call::Struct(crate::ops::StructArgs::Office { verb, args, .. }) = &job.call
+            && verb == "embedChart"
+        {
+            let from = args.iter().find(|(k, _)| k == "from").map(|(_, v)| v.as_str()).unwrap_or("");
+            self.guard.check(app_of(from))?;
+            if !relay.registry(&self.session)?.iter().any(|h| h == from) {
+                return Err(Error::UnknownHandle(from.into()));
+            }
+        }
         // VBA is gated here, at the single point every op passes through,
         // rather than at the hand. A gate the live path alone enforces is
         // one an in-memory path can walk around, and this is the one
@@ -315,6 +427,25 @@ impl Runner {
     /// undo for a live file belongs to the sidecar's `.bak` plus the app's
     /// own undo stack. Taking one here would record an empty state and make
     /// `undo` look available when it is not.
+    /// A document the application has closed: every handle naming it
+    /// leaves the registry and its live binding, whatever unit it carries
+    /// (`excel:plan.xlsx:workbook` and `excel:plan.xlsx:Sheet1` are one
+    /// workbook). Left registered, the model would be shown a handle to
+    /// nothing, and its next read would fail with "workbook not open".
+    fn forget_document(&mut self, relay: &mut Relay, handle: &str) {
+        let doc = |h: &str| {
+            let mut p = h.splitn(3, ':');
+            (p.next().unwrap_or("").to_string(), p.next().unwrap_or("").to_string())
+        };
+        let closed = doc(handle);
+        for h in relay.registry(&self.session).unwrap_or_default() {
+            if doc(&h) == closed {
+                let _ = relay.detach(&self.session, &h);
+                self.live.remove(&h);
+            }
+        }
+    }
+
     fn pump_live(&mut self, relay: &mut Relay, job: Job) -> Result<OpOut> {
         let op = job.call.op();
         relay.emit(&self.session, "step.start", &job.handle, format!("{op:?} live"))?;
@@ -347,6 +478,9 @@ impl Runner {
             Ok(reply) if reply.ok => {
                 let preview = security::truncate_output(&reply.preview);
                 relay.emit(&self.session, "step.done", &job.handle, format!("{preview} live"))?;
+                if matches!(&job.call, Call::Struct(crate::ops::StructArgs::Office { verb, .. }) if verb == "close") {
+                    self.forget_document(relay, &job.handle);
+                }
                 Ok(OpOut::Text { detail: reply.preview })
             }
             Ok(reply) => {
@@ -541,6 +675,36 @@ mod tests {
         assert!(run.pump(&mut r).is_ok());
         assert!(matches!(run.pump(&mut r), Err(Error::DoomLoop(_))));
         assert_eq!(run.state(), &QueueState::Paused, "a doom loop must freeze the run");
+    }
+
+    #[test]
+    fn a_chart_comes_only_from_a_workbook_this_session_was_given_and_the_policy_allows() {
+        let (mut r, s, xl) = relay1();
+        let doc = crate::protocol::new_handle("word", "m.docx", "body");
+        r.attach(&s, doc.clone(), OpenFile {
+            kind: FileKind::Word,
+            content: FileContent::Word { paras: vec![], tables: vec![], changes: vec![], comments: vec![] },
+            styles: HashMap::new(),
+        });
+        let embed = |from: &str| Job {
+            handle: doc.clone(),
+            summary: "chart".into(),
+            call: Call::Struct(crate::ops::StructArgs::Office {
+                verb: "embedChart".into(),
+                args: vec![("from".into(), from.into()), ("source".into(), "Sheet1!1".into())],
+                payload: String::new(),
+            }),
+        };
+        let mut run = Runner::new(&s);
+        run.attach_hand(Box::new(FakeHand::ok(&["chart Sheet1!1 added"])));
+        run.mark_live(&doc).unwrap();
+        // Named by a workbook nobody gave the model: never found by name.
+        run.submit(embed("excel:payroll.xlsx:workbook"));
+        assert!(matches!(run.pump(&mut r), Err(Error::UnknownHandle(h)) if h == "excel:payroll.xlsx:workbook"));
+        // A registered workbook, with Excel off by policy: still refused.
+        run.lock_allowlist(vec!["word".into()]);
+        run.submit(embed(&xl));
+        assert!(matches!(run.pump(&mut r), Err(Error::AppDenied(_))));
     }
 
     #[test]

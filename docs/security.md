@@ -78,13 +78,20 @@ running with the user's full privileges. It is **off by default**:
 
 ## Documents and files
 
-- **Nothing is closed or saved** that Syn did not open itself. Office COM
-  servers are single-instance per user, so quitting one would close the
-  user's own documents.
+- **No application is ever quit, and nothing is closed that Syn did not
+  open.** Office COM servers are single-instance per user, so quitting one
+  would close the user's own documents. `struct` `close` closes a document
+  Syn opened, and only once it is saved.
+- **A save writes the document to its own file**, when a model calls
+  `struct` `save`: a plain Save, never a Save As, so the document never
+  moves to another path. It does not stop for approval.
 - **Exports are copies**; the open document keeps its own path.
 - **`open` is idempotent** and never discards unsaved work.
 - **`AGENT_MCP_ROOTS`** confines which folders an MCP client may open files
-  from.
+  from. In the console the chat's **workspace** does the same: once set,
+  `open` refuses a file outside it and `search` looks nowhere else. The
+  model is shown the documents' names, sizes and dates, fenced as untrusted
+  like any other result, never their contents.
 - **Undo refuses** when someone else has edited the document since Syn's
   change, rather than take their work back with it.
 
@@ -104,10 +111,21 @@ running with the user's full privileges. It is **off by default**:
 
 ## Secrets
 
-API keys are read from the environment or `.env` only when a request is
-sent. They are never logged, never written to a chat, a journal or the live
-log, and never put in a prompt or a tool result. `.env`, `.agent/` and
-`testbed/` are gitignored.
+API keys are read only when a request is sent, from Settings' saved keys
+first and then the environment or `.env`. They are never logged, never
+written to a chat, a journal or the live log, and never put in a prompt or a
+tool result. `.env`, `.agent/` and `testbed/` are gitignored.
+
+A key saved in Settings goes from the page to the loopback console (which
+already refuses commands from any other origin) and on to `auth.json`. The
+`key` line that carries it is kept out of the CLI's history and journal, and
+no reply repeats it: the page is only ever told where a key comes from and
+its last four characters, and the input is cleared once it is saved. On
+Windows the file holds the key sealed with DPAPI for the current user
+account, so another account, a backup copied elsewhere, or a file sent by
+mistake does not give the key away. Anything running as the same user can
+still unseal it, as it could read `.env`. On Linux and macOS the file is
+plain text with owner-only permissions.
 
 ## What stays with the user
 

@@ -90,10 +90,13 @@ pub fn normalise(key: &str) -> String {
     key.trim().trim_end_matches('/').to_string()
 }
 
-/// Where the auth file lives. Beside the chats, under the repo's own dot
-/// directory, so one gitignored place holds everything this tool keeps.
+/// Where the auth file lives: beside the chats, in Syn's own data folder
+/// (`AGENT_HOME`, or `.agent` beside the `.env`), so one place holds
+/// everything this tool keeps. It used to be `.agent` under whatever folder
+/// the process started in, which for an installed program is wherever its
+/// shortcut says, and a key saved from one shortcut vanished from another.
 pub fn auth_path() -> PathBuf {
-    PathBuf::from(".agent").join("auth.json")
+    crate::chats::home().join("auth.json")
 }
 
 /// Parse the auth document: `{"<provider>": {"type": "...", ...}, ...}`.
@@ -130,7 +133,10 @@ pub fn parse(doc: &str) -> BTreeMap<String, Credential> {
 fn credential_from(obj: &str) -> Option<Credential> {
     let f = |k: &str| field(obj, k);
     match f("type")?.as_str() {
-        "api" => Some(Credential::Api { key: f("key")? }),
+        // A key saved from Settings is sealed to this Windows account; one
+        // that will not open (another account, another machine) is skipped
+        // like any other bad row rather than sent as gibberish.
+        "api" => Some(Credential::Api { key: unseal(&f("key")?)? }),
         "oauth" => Some(Credential::Oauth {
             access: f("access")?,
             refresh: f("refresh").unwrap_or_default(),
@@ -227,9 +233,362 @@ pub fn resolve(provider: &str, key_env: &str) -> Option<String> {
     std::env::var(key_env).ok().filter(|k| !k.trim().is_empty())
 }
 
+// ---- Saving a key from Settings --------------------------------------------
+//
+// An installed program has no `.env` its user will ever open. Keys typed into
+// the console's Settings land here, in the same file every lookup above
+// already reads first. On Windows each key is sealed with DPAPI to the
+// Windows account that saved it, so the file is useless copied to another
+// machine or read by another user; elsewhere the file is readable by its
+// owner alone. Neither stops a program running as you: nothing on the
+// machine can, and saying otherwise would be a lie.
+
+/// Longest key accepted. Real keys are under 200 characters; this refuses a
+/// paste of the wrong thing rather than storing it.
+pub const MAX_KEY: usize = 500;
+
+/// Where a provider's key comes from, for Settings to show. Never the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// Saved from Settings (or written into the auth file).
+    Saved,
+    /// Only in the environment, under this variable (usually from `.env`).
+    Env(String),
+    /// Nowhere.
+    Missing,
+}
+
+/// Where the key for `provider` comes from, and its last four characters so
+/// a person can tell which key it is. Mirrors `resolve`'s order.
+pub fn source(provider: &str, key_env: &str) -> (Source, String) {
+    let tail = |k: &str| {
+        let n = k.chars().count();
+        if n <= 8 { String::new() } else { k.chars().skip(n - 4).collect() }
+    };
+    if let Some(c) = get(provider) {
+        return (Source::Saved, tail(c.bearer()));
+    }
+    match std::env::var(key_env).ok().filter(|k| !k.trim().is_empty()) {
+        Some(k) => (Source::Env(key_env.to_string()), tail(&k)),
+        None => (Source::Missing, String::new()),
+    }
+}
+
+/// Save `key` for `provider` (its base URL), replacing any saved before.
+pub fn save_key(provider: &str, key: &str) -> Result<(), String> {
+    save_key_in(&auth_path(), provider, key)
+}
+
+/// Forget the saved key for `provider`. A key in the environment stays.
+pub fn forget_key(provider: &str) -> Result<bool, String> {
+    forget_key_in(&auth_path(), provider)
+}
+
+fn check_key(key: &str) -> Result<String, String> {
+    let k = key.trim();
+    if k.is_empty() {
+        return Err("the key is empty".into());
+    }
+    if k.chars().count() > MAX_KEY {
+        return Err(format!("that is over {MAX_KEY} characters, which is not an API key: paste the key alone"));
+    }
+    if k.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("an API key has no spaces or line breaks in it: paste the key alone".into());
+    }
+    Ok(k.to_string())
+}
+
+fn save_key_in(path: &std::path::Path, provider: &str, key: &str) -> Result<(), String> {
+    if std::env::var(AUTH_CONTENT_ENV).is_ok_and(|d| !d.trim().is_empty()) {
+        return Err(format!("keys on this machine come from {AUTH_CONTENT_ENV}, so a saved one would never be read"));
+    }
+    let key = check_key(key)?;
+    let mut all = read_file(path);
+    all.insert(normalise(provider), Credential::Api { key });
+    write_file(path, &all)
+}
+
+fn forget_key_in(path: &std::path::Path, provider: &str) -> Result<bool, String> {
+    let mut all = read_file(path);
+    let had = all.remove(&normalise(provider)).is_some();
+    if had {
+        write_file(path, &all)?;
+    }
+    Ok(had)
+}
+
+fn read_file(path: &std::path::Path) -> BTreeMap<String, Credential> {
+    std::fs::read_to_string(path).map(|d| parse(&d)).unwrap_or_default()
+}
+
+fn json_str(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// The whole file, written to a temporary name and moved into place, so a
+/// crash mid-write leaves the old keys rather than half of the new ones.
+fn write_file(path: &std::path::Path, all: &BTreeMap<String, Credential>) -> Result<(), String> {
+    let mut doc = String::from("{\n");
+    let rows: Vec<String> = all
+        .iter()
+        .map(|(name, c)| {
+            let body = match c {
+                Credential::Api { key } => format!("{{\"type\":\"api\",\"key\":{}}}", json_str(&seal(key))),
+                Credential::Oauth { access, refresh, expires } => format!(
+                    "{{\"type\":\"oauth\",\"access\":{},\"refresh\":{},\"expires\":{expires}}}",
+                    json_str(access),
+                    json_str(refresh)
+                ),
+                Credential::WellKnown { key, token } => {
+                    format!("{{\"type\":\"wellknown\",\"key\":{},\"token\":{}}}", json_str(key), json_str(token))
+                }
+            };
+            format!("  {}: {body}", json_str(name))
+        })
+        .collect();
+    doc.push_str(&rows.join(",\n"));
+    doc.push_str("\n}\n");
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, doc).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| format!("cannot save {}: {e}", path.display()))
+}
+
+/// Prefix of a key sealed with DPAPI, so a plain key written by hand into
+/// the file still reads as itself.
+const SEALED: &str = "dpapi:";
+
+#[cfg(windows)]
+fn seal(key: &str) -> String {
+    match dpapi::protect(key.as_bytes()) {
+        Some(b) => format!("{SEALED}{}", b64::encode(&b)),
+        // Sealing failed (no user profile loaded, say): store it the way
+        // opencode does rather than lose it.
+        None => key.to_string(),
+    }
+}
+
+#[cfg(not(windows))]
+fn seal(key: &str) -> String {
+    key.to_string()
+}
+
+fn unseal(stored: &str) -> Option<String> {
+    let Some(b) = stored.strip_prefix(SEALED) else {
+        return Some(stored.to_string());
+    };
+    #[cfg(windows)]
+    {
+        String::from_utf8(dpapi::unprotect(&b64::decode(b)?)?).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = b;
+        None
+    }
+}
+
+/// DPAPI, from the Windows system library: the call every Windows program
+/// uses to keep a secret for the user who is signed in. Plain FFI into
+/// crypt32, which ships with Windows; nothing is added to the build.
+#[cfg(windows)]
+mod dpapi {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct Blob {
+        len: u32,
+        data: *mut u8,
+    }
+
+    #[link(name = "crypt32")]
+    unsafe extern "system" {
+        fn CryptProtectData(
+            input: *const Blob,
+            desc: *const u16,
+            entropy: *const Blob,
+            reserved: *mut c_void,
+            prompt: *mut c_void,
+            flags: u32,
+            out: *mut Blob,
+        ) -> i32;
+        fn CryptUnprotectData(
+            input: *const Blob,
+            desc: *mut *mut u16,
+            entropy: *const Blob,
+            reserved: *mut c_void,
+            prompt: *mut c_void,
+            flags: u32,
+            out: *mut Blob,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LocalFree(mem: *mut c_void) -> *mut c_void;
+    }
+
+    /// Never show a prompt: Syn runs without a window to show one in.
+    const UI_FORBIDDEN: u32 = 0x1;
+    /// Mixed into every seal, so a blob lifted from this file does not open
+    /// through another program's plain DPAPI call.
+    const ENTROPY: &[u8] = b"syn/api-key/1";
+
+    fn run(input: &[u8], seal: bool) -> Option<Vec<u8>> {
+        let inb = Blob { len: input.len() as u32, data: input.as_ptr() as *mut u8 };
+        let ent = Blob { len: ENTROPY.len() as u32, data: ENTROPY.as_ptr() as *mut u8 };
+        let mut out = Blob { len: 0, data: std::ptr::null_mut() };
+        // SAFETY: every pointer is to a live local or a slice that outlives
+        // the call; `out` is filled by the system and freed below with the
+        // allocator it came from.
+        let ok = unsafe {
+            if seal {
+                CryptProtectData(&inb, std::ptr::null(), &ent, std::ptr::null_mut(), std::ptr::null_mut(), UI_FORBIDDEN, &mut out)
+            } else {
+                CryptUnprotectData(&inb, std::ptr::null_mut(), &ent, std::ptr::null_mut(), std::ptr::null_mut(), UI_FORBIDDEN, &mut out)
+            }
+        };
+        if ok == 0 || out.data.is_null() {
+            return None;
+        }
+        // SAFETY: the system says `out.data` holds `out.len` bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(out.data, out.len as usize) }.to_vec();
+        unsafe { LocalFree(out.data as *mut c_void) };
+        Some(bytes)
+    }
+
+    pub fn protect(plain: &[u8]) -> Option<Vec<u8>> {
+        run(plain, true)
+    }
+
+    pub fn unprotect(sealed: &[u8]) -> Option<Vec<u8>> {
+        run(sealed, false)
+    }
+}
+
+/// Base64, standard alphabet with padding: a sealed key is binary and the
+/// file is text.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod b64 {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(b: &[u8]) -> String {
+        let mut o = String::with_capacity(b.len().div_ceil(3) * 4);
+        for c in b.chunks(3) {
+            let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+            o.push(A[(n >> 18) as usize & 63] as char);
+            o.push(A[(n >> 12) as usize & 63] as char);
+            o.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
+            o.push(if c.len() > 2 { A[n as usize & 63] as char } else { '=' });
+        }
+        o
+    }
+
+    pub fn decode(s: &str) -> Option<Vec<u8>> {
+        let s = s.trim_end_matches('=');
+        let mut o = Vec::with_capacity(s.len() * 3 / 4);
+        let (mut acc, mut bits) = (0u32, 0u32);
+        for ch in s.bytes() {
+            let v = A.iter().position(|&x| x == ch)? as u32;
+            acc = (acc << 6) | v;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                o.push((acc >> bits) as u8);
+                acc &= (1 << bits) - 1;
+            }
+        }
+        Some(o)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_round_trips_every_length_and_every_byte() {
+        for n in 0..70 {
+            let b: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
+            assert_eq!(b64::decode(&b64::encode(&b)).unwrap(), b, "length {n}");
+        }
+        assert_eq!(b64::encode(b"Man"), "TWFu");
+        assert_eq!(b64::encode(b"Ma"), "TWE=");
+        assert!(b64::decode("not*base64").is_none());
+    }
+
+    fn tmp_auth(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("syn-auth-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d.join("auth.json")
+    }
+
+    #[test]
+    fn a_saved_key_reads_back_and_is_never_in_the_file_as_typed_on_windows() {
+        let p = tmp_auth("save");
+        let key = "sk-test-0123456789abcdef";
+        save_key_in(&p, "https://example.test/v1/", key).unwrap();
+        let back = read_file(&p);
+        assert_eq!(back["https://example.test/v1"].bearer(), key, "stored under the normalised provider");
+        let text = std::fs::read_to_string(&p).unwrap();
+        if cfg!(windows) {
+            assert!(!text.contains(key), "sealed to the account, not written as typed: {text}");
+            assert!(text.contains(SEALED), "{text}");
+        }
+        // A second provider keeps the first.
+        save_key_in(&p, "https://other.test", "sk-other-000000000").unwrap();
+        assert_eq!(read_file(&p).len(), 2);
+        assert!(forget_key_in(&p, "https://example.test/v1").unwrap());
+        assert!(!forget_key_in(&p, "https://example.test/v1").unwrap(), "nothing left to forget");
+        assert_eq!(read_file(&p).keys().collect::<Vec<_>>(), ["https://other.test"]);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn a_paste_that_is_not_a_key_is_refused_and_says_why() {
+        let p = tmp_auth("bad");
+        assert!(save_key_in(&p, "x", "   ").unwrap_err().contains("empty"));
+        assert!(save_key_in(&p, "x", "sk-one sk-two").unwrap_err().contains("no spaces"));
+        assert!(save_key_in(&p, "x", &"k".repeat(MAX_KEY + 1)).unwrap_err().contains("not an API key"));
+        assert!(!p.exists(), "nothing was written");
+        // Surrounding whitespace from a copy is not part of the key.
+        save_key_in(&p, "x", "  sk-trimmed-0000000000 \n").unwrap();
+        assert_eq!(read_file(&p)["x"].bearer(), "sk-trimmed-0000000000");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn a_key_sealed_elsewhere_is_skipped_not_sent() {
+        let doc = r#"{"https://a.test":{"type":"api","key":"dpapi:AAAA"},"https://b.test":{"type":"api","key":"sk-plain"}}"#;
+        let all = parse(doc);
+        assert!(!all.contains_key("https://a.test"), "a blob that will not open is not a credential");
+        assert_eq!(all["https://b.test"].bearer(), "sk-plain", "a key written by hand still reads as itself");
+    }
+
+    #[test]
+    fn settings_learns_where_a_key_is_from_and_only_its_last_four() {
+        // No saved key for an invented provider, and an invented variable.
+        let (src, tail) = source("https://nobody.test", "SYN_TEST_NO_SUCH_KEY");
+        assert_eq!(src, Source::Missing);
+        assert!(tail.is_empty());
+    }
 
     const DOC: &str = r#"{
       "https://openrouter.ai/api/v1": {"type":"api","key":"sk-or-v1-abc"},

@@ -8,7 +8,8 @@
   number of failures, so the output pasted back is the whole report.
 
   It works on throwaway documents that new-testbed-docs.ps1 makes in
-  testbed\docs, never on yours, and it closes nothing: when it finishes,
+  testbed\docs, never on yours. It saves and closes only the copies it
+  exports to testbed\out (the save-and-close steps); when it finishes,
   Excel, Word and PowerPoint are left open on those documents so you can
   look at what each step did. Exports land in testbed\out\peak.*.
 
@@ -186,6 +187,13 @@ if ($Vba) {
     Step 'macro: write a multi-line module' 'struct' @{ handle = $x; verb = 'macro'; action = 'write'; name = 'SynPeak'; code = $code } | Out-Null
     Step 'macro: run it' 'struct' @{ handle = $x; verb = 'macro'; action = 'run'; title = 'SynPeak' } | Out-Null
     Step '  it wrote H1' 'read' @{ handle = $x; selector = 'Sheet1!H1' } -Expect 'from VBA' | Out-Null
+    $broken = "Sub SynBroken()`r`n    Dim x As Long`r`n    x = 1 / 0`r`nEnd Sub"
+    Step 'macro: one that divides by zero' 'struct' @{ handle = $x; verb = 'macro'; action = 'write'; name = 'SynBroken'; code = $broken } | Out-Null
+    Step '  its error comes back, no dialog left open' 'struct' @{ handle = $x; verb = 'macro'; action = 'run'; title = 'SynBroken' } -Fails -Expect "Run-time error '11'" | Out-Null
+    Step '  and the next macro still runs' 'struct' @{ handle = $x; verb = 'macro'; action = 'run'; title = 'SynPeak' } -Expect 'ran SynPeak' | Out-Null
+    Step 'macro: one that does not compile' 'struct' @{ handle = $x; verb = 'macro'; action = 'write'; name = 'SynBad'; code = "Sub SynOops()`r`n    x = = 1`r`nEnd Sub" } | Out-Null
+    Step '  the compile error comes back' 'struct' @{ handle = $x; verb = 'macro'; action = 'run'; title = 'SynOops' } -Fails -Expect 'does not compile' | Out-Null
+    Step 'macro: a MsgBox is refused' 'struct' @{ handle = $x; verb = 'macro'; action = 'write'; name = 'SynAsk'; code = "Sub SynAsk()`r`n    MsgBox ""hi""`r`nEnd Sub" } -Fails -Expect 'waits for someone to click' | Out-Null
 } else { Skip 'macro write, run, read' 'pass -Vba to include it' }
 Step 'export xlsx' 'export' @{ handle = $x; format = 'xlsx'; path = (Join-Path $out 'peak.xlsx') } | Out-Null
 Step '  the open workbook is still plan.xlsx' 'read' @{ handle = $x; selector = 'Sheet1!A1' } -Expect '= Region' | Out-Null
@@ -206,7 +214,17 @@ Step 'a paragraph to undo' 'struct' @{ handle = $w; verb = 'insertParagraph'; te
 Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid the insertParagraph' | Out-Null
 Step '  it is gone, step one is not' 'read' @{ handle = $w; selector = 'body' } -Expect '^(?![\s\S]*undo me please)[\s\S]*step one' | Out-Null
 Step 'sort on a document is refused, with the list' 'struct' @{ handle = $w; verb = 'sort'; selector = 'p1'; name = 'x' } -Fails -Expect 'Excel only.*insertParagraph' | Out-Null
-Step 'a table before p1' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Site|Score;North|3;South|4'; at = 'p1' } | Out-Null
+Step 'a table before p1' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Site|Score;North|3;South|4'; at = 'p1' } -Expect 'table t1 added, 3x2.*as p1:p\d+' | Out-Null
+Step '  it reads as one table, not as its cells' 'read' @{ handle = $w; selector = 'body' } -Expect '\[table t1, 3x2\]: Site\|Score;North\|3;South\|4' | Out-Null
+Step '  its cells are not headings' 'export' @{ handle = $w; format = 'summary' } -Expect '^(?![\s\S]*headings:[^;]*Site)[\s\S]*tables: t1 p1:p\d+ 3x2' | Out-Null
+Step 'format the whole table in one call' 'format' @{ handle = $w; selector = 't1'; style = 'tableStyle=Grid Table 4 - Accent 1;size=10' } -Expect 'formatted table t1' | Out-Null
+Step '  its header row' 'format' @{ handle = $w; selector = 't1.r1'; style = 'bold=1;fill=#1F4E79;color=#FFFFFF' } -Expect 't1 row 1' | Out-Null
+Step '  its second column' 'format' @{ handle = $w; selector = 't1.c2'; style = 'align=right' } -Expect 't1 column 2' | Out-Null
+Step '  a table key on a row is refused' 'format' @{ handle = $w; selector = 't1.r1'; style = 'banded=1' } -Fails -Expect 'whole table' | Out-Null
+Step 'format a range of paragraphs' 'format' @{ handle = $w; selector = 'p0:p1'; style = 'spaceAfter=6' } -Expect 'p0:p1' | Out-Null
+Step 'a real chart from the workbook' 'struct' @{ handle = $w; verb = 'embedChart'; from = $x; source = 'Copied!1'; name = '400' } -Expect 'a chart linked to the workbook' | Out-Null
+Step '  a chart past the last is refused' 'struct' @{ handle = $w; verb = 'embedChart'; from = $x; source = 'Copied!40' } -Fails -Expect 'chart\(s\)' | Out-Null
+Step '  a workbook never opened is refused' 'struct' @{ handle = $w; verb = 'embedChart'; from = 'excel:nothere.xlsx:workbook'; source = 'Copied!1' } -Fails -Expect 'nothere' | Out-Null
 Step 'find Placeholder' 'struct' @{ handle = $w; verb = 'find'; text = 'Placeholder' } -Expect 'paragraph' | Out-Null
 Step 'replace Placeholder with Draft' 'struct' @{ handle = $w; verb = 'replace'; text = 'Placeholder'; with = 'Draft' } -Expect '1 time' | Out-Null
 Step 'a two-line comment on p0' 'struct' @{ handle = $w; verb = 'comment'; selector = 'p0'; text = "check this`nand this" } | Out-Null
@@ -255,6 +273,43 @@ Step 'export pptx' 'export' @{ handle = $p; format = 'pptx'; path = (Join-Path $
 Step '  the open deck is still deck.pptx' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=' | Out-Null
 Step 'export pdf' 'export' @{ handle = $p; format = 'pdf'; path = (Join-Path $out 'peak-deck.pdf') } | Out-Null
 
+# ==================================================== save and close
+# On the copies exported above, never on the test documents: a save writes
+# to disk. Each copy is opened, changed, refused a close while unsaved,
+# saved, closed, and opened again to prove the change reached the file.
+Write-Host "`n-- Save and close --" -ForegroundColor Cyan
+$xs = 'excel:peak.xlsx:workbook'
+$ws = 'word:peak.docx:body'
+$ps = 'ppt:peak.pptx:deck'
+Step 'open the exported peak.xlsx' 'open' @{ app = 'excel'; path = (Join-Path $out 'peak.xlsx') } | Out-Null
+Step 'write a marker into it' 'write' @{ handle = $xs; selector = 'Sheet1!H2'; values = 'saved by Syn' } | Out-Null
+Step 'close while unsaved is refused' 'struct' @{ handle = $xs; verb = 'close' } -Fails -Expect 'unsaved changes' | Out-Null
+Step 'save' 'struct' @{ handle = $xs; verb = 'save' } -Expect 'saved peak.xlsx to' | Out-Null
+Step 'close' 'struct' @{ handle = $xs; verb = 'close' } -Expect 'closed peak.xlsx; Excel stays open' | Out-Null
+Step '  its handle is gone' 'read' @{ handle = $xs; selector = 'Sheet1!H2' } -Fails -Expect 'not open' | Out-Null
+Step '  open it again' 'open' @{ app = 'excel'; path = (Join-Path $out 'peak.xlsx') } | Out-Null
+Step '  the marker is on disk' 'read' @{ handle = $xs; selector = 'Sheet1!H2' } -Expect 'saved by Syn' | Out-Null
+Step '  close it again' 'struct' @{ handle = $xs; verb = 'close' } -Expect 'closed' | Out-Null
+Step 'open the exported csv' 'open' @{ app = 'excel'; path = (Join-Path $out 'peak-sheet1.csv') } | Out-Null
+Step '  saving a CSV is refused' 'struct' @{ handle = 'excel:peak-sheet1.csv:workbook'; verb = 'save' } -Fails -Expect 'is a CSV' | Out-Null
+Step '  close it, unchanged' 'struct' @{ handle = 'excel:peak-sheet1.csv:workbook'; verb = 'close' } -Expect 'closed' | Out-Null
+Step 'open the exported peak.docx' 'open' @{ app = 'word'; path = (Join-Path $out 'peak.docx') } | Out-Null
+Step 'add a paragraph' 'struct' @{ handle = $ws; verb = 'insertParagraph'; text = 'saved by Syn' } | Out-Null
+Step 'close while unsaved is refused' 'struct' @{ handle = $ws; verb = 'close' } -Fails -Expect 'unsaved changes' | Out-Null
+Step 'save' 'struct' @{ handle = $ws; verb = 'save' } -Expect 'saved peak.docx to' | Out-Null
+Step 'close' 'struct' @{ handle = $ws; verb = 'close' } -Expect 'closed peak.docx; Word stays open' | Out-Null
+Step '  open it again' 'open' @{ app = 'word'; path = (Join-Path $out 'peak.docx') } | Out-Null
+Step '  the paragraph is on disk' 'read' @{ handle = $ws; selector = 'body' } -Expect 'saved by Syn' | Out-Null
+Step '  close it again' 'struct' @{ handle = $ws; verb = 'close' } -Expect 'closed' | Out-Null
+Step 'open the exported peak.pptx' 'open' @{ app = 'powerpoint'; path = (Join-Path $out 'peak.pptx') } | Out-Null
+Step 'add a slide' 'struct' @{ handle = $ps; verb = 'createSlide'; title = 'Saved by Syn'; bullets = 'x' } | Out-Null
+Step 'close while unsaved is refused' 'struct' @{ handle = $ps; verb = 'close' } -Fails -Expect 'unsaved changes' | Out-Null
+Step 'save' 'struct' @{ handle = $ps; verb = 'save' } -Expect 'saved peak.pptx to' | Out-Null
+Step 'close' 'struct' @{ handle = $ps; verb = 'close' } -Expect 'closed peak.pptx; PowerPoint stays open' | Out-Null
+Step '  open it again' 'open' @{ app = 'powerpoint'; path = (Join-Path $out 'peak.pptx') } | Out-Null
+Step '  the slide is on disk' 'read' @{ handle = $ps; selector = 'deck' } -Expect 'slides=4' | Out-Null
+Step '  close it again' 'struct' @{ handle = $ps; verb = 'close' } -Expect 'closed' | Out-Null
+
 # ============================================================== done
 $gateProc.StandardInput.Close()
 if (-not $gateProc.WaitForExit(30000)) { $gateProc.Kill() }
@@ -267,5 +322,5 @@ if ($failed.Count) {
     Write-Host 'Failures, in full:' -ForegroundColor Yellow
     foreach ($f in $failed) { Write-Host "  $($f.Label)`n    $($f.Text -replace "`n", "`n    ")" }
 }
-Write-Host "Exports are in $out. Excel, Word and PowerPoint were left open on the test documents: nothing was closed or saved over them."
+Write-Host "Exports are in $out. Excel, Word and PowerPoint were left open on the test documents: nothing was closed or saved over them. Only the exported copies in $out were saved and closed."
 exit $failed.Count

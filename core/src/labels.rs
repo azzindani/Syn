@@ -48,6 +48,8 @@ const TOOL_FORMS: &[(&str, Forms)] = &[
     ("export", ("Export", "Exporting", "Exported", "a document")),
     ("undo", ("Undo", "Undoing", "Undid", "the last change")),
     ("shell", ("Run", "Running", "Ran", "a program")),
+    ("open", ("Open", "Opening", "Opened", "a document")),
+    ("search", ("Search", "Searching", "Searched", "for files")),
     ("manual", ("Read", "Reading", "Read", "the manual")),
     ("plan", ("Update", "Updating", "Updated", "the plan")),
 ];
@@ -74,6 +76,7 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("contents", ("Insert", "Inserting", "Inserted", "a table of contents")),
     ("pageNumbers", ("Add", "Adding", "Added", "page numbers")),
     ("picture", ("Insert", "Inserting", "Inserted", "a picture")),
+    ("embedChart", ("Insert", "Inserting", "Inserted", "a chart")),
     ("find", ("Search", "Searching", "Searched", "the document")),
     ("replace", ("Replace", "Replacing", "Replaced", "text")),
     ("delete", ("Delete", "Deleting", "Deleted", "part of the document")),
@@ -92,6 +95,8 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("duplicateSlide", ("Duplicate", "Duplicating", "Duplicated", "a slide")),
     ("moveSlide", ("Move", "Moving", "Moved", "a slide")),
     ("theme", ("Apply", "Applying", "Applied", "a theme")),
+    ("save", ("Save", "Saving", "Saved", "the document")),
+    ("close", ("Close", "Closing", "Closed", "the document")),
 ];
 
 /// `macro` is four different sentences depending on its `action`, because
@@ -167,7 +172,11 @@ fn file(handle: &str) -> Option<String> {
 
 /// The application a handle names, for an icon: `excel`, `word`, ...
 pub fn app(args: &str) -> Option<String> {
-    let handle = field(args, "handle")?;
+    let Some(handle) = field(args, "handle") else {
+        // `open` names the app it wants rather than a handle it has; spelt
+        // the way handles spell it, so the row gets the app's own icon.
+        return field(args, "app").and_then(|a| crate::desk::app_key(&a)).map(str::to_string);
+    };
     handle.split(':').next().filter(|a| !a.is_empty()).map(str::to_string)
 }
 
@@ -187,14 +196,22 @@ fn target(name: &str, args: &str) -> Option<String> {
         "export" => named("path").or_else(|| field(args, "handle").and_then(|h| file(&h))),
         "undo" => field(args, "handle").and_then(|h| file(&h)),
         "shell" => named("program"),
+        // The file, not the path: "Opened solar.xlsx" is the row a person
+        // reads, and a path is most of a line of folders they know.
+        "open" => named("path").map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
+        "search" => named("name").map(|n| format!("{n:?}")),
         "manual" => named("topic"),
         "plan" => None,
         "struct" => match verb.as_str() {
             "addSheet" | "table" | "name" | "slicer" => named("name"),
+            // The file is what was saved or closed: "Saved plan.xlsx".
+            "save" | "close" => field(args, "handle").and_then(|h| file(&h)),
             "pivot" | "chart" => named("at").or_else(|| named("title")),
             "insertParagraph" | "createSlide" => named("title").or_else(|| named("text")),
             "macro" => named("name").or_else(|| named("title")),
             "transfer" => named("from"),
+            // The workbook it came from: "Inserted a chart from plan.xlsx".
+            "embedChart" => field(args, "from").and_then(|h| file(&h)),
             _ => named("selector").or_else(where_),
         },
         _ => None,
@@ -222,10 +239,11 @@ fn preposition(name: &str, args: &str) -> &'static str {
         "export" => "to",
         "undo" => "on",
         "shell" => "",
+        "search" => "for",
         "manual" => "for",
         "struct" => match verb.as_str() {
             "pivot" | "chart" | "picture" | "insertTable" => "on",
-            "transfer" => "from",
+            "transfer" | "embedChart" => "from",
             _ => "",
         },
         _ => "",
@@ -272,7 +290,7 @@ fn keeps_noun(name: &str, args: &str) -> bool {
     if name != "struct" {
         return false;
     }
-    !matches!(verb.as_str(), "addSheet" | "table" | "name" | "slicer")
+    !matches!(verb.as_str(), "addSheet" | "table" | "name" | "slicer" | "save" | "close")
 }
 
 fn forms_for(name: &str, args: &str) -> Forms {
@@ -308,6 +326,8 @@ pub enum Group {
     Export,
     Undo,
     Shell,
+    Open,
+    Search,
     Service,
     Other,
 }
@@ -321,6 +341,8 @@ pub fn group(name: &str) -> Group {
         "export" => Group::Export,
         "undo" => Group::Undo,
         "shell" => Group::Shell,
+        "open" => Group::Open,
+        "search" => Group::Search,
         "manual" | "plan" => Group::Service,
         "struct" => Group::Structure,
         other if STRUCT_VERBS.contains(&other) => Group::Structure,
@@ -354,6 +376,8 @@ fn phrase(g: Group, n: usize, now: bool) -> String {
         Group::Export => format!("{} {n} {}", verb("Exported", "Exporting"), plural("file", "files")),
         Group::Undo => format!("{} {n} {}", verb("Undid", "Undoing"), plural("change", "changes")),
         Group::Shell => format!("{} {n} {}", verb("Ran", "Running"), plural("program", "programs")),
+        Group::Open => format!("{} {n} {}", verb("Opened", "Opening"), plural("document", "documents")),
+        Group::Search => format!("{} for files {n} {}", verb("Searched", "Searching"), plural("time", "times")),
         Group::Service => {
             format!("{} the plan and manual {n} {}", verb("Checked", "Checking"), plural("time", "times"))
         }
@@ -465,6 +489,13 @@ pub fn severity(step: &crate::agent::Step) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chart_from_a_workbook_names_the_workbook_not_the_documents_unit() {
+        // It read "Inserted a chart from Excel body" in the first live run.
+        let a = r#"{"handle":"word:memo.docx:body","verb":"embedChart","from":"excel:plan.xlsx:workbook","source":"Summary!1"}"#;
+        assert_eq!(sentence("struct", a, Status::Done), "Inserted a chart from plan.xlsx");
+    }
 
     #[test]
     fn a_summary_is_summarised_not_exported() {

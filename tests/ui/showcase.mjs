@@ -101,7 +101,6 @@ try {
     await page.evaluate(
       ([t, l, lines]) => {
         window.live.render(t, l);
-        window.live.budget(23, 40);
         window.live.step("RECEIPT say model=deepseek/deepseek-chat open=3");
         for (const x of lines) window.live.step(x);
         window.live.banner("retry", {

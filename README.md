@@ -51,12 +51,13 @@ Requirements: Windows 10/11, Microsoft Office desktop, Rust, .NET 8 SDK.
 ```
 cd core && cargo build --release && cargo build --bins && cd ..
 dotnet build -c Release sidecar-csharp\Host
-copy .env.example .env        # then set AGENT_API_KEY and the AGENT_PIPE_* lines
+copy .env.example .env        # then set the AGENT_PIPE_* lines (and AGENT_API_KEY, or add a key in Settings)
 ```
 
 Then either point an MCP client at `core\target\release\mcpgate.exe`, or
-start the Office helpers and the console as described in
-[docs/setup-windows.md](docs/setup-windows.md).
+start the console (`powershell -File scripts\console.ps1`) and ask for what
+you want: it finds and opens files, and starts the Office helpers, by
+itself. See [docs/setup-windows.md](docs/setup-windows.md).
 
 To check an installation against real Office:
 

@@ -159,6 +159,9 @@ class Office:
     def __init__(self, app, visible, pipe=None):
         self.app = app
         self.visible = visible
+        # Names of the documents this helper opened itself: office-host's
+        # rule for `close`, which leaves what the person had open alone.
+        self.opened = set()
         self.proc = None
         self.profile = None
         local = uno.getComponentContext()
@@ -274,8 +277,37 @@ class Office:
             if doc is not None:
                 doc.close(True)
             raise Refused("%s did not open as a %s document" % (name, self.app))
+        self.opened.add(name)
         noun = {"excel": "workbook(s)", "word": "document(s)", "powerpoint": "presentation(s)"}[self.app]
         return "opened %s, %d %s" % (name, len(self.docs()), noun)
+
+    # save and close, worded as office-host words them (SaveClose.cs): Save
+    # to the document's own file and format, never a Save As; close only
+    # what this helper opened, only once saved, and never the office itself.
+    def save(self, doc):
+        name = self.name_of(doc)
+        if not doc.hasLocation():
+            raise Refused("not saved: %s has never been saved to a file, so it has no file of its own to save to; "
+                          "export it with a format and a path instead" % (name or "the document"))
+        if doc.isReadonly():
+            raise Refused("not saved: %s is open read-only (another program may have it); export a copy instead" % name)
+        if self.app == "excel" and name.lower().endswith(".csv"):
+            raise Refused("not saved: %s is a CSV, which keeps only the first sheet's values; "
+                          "export it as xlsx to keep everything" % name)
+        doc.store()
+        return "saved %s to %s" % (name, uno.fileUrlToSystemPath(doc.getURL()))
+
+    def close(self, doc):
+        name = self.name_of(doc)
+        if name not in self.opened:
+            raise Refused("not closed: %s was not opened by Syn -- it was open already, and only the user closes it" % name)
+        if doc.isModified():
+            raise Refused("not closed: %s has unsaved changes; save it first with struct verb save, or leave it open" % name)
+        _DECK_UNDO.pop(doc_key(doc), None)
+        doc.close(True)
+        self.opened.discard(name)
+        app = {"excel": "Excel", "word": "Word", "powerpoint": "PowerPoint"}[self.app]
+        return "closed %s; %s stays open" % (name, app)
 
 
 # ---------------------------------------------------------------- Calc
@@ -771,7 +803,7 @@ class Writer:
         # Word's table styles ("Grid Table 4 - Accent 1") have no LibreOffice
         # equivalent, so a named one is reported rather than faked.
         note = "" if not style else " [table style %s is Word's; left as-is]" % style
-        return "table %d added, %dx%d%s" % (self.doc.TextTables.getCount(), len(rows), nc, note)
+        return "table t%d added, %dx%d%s" % (self.doc.TextTables.getCount(), len(rows), nc, note)
 
     def page_break(self, kind):
         cur = self._new_para("")
@@ -1319,6 +1351,10 @@ def handle_line(office, line):
             return reply_ok(export(app, doc, args.get("format", ""), args.get("path", ""), args.get("sheet", "")))
         if method == "undo":
             return reply_ok(undo(doc, app))
+        if method == "save":
+            return reply_ok(office.save(doc))
+        if method == "close":
+            return reply_ok(office.close(doc))
         if app == "excel":
             c = Calc(doc)
             out = {

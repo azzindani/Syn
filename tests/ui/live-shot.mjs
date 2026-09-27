@@ -10,6 +10,5 @@ const rows = await p.evaluate(() => window.live.rows.map(r => r.text));
 const dupes = rows.filter((l, i) => rows.indexOf(l) !== i);
 await p.screenshot({ path: "../../testbed/shots/live-run.png" });
 console.log(JSON.stringify({ n: rows.length, dupes, turns: (await p.evaluate(() => window.live.turns)).length,
-  map: await p.evaluate(() => window.live.mapReady), sse: await p.evaluate(() => window.live.sse),
-  meter: await p.evaluate(() => document.querySelector("#meter .nums").textContent) }, null, 1));
+  map: await p.evaluate(() => window.live.mapReady), sse: await p.evaluate(() => window.live.sse) }, null, 1));
 await p.close(); await b.close();

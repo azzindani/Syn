@@ -44,6 +44,11 @@ pub trait Connector {
     fn can_launch(&self, app: &str) -> bool;
     /// Connect to `app`'s helper, starting it if it is not running.
     fn connect(&mut self, app: &str) -> Result<Connected, String>;
+    /// Connect to `app`'s helper only if it is already running: nothing is
+    /// started. The fakes have no process to start, so theirs is `connect`.
+    fn connect_running(&mut self, app: &str) -> Option<Connected> {
+        self.connect(app).ok()
+    }
 }
 
 /// The five kinds of thing `open` can reach, by the prefix their handles use.
@@ -91,6 +96,14 @@ fn extensions(app: &str) -> &'static [&'static str] {
     }
 }
 
+/// The app that opens a file of this name, as the `open` tool spells it
+/// (`excel`, `word`, `powerpoint`), or None for a kind no app here opens.
+pub fn app_for_file(name: &str) -> Option<&'static str> {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
+    let key = ["excel", "word", "ppt"].into_iter().find(|a| extensions(a).contains(&ext.as_str()))?;
+    Some(if key == "ppt" { "powerpoint" } else { key })
+}
+
 /// The unit a fresh handle names. Excel's is cosmetic -- the workbook is
 /// found by file name and the sheet travels in every selector -- so it says
 /// "workbook" rather than guessing a sheet that may not exist.
@@ -115,34 +128,62 @@ pub struct Doc {
     pub sheets: Vec<String>,
 }
 
+/// What a desk knows beyond its runner: where helpers come from, what it
+/// has opened, and where it may open from.
+///
+/// Apart from `Desk` so that two owners can hold one. `mcpgate` keeps a
+/// `Desk`, which owns its relay and runner outright; the console's runner
+/// holds `Doors` as its `runner::Door`, and lends itself for each call.
+/// Either way it is one piece of code that turns a path into a live handle.
+pub struct Doors {
+    connector: Box<dyn Connector>,
+    docs: Vec<Doc>,
+    /// When set, `open` and `search` only reach files under these folders.
+    roots: Vec<PathBuf>,
+}
+
+impl std::fmt::Debug for Doors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Doors").field("docs", &self.docs.len()).field("roots", &self.roots).finish()
+    }
+}
+
 pub struct Desk {
     pub relay: Relay,
     pub runner: Runner,
     pub session: String,
-    connector: Box<dyn Connector>,
-    docs: Vec<Doc>,
-    /// When set, `open` only takes files under these folders.
-    roots: Vec<PathBuf>,
+    doors: Doors,
 }
 
 impl Desk {
     pub fn new(session: &str, connector: Box<dyn Connector>) -> Self {
         let mut relay = Relay::new();
         relay.handshake(session, "desk");
-        Self { relay, runner: Runner::new(session), session: session.into(), connector, docs: Vec::new(), roots: Vec::new() }
+        Self { relay, runner: Runner::new(session), session: session.into(), doors: Doors::new(connector) }
     }
 
     /// Confine `open` to files under these folders (AGENT_MCP_ROOTS).
     pub fn confine_to(&mut self, roots: Vec<PathBuf>) {
-        self.roots = roots.into_iter().filter_map(|r| std::fs::canonicalize(&r).ok().or(Some(r))).collect();
+        self.doors.confine_to(roots);
     }
 
     pub fn docs(&self) -> &[Doc] {
-        &self.docs
+        &self.doors.docs
     }
 
     pub fn registry(&self) -> Vec<String> {
         self.relay.registry(&self.session).unwrap_or_default()
+    }
+
+    /// Open a file, or find one already open, and hand back its handle.
+    /// See `Doors::open`.
+    pub fn open(&mut self, app: &str, target: &str) -> Result<Doc, String> {
+        self.doors.open(&mut self.relay, &mut self.runner, app, target)
+    }
+
+    /// The whole desk, in words, with what to do next.
+    pub fn status(&self) -> String {
+        self.doors.status(&self.relay, &self.runner)
     }
 
     /// Resolve what a model wrote as a handle to one that is registered.
@@ -196,28 +237,66 @@ impl Desk {
         }
     }
 
+}
+
+impl Doors {
+    pub fn new(connector: Box<dyn Connector>) -> Self {
+        Self { connector, docs: Vec::new(), roots: Vec::new() }
+    }
+
+    /// Confine `open` and `search` to files under these folders.
+    pub fn confine_to(&mut self, roots: Vec<PathBuf>) {
+        self.roots = roots.into_iter().filter_map(|r| std::fs::canonicalize(&r).ok().or(Some(r))).collect();
+    }
+
+    fn registry(relay: &Relay, runner: &Runner) -> Vec<String> {
+        relay.registry(runner.session()).unwrap_or_default()
+    }
+
     /// Make sure a hand serves `app`, connecting (and launching) if needed.
-    fn ensure_hand(&mut self, app: &str) -> Result<Option<String>, String> {
-        if self.runner.serves(app) {
+    fn ensure_hand(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str) -> Result<Option<String>, String> {
+        if runner.serves(app) {
             return Ok(None);
         }
         let c = self.connector.connect(app)?;
         let note = c.launched.then(|| format!("started {}'s helper", app_name(app)));
-        self.runner.attach_hand_as(&c.name, c.apps, c.hand);
+        runner.attach_hand_as(&c.name, c.apps, c.hand);
         // A hand is (re)connected, so a run frozen by the one whose pipe
         // died can go again. Without this an MCP session whose helper
         // crashed answered "the queue is paused" to every call, `open`
         // included, until the client was restarted.
-        self.runner.thaw(&mut self.relay);
+        runner.thaw(relay);
         Ok(note)
     }
 
     /// Drop the hand serving `app` and connect a fresh one.
-    fn reconnect(&mut self, app: &str) -> Result<Option<String>, String> {
-        if let Some(name) = self.runner.hand_serving(app) {
-            self.runner.detach_hand(&name);
+    fn reconnect(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str) -> Result<Option<String>, String> {
+        if let Some(name) = runner.hand_serving(app) {
+            runner.detach_hand(&name);
         }
-        self.ensure_hand(app)
+        self.ensure_hand(relay, runner, app)
+    }
+
+    /// Attach every wired helper that is already running, starting none.
+    ///
+    /// What makes the console need no "connect" button: a helper the human
+    /// (or an earlier run, or an MCP client) started is simply there. One
+    /// that is not running costs a failed pipe open, which is immediate.
+    pub fn connect_running(&mut self, relay: &mut Relay, runner: &mut Runner) -> Vec<String> {
+        let mut got = Vec::new();
+        for app in APPS {
+            if runner.serves(app) || self.connector.wired(app).is_none() || runner.permits(app).is_err() {
+                continue;
+            }
+            if let Some(c) = self.connector.connect_running(app) {
+                runner.attach_hand_as(&c.name, c.apps, c.hand);
+                got.push(app.to_string());
+            }
+        }
+        if !got.is_empty() {
+            runner.thaw(relay);
+        }
+        got
     }
 
     /// Open a file, or find one already open, and hand back its handle.
@@ -225,7 +304,7 @@ impl Desk {
     /// `target` is a full path for the Office apps, or a file name that is
     /// already open. For the browser it is part of a page's title or
     /// address; for a window, part of its title.
-    pub fn open(&mut self, app: &str, target: &str) -> Result<Doc, String> {
+    pub fn open(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
         let Some(app) = app_key(app) else {
             return Err(format!(
                 "unknown app {app:?}: use one of excel, word, powerpoint, browser, window"
@@ -237,14 +316,30 @@ impl Desk {
         }
         // The gates first: an app the human has not allowed must not cost a
         // launched helper and a started Excel to refuse.
-        self.runner.permits(app).map_err(|e| e.to_string())?;
+        runner.permits(app).map_err(|e| e.to_string())?;
 
         if matches!(app, "web" | "ui") {
-            return self.open_view(app, target);
+            return self.open_view(relay, runner, app, target);
         }
 
         let as_path = Path::new(target);
         let is_path = target.contains('/') || target.contains('\\') || target.contains(':');
+        // Inside a workspace, a relative path, or a bare name that is a file
+        // there, is under it: the listing the model is shown names files
+        // that way, and "q3\deck.pptx" resolved against wherever Syn was
+        // started would open nothing or the wrong thing.
+        let rooted = self
+            .roots
+            .first()
+            .filter(|_| as_path.is_relative() && !target.contains(':'))
+            // The root is canonical, `\\?\C:\...` on Windows; Office is
+            // handed the path a person would write.
+            .map(|r| PathBuf::from(crate::find::display(r)).join(target))
+            .filter(|p| is_path || p.is_file());
+        let (as_path, is_path) = match &rooted {
+            Some(p) => (p.as_path(), true),
+            None => (as_path, is_path),
+        };
         // Split on both separators by hand: a Windows path read on any other
         // platform has no `/`, and `Path::file_name` would return all of it.
         let file = target.rsplit(['/', '\\']).next().unwrap_or(target).to_string();
@@ -267,32 +362,32 @@ impl Desk {
 
         let full = if is_path { Some(self.confined(as_path)?) } else { None };
         let mut notes = Vec::new();
-        notes.extend(self.ensure_hand(app)?);
+        notes.extend(self.ensure_hand(relay, runner, app)?);
         if let Some(full) = &full {
             let path = full.to_string_lossy().to_string();
-            let said = match self.runner.open_file(app, &path) {
+            let said = match runner.open_file(app, &path) {
                 // The helper went away since this session last used it: it
                 // crashed, or another session's copy of it did. `open` is
                 // what a model is told to call to recover, so it has to
                 // recover rather than report the same broken pipe again.
                 Err(Error::Transport(_)) => {
-                    notes.extend(self.reconnect(app)?);
-                    self.runner.open_file(app, &path)
+                    notes.extend(self.reconnect(relay, runner, app)?);
+                    runner.open_file(app, &path)
                 }
                 other => other,
             };
             notes.push(said.map_err(|e| explain(app, e))?);
         }
         let handle = new_handle(app, &file, unit_for(app));
-        self.register(&handle, app)?;
+        self.register(relay, runner, &handle, app)?;
 
         // Look once. For a bare name this is also the check that it really
         // is open: a handle that points at nothing must not be handed out.
-        let mut look = self.first_look(&handle, app);
+        let mut look = self.first_look(relay, runner, &handle, app);
         if look.as_ref().is_err_and(|e| e.contains("helper broke")) {
-            notes.extend(self.reconnect(app)?);
-            self.register(&handle, app)?;
-            look = self.first_look(&handle, app);
+            notes.extend(self.reconnect(relay, runner, app)?);
+            self.register(relay, runner, &handle, app)?;
+            look = self.first_look(relay, runner, &handle, app);
         }
         match look {
             Ok((summary, sheets)) => {
@@ -301,7 +396,7 @@ impl Desk {
                 Ok(doc)
             }
             Err(e) if full.is_none() && (e.contains("not open") || e.contains("no such")) => {
-                self.unregister(&handle);
+                self.unregister(relay, runner, &handle);
                 Err(format!(
                     "{file} is not open in {}. Give its full path instead, e.g. C:\\Users\\you\\Documents\\{file}",
                     app_name(app)
@@ -319,16 +414,16 @@ impl Desk {
 
     /// Register a browser page or a window by what its title (or address)
     /// contains. Nothing is opened: these are things the human has open.
-    fn open_view(&mut self, app: &str, target: &str) -> Result<Doc, String> {
+    fn open_view(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
         if target.contains(':') {
             return Err(format!(
                 "{target:?} contains ':', which separates the parts of a handle. Use part of the title, or the address without its scheme (example.com/report)"
             ));
         }
         let mut notes = Vec::new();
-        notes.extend(self.ensure_hand(app)?);
+        notes.extend(self.ensure_hand(relay, runner, app)?);
         let handle = new_handle(app, target, unit_for(app));
-        self.register(&handle, app)?;
+        self.register(relay, runner, &handle, app)?;
         let doc = Doc {
             handle,
             app: app.into(),
@@ -345,21 +440,21 @@ impl Desk {
             return Ok(p.to_path_buf());
         }
         Err(format!(
-            "{} is outside the folders this server may open ({}). The human sets these with AGENT_MCP_ROOTS.",
+            "{} is outside the folders Syn may open here ({}). In the console that is the chat's workspace, which the human picks above the message box; behind MCP it is AGENT_MCP_ROOTS.",
             p.display(),
             self.roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
         ))
     }
 
-    fn register(&mut self, handle: &str, app: &str) -> Result<(), String> {
-        if !self.registry().iter().any(|h| h == handle) {
-            self.relay.attach(&self.session, handle.to_string(), OpenFile::placeholder(app));
+    fn register(&mut self, relay: &mut Relay, runner: &mut Runner, handle: &str, app: &str) -> Result<(), String> {
+        if !Self::registry(relay, runner).iter().any(|h| h == handle) {
+            relay.attach(runner.session(), handle.to_string(), OpenFile::placeholder(app));
         }
-        self.runner.mark_live(handle).map(|_| ()).map_err(|e| e.to_string())
+        runner.mark_live(handle).map(|_| ()).map_err(|e| e.to_string())
     }
 
-    fn unregister(&mut self, handle: &str) {
-        let _ = self.relay.detach(&self.session, handle);
+    fn unregister(&mut self, relay: &mut Relay, runner: &mut Runner, handle: &str) {
+        let _ = relay.detach(runner.session(), handle);
         self.docs.retain(|d| d.handle != handle);
     }
 
@@ -370,7 +465,7 @@ impl Desk {
 
     /// A first look at a freshly bound document, through the same gated
     /// road as every other op.
-    fn first_look(&mut self, handle: &str, app: &str) -> Result<(String, Vec<String>), String> {
+    fn first_look(&mut self, relay: &mut Relay, runner: &mut Runner, handle: &str, app: &str) -> Result<(String, Vec<String>), String> {
         // Excel names its sheets in the refusal for a sheet that cannot
         // exist ('?' is illegal in a sheet name), which is one round trip
         // for the thing a model most needs and most often guesses wrong.
@@ -380,7 +475,7 @@ impl Desk {
             _ => "body",
         };
         let call = Call::Read(ReadArgs { selector: selector.into() });
-        match self.runner.run(&mut self.relay, handle, "desk:look", call) {
+        match runner.run(relay, handle, "desk:look", call) {
             Ok(Some(o)) => Ok((crate::agent::describe(&o), vec![])),
             Ok(None) => Err("the queue is paused".into()),
             Err(Error::Live(msg)) if app == "excel" => match sheets_in(&msg) {
@@ -392,9 +487,9 @@ impl Desk {
     }
 
     /// The whole desk, in words, with what to do next.
-    pub fn status(&self) -> String {
+    pub fn status(&self, relay: &Relay, runner: &Runner) -> String {
         let mut out = String::new();
-        let hands = self.runner.hands();
+        let hands = runner.hands();
         out.push_str("CONNECTED APPS\n");
         if hands.is_empty() {
             out.push_str("  none yet (`open` connects them)\n");
@@ -405,13 +500,13 @@ impl Desk {
         }
 
         out.push_str("\nOPEN DOCUMENTS (copy the handle exactly)\n");
-        let open = self.registry();
+        let open = Self::registry(relay, runner);
         if open.is_empty() {
             out.push_str("  none. Call `open` with an app and a file's full path.\n");
         }
         for h in &open {
             let about = self.docs.iter().find(|d| &d.handle == h).map(|d| d.summary.clone()).unwrap_or_default();
-            let live = if self.runner.is_live(h) { "" } else { " (not connected to a live app)" };
+            let live = if runner.is_live(h) { "" } else { " (not connected to a live app)" };
             out.push_str(&format!("  {h}{live}{}\n", if about.is_empty() { String::new() } else { format!(" -- {about}") }));
         }
         // The selector grammar of each app open, once each: the handle and
@@ -428,12 +523,12 @@ impl Desk {
 
         out.push_str("\nCAN OPEN\n");
         for app in APPS {
-            let how = match (self.connector.wired(app), self.connector.can_launch(app), self.runner.permits(app)) {
+            let how = match (self.connector.wired(app), self.connector.can_launch(app), runner.permits(app)) {
                 (_, _, Err(e)) => format!("not allowed: {e}"),
                 (None, _, _) if *app == "web" => "not wired: the human starts Chrome or Edge with --remote-debugging-port and sets AGENT_CDP".into(),
                 (None, _, _) => format!("not wired: the human sets {} in .env", crate::config::pipe_env_key(if *app == "ui" { "uia" } else { app })),
                 (Some(at), true, _) => format!("yes ({at}; its helper starts on demand)"),
-                (Some(at), false, _) if self.runner.serves(app) => format!("yes ({at}, connected)"),
+                (Some(at), false, _) if runner.serves(app) => format!("yes ({at}, connected)"),
                 (Some(at), false, _) => format!("yes, if its helper is running ({at})"),
             };
             out.push_str(&format!("  {}: {how}\n", app_name(app)));
@@ -454,6 +549,24 @@ impl Desk {
     }
 }
 
+impl crate::runner::Door for Doors {
+    fn open(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
+        Doors::open(self, relay, runner, app, target)
+    }
+
+    fn find(&self, query: &str, folder: Option<&str>) -> Result<String, String> {
+        crate::find::search(query, folder, &self.roots)
+    }
+
+    fn connect_running(&mut self, relay: &mut Relay, runner: &mut Runner) -> Vec<String> {
+        Doors::connect_running(self, relay, runner)
+    }
+
+    fn confine(&mut self, roots: Vec<PathBuf>) {
+        self.confine_to(roots);
+    }
+}
+
 /// Put a hand failure in words a model can act on.
 pub fn explain(app: &str, e: Error) -> String {
     match e {
@@ -461,7 +574,7 @@ pub fn explain(app: &str, e: Error) -> String {
             "the connection to {}'s helper broke ({d}). Call `open` again to reconnect.",
             app_name(app)
         ),
-        other => crate::coach::explain(app, &other.to_string(), crate::coach::Caller::Mcp),
+        other => crate::coach::explain(app, &other.to_string(), crate::coach::Caller::CanOpen),
     }
 }
 
@@ -604,6 +717,28 @@ impl EnvConnector {
 }
 
 impl Connector for EnvConnector {
+    fn connect_running(&mut self, app: &str) -> Option<Connected> {
+        let at = self.wired(app)?;
+        if app == "web" {
+            // A browser answers on its port or does not; there is nothing
+            // of ours to start for it. Knocked first with a short timeout:
+            // on Windows a connect to a closed local port is not refused at
+            // once but retried for two seconds, and this runs before every
+            // turn and every status check. A browser that is listening
+            // answers a loopback knock in well under a millisecond.
+            use std::net::ToSocketAddrs;
+            let knock = at.to_socket_addrs().ok()?.next()?;
+            std::net::TcpStream::connect_timeout(&knock, std::time::Duration::from_millis(150)).ok()?;
+            let c = crate::cdp::Cdp::connect(&at).ok()?;
+            return Some(Connected { name: format!("cdp-{at}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
+        }
+        if app == "ui" && !cfg!(windows) {
+            return None;
+        }
+        let h = Hand::connect(&at).ok()?;
+        Some(Connected { name: at, apps: vec![app.into()], hand: Box::new(h), launched: false })
+    }
+
     fn wired(&self, app: &str) -> Option<String> {
         if app == "web" { crate::config::cdp_addr() } else { crate::config::pipe_for(Self::pipe_key(app)) }
     }
@@ -876,6 +1011,89 @@ mod tests {
         assert_eq!(open.matches("Excel selectors name the sheet").count(), 1, "{open}");
     }
 
+    fn fitted(c: FakeConnector) -> (Relay, Runner) {
+        let mut relay = Relay::new();
+        relay.handshake("con", "cli");
+        let mut runner = Runner::new("con");
+        runner.set_door(Box::new(Doors::new(Box::new(c))));
+        (relay, runner)
+    }
+
+    #[test]
+    fn a_runner_fitted_with_the_door_opens_a_file_live_in_one_call() {
+        // The console's road: no desk of its own, a runner with the door.
+        // `open` used to stop at "opened", and the model was then told
+        // nothing was open.
+        let (c, log) = FakeConnector::new();
+        let (mut relay, mut runner) = fitted(c);
+        let path = std::env::temp_dir().join("plan.xlsx");
+        let doc = runner.open_doc(&mut relay, "excel", &path.to_string_lossy()).unwrap();
+        assert_eq!(doc.handle, "excel:plan.xlsx:workbook");
+        assert_eq!(relay.registry("con").unwrap(), vec![doc.handle.clone()]);
+        assert!(runner.is_live(&doc.handle), "registered AND bound live");
+        assert_eq!(doc.sheets, ["data", "Summary sheet"]);
+        // And what it opened is read through the runner's gates.
+        let read = crate::ops::Call::Read(crate::ops::ReadArgs { selector: "data!A1".into() });
+        assert!(runner.run(&mut relay, &doc.handle, "t", read).unwrap().is_some());
+        assert_eq!(log.borrow().connects, ["excel"]);
+    }
+
+    #[test]
+    fn a_closed_document_leaves_the_registry_under_every_handle_that_named_it() {
+        let (c, _log) = FakeConnector::new();
+        let (mut relay, mut runner) = fitted(c);
+        let tmp = std::env::temp_dir();
+        let plan = runner.open_doc(&mut relay, "excel", &tmp.join("plan.xlsx").to_string_lossy()).unwrap();
+        // The same workbook under a sheet's name, the way a model often
+        // writes it, and a second workbook that must be left alone.
+        relay.attach("con", "excel:plan.xlsx:data".into(), OpenFile::placeholder("excel"));
+        runner.mark_live("excel:plan.xlsx:data").unwrap();
+        let budget = runner.open_doc(&mut relay, "excel", &tmp.join("budget.xlsx").to_string_lossy()).unwrap();
+        let verb = |v: &str| {
+            crate::ops::Call::Struct(crate::ops::StructArgs::Office { verb: v.into(), args: vec![], payload: String::new() })
+        };
+
+        // Saving forgets nothing.
+        runner.run(&mut relay, &budget.handle, "t", verb("save")).unwrap();
+        assert_eq!(relay.registry("con").unwrap().len(), 3);
+
+        runner.run(&mut relay, &plan.handle, "t", verb("close")).unwrap();
+        assert_eq!(relay.registry("con").unwrap(), vec![budget.handle.clone()]);
+        assert!(!runner.is_live(&plan.handle) && !runner.is_live("excel:plan.xlsx:data"));
+        assert!(runner.is_live(&budget.handle));
+    }
+
+    #[test]
+    fn a_stopped_runner_opens_nothing_and_starts_no_helper() {
+        let (c, log) = FakeConnector::new();
+        let (mut relay, mut runner) = fitted(c);
+        runner.kill();
+        assert!(runner.open_doc(&mut relay, "word", r"C:\b\memo.docx").is_err());
+        assert!(log.borrow().connects.is_empty(), "the gate is checked before a helper is started");
+    }
+
+    #[test]
+    fn a_runner_with_no_door_says_so_rather_than_pretending() {
+        let mut relay = Relay::new();
+        let mut runner = Runner::new("con");
+        assert!(runner.open_doc(&mut relay, "excel", r"C:\b\plan.xlsx").unwrap_err().contains("no desk"));
+        assert!(runner.find_files("plan", None).unwrap_err().contains("no desk"));
+        assert!(runner.connect_running(&mut relay).is_empty());
+    }
+
+    #[test]
+    fn helpers_already_running_are_attached_without_anyone_asking() {
+        // The console had a "connect" button per app. A helper that is up
+        // is now simply connected, and one that is connected is left be.
+        let (c, log) = FakeConnector::new();
+        let (mut relay, mut runner) = fitted(c);
+        let got = runner.connect_running(&mut relay);
+        assert_eq!(got, ["excel", "word", "ppt", "ui"], "every wired app; the fake wires no browser");
+        assert!(runner.serves("excel") && runner.serves("ppt"));
+        assert!(runner.connect_running(&mut relay).is_empty(), "nothing twice");
+        assert_eq!(log.borrow().connects.len(), 4);
+    }
+
     #[test]
     fn open_recovers_a_session_whose_helper_died() {
         let (c, log) = FakeConnector::new();
@@ -983,6 +1201,28 @@ mod tests {
         let e = d.open("excel", r"C:\elsewhere\plan.xlsx").unwrap_err();
         assert!(e.contains("outside the folders"), "{e}");
         assert!(log.borrow().connects.is_empty());
+    }
+
+    #[test]
+    fn inside_a_workspace_a_name_or_relative_path_opens_the_file_there() {
+        let ws = std::env::temp_dir().join(format!("syn-ws-open-{}", std::process::id()));
+        std::fs::create_dir_all(ws.join("q3")).unwrap();
+        std::fs::write(ws.join("q3").join("plan.xlsx"), b"x").unwrap();
+        std::fs::write(ws.join("top.xlsx"), b"x").unwrap();
+        let (mut d, log) = desk();
+        d.confine_to(vec![ws.clone()]);
+        // As the workspace listing names them: relative to the folder.
+        d.open("excel", r"q3\plan.xlsx").unwrap();
+        d.open("excel", "top.xlsx").unwrap();
+        // The helper is sent the full path under the workspace, JSON-escaped.
+        let sent = log.borrow().envelopes.join("\n").replace("\\\\", "\\");
+        let under = |rel: &str| ws.join(rel).display().to_string();
+        assert!(sent.contains(&under(r"q3\plan.xlsx")), "q3\\plan.xlsx under the workspace: {sent}");
+        assert!(sent.contains(&under("top.xlsx")), "a bare name that is a file there: {sent}");
+        assert!(!sent.contains(r"\\?\"), "Office gets a plain path, not the long-path form: {sent}");
+        // Outside it is still outside.
+        assert!(d.open("excel", r"C:\elsewhere\plan.xlsx").unwrap_err().contains("outside the folders"));
+        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]

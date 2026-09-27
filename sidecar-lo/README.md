@@ -42,7 +42,7 @@ running headless.
 ## What it does, and what it refuses
 
 Every app: `open`, `read`, `write`, `export` (a copy; `summary` needs no
-path), `undo`, `find`, `replace`, `delete`.
+path), `undo`, `find`, `replace`, `delete`, `save` (its own file and format; refused unsaved-to-disk, read-only or CSV) and `close` (only what this helper opened, once saved; LibreOffice stays running).
 
 | App | Also handled |
 |---|---|

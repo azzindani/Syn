@@ -16,20 +16,39 @@ is gitignored.
 Secrets are read only when a request is sent. They are never logged, written
 to a journal or a chat, or put in a prompt.
 
+## API keys
+
+A key can come from two places, and the first one found is used:
+
+1. **Settings in the console** (or the CLI's `key <provider> <key>`). This
+   is the way for an installed copy with no `.env`. The key is written to
+   `auth.json` in `AGENT_HOME` (`.agent/auth.json` by default). On Windows
+   it is sealed with DPAPI first, so the file holds `dpapi:...` and only
+   the same Windows account on the same machine can read it back; copied to
+   another account or machine it is useless and the key has to be added
+   again. On Linux and macOS the file is plain text, readable by its owner
+   only (mode 0600).
+2. **The environment or `.env`**: `AGENT_API_KEY` and the rows below.
+
+Removing a saved key in Settings goes back to the `.env` one, if there is
+one. A key with a space or line break in it (a paste that caught two
+things) is refused rather than trimmed.
+
 ## Model provider
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AGENT_API_KEY` | — | Key for the provider at `AGENT_BASE_URL`. Needed for anything that calls a model (`do`, `say`, `send`, the console's chat). |
+| `AGENT_API_KEY` | — | Key for the provider at `AGENT_BASE_URL`. Needed for anything that calls a model (`do`, `say`, `send`, the console's chat), unless a key is saved in Settings. |
 | `AGENT_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible chat-completions endpoint: OpenRouter, Groq, DeepInfra, Together, OpenAI, or a local llama.cpp / Ollama / LM Studio. |
 | `AGENT_MODEL_SMALL` | `openrouter/auto` | Model for the `small` slot (the `skim` task). |
 | `AGENT_MODEL_STANDARD` | `openrouter/auto` | Model for the `standard` slot (`routine`), the default. |
 | `AGENT_MODEL_CODING` | `openrouter/auto` | Model for the `coding` slot (`code`). |
 | `AGENT_MODEL_REASONING` | `openrouter/auto` | Model for the `reasoning` slot (`deep`, and the vision fallback). |
 | `AGENT_BASE_URL_<SLOT>`, `AGENT_API_KEY_<SLOT>` | the global pair | Put one slot on a different provider (`SMALL`, `STANDARD`, `CODING`, `REASONING`). |
-| `AGENT_API_KEY_OPENCODE` | — | Adds OpenCode Zen's models to the console's model picker. |
-| `AGENT_API_KEY_OPENROUTER` | — | Adds OpenRouter's models to the picker when `AGENT_BASE_URL` points elsewhere. |
-| `AGENT_AUTH_CONTENT` | — | The whole credentials file (`.agent/auth.json`) as JSON, for machines with nowhere to keep a file. |
+| `AGENT_API_KEY_OPENCODE` | — | The key for OpenCode Zen. Its models are in the console's picker either way; this is what lets a turn be sent to one. |
+| `AGENT_API_KEY_OPENCODE_GO` | — | The key for OpenCode Go (the subscription, `https://opencode.ai/zen/go/v1`), likewise. A Zen key does not work here. Go asks each client to name itself and its conversation, so Syn sends `User-Agent: syn/<version>` and the chat's id as `x-opencode-session` to OpenCode (the id only there). |
+| `AGENT_API_KEY_OPENROUTER` | — | The key for OpenRouter when `AGENT_BASE_URL` points elsewhere, likewise. |
+| `AGENT_AUTH_CONTENT` | — | The whole credentials file (`auth.json`) as JSON, for machines with nowhere to keep a file. While it is set, Settings cannot save a key, because a saved one would never be read. |
 
 When a model fails with a rate limit or an outage, Syn waits and retries the
 same model once, then walks the other slots. Slots that resolve to the same
@@ -42,7 +61,7 @@ different providers) is what makes the fallback useful.
 |---|---|---|
 | `AGENT_STREAM` | on | `0` waits for whole replies (up to five minutes each) instead of streaming, for a gateway that mishandles `"stream": true`. |
 | `AGENT_STREAM_IDLE_SECS` | `180` | How long a streamed reply may send nothing at all before it is abandoned (10–3600). Providers send keep-alives while a model thinks, so this detects a dead connection, not a slow model. |
-| `AGENT_MAX_STEPS` | `40` | Tool calls the agent loop may make in one turn. |
+| `AGENT_MAX_STEPS` | `100` | Tool calls the agent loop may make in one turn. |
 | `AGENT_CONTEXT_CHARS` | `240000`, less for small models | How much conversation the loop keeps before compacting. It shrinks automatically to fit the context window the provider reports for the chosen model. |
 | `AGENT_PLAN` | on | `0` removes the `plan` tool from the loop. |
 | `AGENT_MANUAL` | on | `0` removes the `manual` tool from the loop. |
@@ -62,6 +81,7 @@ wrong would connect to something else, so there is no built-in default.
 | `AGENT_PYTHON` | `python3` | The Python that has LibreOffice's `uno` module, for `lo_host.py`. |
 | `AGENT_LO_VISIBLE` | off | `1` shows the LibreOffice windows instead of running headless (needs a display). |
 | `AGENT_TRACE` | off | `1` makes the helpers write a trace of every call to stderr. |
+| `AGENT_LAUNCH` | on | The console and CLI: `0` never starts a helper, and only attaches ones already running. (MCP has its own, `AGENT_MCP_LAUNCH`.) |
 
 ## MCP server
 
@@ -86,5 +106,5 @@ and programs are added for a session with the CLI's `shellallow` command.
 |---|---|---|
 | `AGENT_HOME` | `.agent` beside the `.env` in use | Where Syn keeps its own state: `chats/` (conversations, one JSON Lines file each), `live/` (progress logs the console follows) and `models.json` (the cached model list). Gitignored. |
 
-Stored credentials, if any, are read from `.agent/auth.json` in the working
-directory (or from `AGENT_AUTH_CONTENT`).
+Keys saved in Settings live in `auth.json` in the same folder (or come from
+`AGENT_AUTH_CONTENT`); see [API keys](#api-keys).

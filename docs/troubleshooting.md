@@ -86,5 +86,38 @@ C# helper is written the way it is:
 4. **Quitting an application with an unsaved document raises a modal prompt
    that blocks every COM call, including the quit.** And `New-Object` on a
    running Word hands back the user's own instance, so a script that quits
-   it closes their work. Syn never quits or saves what it did not start, and
-   the test fixture script refuses to run while Office is open.
+   it closes their work. Syn never quits an application, closes only a
+   document it opened and has saved (`struct` `close`), saves only when
+   asked (`struct` `save`, never Save As), and the test fixture script
+   refuses to run while Office is open.
+5. **The application can go away under a helper.** When the user quits Word,
+   or it crashes, every call through the old reference fails with
+   `0x800706BA` (RPC server unavailable) or `0x80010108` (disconnected), and
+   a helper that kept it failed that way for the rest of its life. A call
+   that failed that way never reached the application, so the helper lets
+   go of the dead reference, attaches to the running application (or starts
+   one), drops what it knew about the old one's documents, and makes the
+   call once more. `0x800706BE`, which can mean it died partway through a
+   call, is not retried.
+6. **A helper stopped hard leaves its undo scratch workbook behind**, hidden
+   and never saved, because it never reaches its own clean-up. Each scratch
+   workbook carries a `SynUndoScratch` property naming its helper's process,
+   and an Excel helper starting up closes the ones whose helper is gone;
+   a workbook without that property is never touched.
+7. **Word counts a table's cells as paragraphs**, and one more at the end
+   of every row, so a 12x4 table is sixty `p` numbers. Shown one by one they
+   read as loose lines, and a model deleted real tables three times taking
+   them for fake ones. `read` shows a table as one entry naming its
+   paragraphs, and a table inserted in front of a heading is made Normal
+   first, or every cell takes the heading's style.
+8. **A macro that fails waits for a person.** VBA answers a run-time error
+   with its Continue / End / Debug box, and `Application.Run` does not
+   return until someone clicks; the message filter cannot cancel a call
+   that is not rejected, only unfinished. The first live division by zero
+   held the run for minutes and came back as `0x800A9C68`. While a macro
+   runs, a watcher thread finds VBA's own dialog in that Excel (class
+   `#32770`, title `Microsoft Visual Basic`), reads its text, and posts a
+   click to End (OK for a compile error). A compile error met mid-run also
+   leaves VBA paused in the debugger, so the watcher then presses Run >
+   Reset through its own COM connection. Compiling first would be tidier,
+   but Debug > Compile reports itself disabled while the editor is hidden.

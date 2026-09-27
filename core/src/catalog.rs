@@ -25,7 +25,24 @@ use std::path::PathBuf;
 /// `AGENT_BASE_URL` away and gets the same treatment.
 pub const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen/v1";
 pub const OPENCODE_KEY_ENV: &str = "AGENT_API_KEY_OPENCODE";
+/// OpenCode Go: the flat monthly subscription to open-weight models, on its
+/// own path under the same host (OpenCode's `inference-proxy.ts` routes
+/// `/zen/go/v1/chat/completions` and `/zen/go/v1/models`). A provider of its
+/// own, not a Zen plan: a Zen key sent here is refused with "OpenCode Go
+/// subscription required", so the two keys never stand in for each other.
+pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+pub const OPENCODE_GO_KEY_ENV: &str = "AGENT_API_KEY_OPENCODE_GO";
 pub const OPENROUTER_KEY_ENV: &str = "AGENT_API_KEY_OPENROUTER";
+
+/// The providers known by name, in picker order: endpoint, wire name,
+/// label, and the env var whose key adds it to the picker. The names are
+/// OpenCode's own provider ids, so a key kept in `auth.json` under
+/// `opencode-go` is found as readily as one kept under its URL.
+const KNOWN: [(&str, &str, &str, &str); 3] = [
+    (crate::provider::DEFAULT_BASE_URL, "openrouter", "OpenRouter", OPENROUTER_KEY_ENV),
+    (OPENCODE_BASE_URL, "opencode", "OpenCode Zen", OPENCODE_KEY_ENV),
+    (OPENCODE_GO_BASE_URL, "opencode-go", "OpenCode Go", OPENCODE_GO_KEY_ENV),
+];
 
 /// Refetch when the cached list is older than this. Providers add models
 /// weekly and retire free ones without notice; a quarter of an hour is
@@ -76,13 +93,14 @@ impl Entry {
 /// Which providers this deployment can reach, in picker order.
 ///
 /// The configured endpoint first, under its own name when it is one we
-/// know. Then OpenRouter and OpenCode when a key for them exists, so a
-/// human with both keys picks from both without editing the base URL. A
-/// provider with no key at all is still listed when it is the configured
-/// one: OpenRouter's catalog is public, and seeing what is on offer is how
-/// someone decides to get a key.
+/// know. Then every one of `KNOWN`, key or no key. All three catalogs are
+/// public, and seeing what is on offer is how someone decides to get a
+/// key: listing a provider only once its key was set meant a person looking
+/// for OpenCode's models found none, and no hint they were one line of
+/// `.env` away. A provider without a key is served with `ready: false`, and
+/// the picker says "add a key" beside its models rather than letting a turn
+/// fail on a 401.
 pub fn providers_with(lookup: impl Fn(&str) -> Option<String>) -> Vec<Provider> {
-    let nonblank = |k: &str| lookup(k).is_some_and(|v| !v.trim().is_empty());
     let base = crate::config::base_url_with(&lookup);
     let mut out = vec![Provider {
         name: name_for(&base),
@@ -90,13 +108,36 @@ pub fn providers_with(lookup: impl Fn(&str) -> Option<String>) -> Vec<Provider> 
         base_url: base.clone(),
         key_env: crate::config::API_KEY_ENV.to_string(),
     }];
-    for (url, key) in [(crate::provider::DEFAULT_BASE_URL, OPENROUTER_KEY_ENV), (OPENCODE_BASE_URL, OPENCODE_KEY_ENV)] {
-        if url != base && nonblank(key) {
+    for (url, _, _, key) in KNOWN {
+        if url != base {
             out.push(Provider { name: name_for(url), label: label_for(url), base_url: url.to_string(), key_env: key.to_string() });
         }
     }
     out
 }
+
+/// Whether a model's own id says it is free: Zen's `big-model-free`,
+/// OpenRouter's `vendor/model:free`.
+pub fn is_free_id(id: &str) -> bool {
+    id.ends_with("-free") || id.ends_with(":free")
+}
+
+/// Whether a turn to this model may go without a key of the person's own.
+///
+/// OpenCode Zen's free models: OpenCode itself sends them with the key
+/// `public` when no key is set (`provider.ts`, its `opencode` loader), and so
+/// does this. Only Zen, and only its `-free` models -- a paid model answers
+/// "Missing API key", and OpenRouter's `:free` models still want an
+/// OpenRouter key. Zen may still refuse a free model to anything that is not
+/// OpenCode ("OpenCode's free tier can only be used from within OpenCode"),
+/// which reaches the person as Zen said it: Syn does not pretend to be
+/// OpenCode to get past that.
+pub fn keyless(base_url: &str, model: &str) -> bool {
+    base_url.trim().trim_end_matches('/') == OPENCODE_BASE_URL && model.ends_with("-free")
+}
+
+/// The bearer to send when the person has no key for a keyless model.
+pub const PUBLIC_KEY: &str = "public";
 
 pub fn providers() -> Vec<Provider> {
     providers_with(|k| std::env::var(k).ok())
@@ -108,11 +149,10 @@ pub fn provider_named(name: &str) -> Option<Provider> {
 }
 
 fn name_for(base: &str) -> String {
-    if base == crate::provider::DEFAULT_BASE_URL {
-        return "openrouter".into();
-    }
-    if base == OPENCODE_BASE_URL {
-        return "opencode".into();
+    // Matched on the whole endpoint, not the host: Zen and Go share
+    // opencode.ai and differ only in the path.
+    if let Some((_, name, _, _)) = KNOWN.iter().find(|k| k.0 == base) {
+        return name.to_string();
     }
     // Any other host is named after itself, so two custom endpoints cannot
     // share a name. `http://127.0.0.1:11434/v1` -> `127.0.0.1:11434`.
@@ -121,11 +161,7 @@ fn name_for(base: &str) -> String {
 }
 
 fn label_for(base: &str) -> String {
-    match name_for(base).as_str() {
-        "openrouter" => "OpenRouter".into(),
-        "opencode" => "OpenCode Zen".into(),
-        other => other.to_string(),
-    }
+    KNOWN.iter().find(|k| k.0 == base).map(|k| k.2.to_string()).unwrap_or_else(|| name_for(base))
 }
 
 /// Read a `/models` reply. OpenRouter's rich shape and the bare OpenAI
@@ -178,6 +214,13 @@ pub fn parse(body: &str) -> Result<Vec<Entry>, String> {
             |k: &str| m.at(&["pricing", k]).and_then(num).filter(|p| *p >= 0.0).map(|p| (p * 1e10).round() / 1e4);
         e.price_in = per_million("prompt");
         e.price_out = per_million("completion");
+        // A bare list says no price, but a `-free` model says it in its
+        // name: OpenCode Zen's free tier is spelled that way. Only when the
+        // provider gave no price -- a price it did give always wins.
+        if e.price_in.is_none() && e.price_out.is_none() && is_free_id(id) {
+            e.price_in = Some(0.0);
+            e.price_out = Some(0.0);
+        }
         e.thinks = params.as_ref().map(|p| p.contains(&"reasoning") || p.contains(&"reasoning_effort"));
         e.vision = modes("input_modalities").map(|i| i.contains(&"image"));
         out.push(e);
@@ -300,6 +343,9 @@ pub fn to_json(snaps: &[Snapshot]) -> String {
                 // Whether a key is on hand, never the key: the picker says
                 // "add a key" rather than letting a turn fail on a 401.
                 ("ready", Value::Bool(crate::auth::resolve(&s.provider.base_url, &s.provider.key_env).is_some())),
+                // Whether its `-free` models go without a key (`keyless`), so
+                // the picker can say "these work now" rather than "add a key".
+                ("free_without_key", Value::Bool(keyless(&s.provider.base_url, "x-free"))),
                 ("fetched", Value::Num(s.fetched.to_string())),
                 ("error", s.error.as_deref().map(json::s).unwrap_or(Value::Null)),
                 (
@@ -349,6 +395,12 @@ pub fn from_json(text: &str, providers: &[Provider]) -> Vec<Snapshot> {
                 e.price_out = m.get("out").and_then(num);
                 e.thinks = m.get("thinks").and_then(bool_of);
                 e.vision = m.get("vision").and_then(bool_of);
+                // A cache written before the free-by-name rule reads back with
+                // it too, rather than waiting out the refresh window untagged.
+                if e.price_in.is_none() && e.price_out.is_none() && is_free_id(&e.id) {
+                    e.price_in = Some(0.0);
+                    e.price_out = Some(0.0);
+                }
                 Some(e)
             })
             .collect();
@@ -459,6 +511,32 @@ mod tests {
     }
 
     #[test]
+    fn a_free_model_in_a_bare_list_is_tagged_free_by_its_name() {
+        // Zen's list carries no prices, so its free tier showed no "free"
+        // tag and the Free filter never appeared on its tab.
+        let got = parse(r#"{"data":[{"id":"space-bunny-free"},{"id":"claude-haiku-4-5"},{"id":"big-pickle"}]}"#).unwrap();
+        assert_eq!((got[0].price_in, got[0].price_out), (Some(0.0), Some(0.0)));
+        assert_eq!(got[1].price_in, None, "no price said is not free");
+        assert_eq!(got[2].price_in, None, "free only when the name or the price says so");
+        // A price the provider did give always wins over the name.
+        let priced = parse(r#"{"data":[{"id":"odd-free","pricing":{"prompt":"0.000001","completion":"0.000002"}}]}"#).unwrap();
+        assert!(priced[0].price_in.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn only_zens_free_models_go_without_a_key() {
+        // OpenCode sends these as `public` when no key is set; so does Syn.
+        assert!(keyless("https://opencode.ai/zen/v1", "space-bunny-free"));
+        assert!(keyless("https://opencode.ai/zen/v1/", "space-bunny-free"));
+        // A paid Zen model answers "Missing API key".
+        assert!(!keyless(OPENCODE_BASE_URL, "claude-haiku-4-5"));
+        // Go is a subscription, and OpenRouter wants its own key even for
+        // a `:free` model.
+        assert!(!keyless(OPENCODE_GO_BASE_URL, "kimi-k3-free"));
+        assert!(!keyless(crate::provider::DEFAULT_BASE_URL, "vendor/model:free"));
+    }
+
+    #[test]
     fn a_reply_that_is_not_a_catalog_says_so() {
         assert!(parse("<html>").unwrap_err().contains("not JSON"));
         assert!(parse(r#"{"error":{"message":"no"}}"#).unwrap_err().contains("data"));
@@ -475,28 +553,46 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_is_the_provider_when_nothing_is_configured() {
+    fn every_known_catalog_is_listed_before_any_key_is() {
+        // Verbatim complaint: "i dont see any opencode models in the
+        // catalogs". Both keys were blank, and a provider was only listed
+        // once its key was set. The catalogs are public; the key is only
+        // needed to send a turn, and the picker says so beside the models.
         let got = providers_with(env(&[]));
-        assert_eq!(got.len(), 1);
-        assert_eq!((got[0].name.as_str(), got[0].key_env.as_str()), ("openrouter", "AGENT_API_KEY"));
+        let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["openrouter", "opencode", "opencode-go"]);
+        assert_eq!((got[0].key_env.as_str(), got[1].key_env.as_str()), ("AGENT_API_KEY", "AGENT_API_KEY_OPENCODE"));
+        assert_eq!((got[1].base_url.as_str(), got[1].label.as_str()), (OPENCODE_BASE_URL, "OpenCode Zen"));
+        // A key changes nothing about what is listed, only what is ready.
+        assert_eq!(providers_with(env(&[("AGENT_API_KEY_OPENCODE", "k")])), got);
     }
 
     #[test]
-    fn a_second_provider_appears_when_its_key_does() {
-        let got = providers_with(env(&[("AGENT_API_KEY_OPENCODE", "k")]));
+    fn opencode_go_is_a_provider_of_its_own_beside_zen() {
+        // Same host, different path, different key: a Zen key does not
+        // open Go, so neither may stand in for the other.
+        let got = providers_with(env(&[]));
+        assert_eq!(
+            (got[2].base_url.as_str(), got[2].label.as_str(), got[2].key_env.as_str()),
+            (OPENCODE_GO_BASE_URL, "OpenCode Go", "AGENT_API_KEY_OPENCODE_GO")
+        );
+        assert_ne!(got[1].key_env, got[2].key_env);
+    }
+
+    #[test]
+    fn opencode_go_as_the_base_url_is_not_mistaken_for_zen() {
+        let got = providers_with(env(&[("AGENT_BASE_URL", "https://opencode.ai/zen/go/v1/")]));
         let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["openrouter", "opencode"]);
-        assert_eq!(got[1].base_url, OPENCODE_BASE_URL);
-        assert_eq!(got[1].label, "OpenCode Zen");
-        // A blank line in .env is not a key.
-        assert_eq!(providers_with(env(&[("AGENT_API_KEY_OPENCODE", "  ")])).len(), 1);
+        assert_eq!(names, ["opencode-go", "openrouter", "opencode"], "first, and not listed twice");
+        assert_eq!((got[0].label.as_str(), got[0].key_env.as_str()), ("OpenCode Go", "AGENT_API_KEY"));
     }
 
     #[test]
     fn opencode_as_the_base_url_uses_the_main_key_and_is_not_listed_twice() {
-        let got = providers_with(env(&[("AGENT_BASE_URL", "https://opencode.ai/zen/v1/"), ("AGENT_API_KEY_OPENCODE", "k")]));
-        assert_eq!(got.len(), 1);
-        assert_eq!((got[0].name.as_str(), got[0].key_env.as_str()), ("opencode", "AGENT_API_KEY"));
+        let got = providers_with(env(&[("AGENT_BASE_URL", "https://opencode.ai/zen/v1/")]));
+        let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["opencode", "openrouter", "opencode-go"]);
+        assert_eq!(got[0].key_env, "AGENT_API_KEY");
     }
 
     #[test]
@@ -511,7 +607,7 @@ mod tests {
 
     #[test]
     fn a_fresh_list_is_not_asked_for_again() {
-        let p = providers_with(env(&[]));
+        let p = providers_with(env(&[]))[..1].to_vec();
         let old = vec![snap(&p[0], 1000, &["a"])];
         let got = refresh(&p, &old, 1000 + FRESH_SECS - 1, false, |_| panic!("fetched a fresh list"));
         assert_eq!(got, old);
@@ -519,7 +615,7 @@ mod tests {
 
     #[test]
     fn a_stale_or_forced_list_is_fetched() {
-        let p = providers_with(env(&[]));
+        let p = providers_with(env(&[]))[..1].to_vec();
         let old = vec![snap(&p[0], 1000, &["a"])];
         let fetch = |_: &Provider| Ok(vec![Entry::bare("b")]);
         assert_eq!(refresh(&p, &old, 1000 + FRESH_SECS, false, fetch)[0].entries[0].id, "b");
@@ -529,7 +625,7 @@ mod tests {
 
     #[test]
     fn an_offline_minute_keeps_the_last_list_and_says_why() {
-        let p = providers_with(env(&[]));
+        let p = providers_with(env(&[]))[..1].to_vec();
         let old = vec![snap(&p[0], 1000, &["a"])];
         let got = refresh(&p, &old, 99_999, false, |_| Err("no answer: could not resolve host".into()));
         assert_eq!(got[0].entries[0].id, "a");

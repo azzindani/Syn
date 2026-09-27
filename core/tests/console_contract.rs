@@ -85,6 +85,12 @@ const COMMAND_REPLIES: &[&str] = &[
     "waiting", "env", "mark", "session", "attached", "slots", "wiring", "registry", "events", "config", "task",
     "model", "think", "models",
     "shell", "do", "chat", "hands", "hand", "route", "live", "open", "allowlist", "deleted",
+    // The workspace picker: the folder a chat works in (also sent back by
+    // `chat open`, which restores it) and the folders to choose from.
+    "workspace", "dirs",
+    // Settings: where each provider's key comes from, and a key saved or
+    // forgotten. Never the key itself.
+    "keys", "key",
     // Acknowledgements of a control the human just pressed. The page
     // already knows it pressed it; redrawing on the echo would fight the
     // optimistic update.
@@ -92,6 +98,10 @@ const COMMAND_REPLIES: &[&str] = &[
     // Journal and replay: a developer path driven from the terminal, with
     // no console surface at all.
     "journal", "replay",
+    // The step budget: for the model, not the reader. Drawn as "37 steps
+    // left" beside the composer it read as a countdown on the person's own
+    // turn, and was taken out of the page on purpose.
+    "budget",
 ];
 
 #[test]

@@ -19,7 +19,12 @@ index is `docs/README.md`, and background notes are in `docs/design/`.
     allowlist, repeated-call gate, registry check, event feed. Never add a
     second path around it.
   - `tools.rs`: the tools a model can call, which are the six ops (`read`,
-    `write`, `format`, `struct`, `export`, `undo`) plus `shell`.
+    `write`, `format`, `struct`, `export`, `undo`) plus `shell`, and `open`
+    and `search`, which bring a document into reach. `open` goes through
+    `runner::Door` (fitted with `desk::Doors`, the code MCP's `open` runs);
+    `search` is `find.rs`, a bounded walk that looks at names only.
+    `workspace.rs` is the chat's folder: `Door::confine` keeps `open` and
+    `search` inside it, and the model is shown its documents by name.
     `looptools.rs` holds tools the loop answers itself (`manual`, `plan`),
     and `surface.rs` merges the two at the wire.
   - `hand.rs`: the `office-rpc/1` transport (JSON lines over a named pipe).
@@ -151,9 +156,12 @@ them all against real Office and is how a change is proved on Windows.
   Python appears only in `sidecar-lo` (LibreOffice, for testing off
   Windows) and the `relay/` prototype; never on the Windows control path,
   and never Python office-file libraries (openpyxl, python-docx, ...).
-- **The sidecar never closes or saves what it did not open.** Office COM
-  servers are single-instance per user, so quitting one can close the
-  user's own work. Read the lessons in `docs/troubleshooting.md` before
+- **The sidecar never quits an application, and never closes what it did
+  not open.** Office COM servers are single-instance per user, so quitting
+  one can close the user's own work. `struct` `close` closes only a
+  document this helper opened, and only once saved; `struct` `save` is a
+  plain Save to the document's own file, never SaveAs (which moves the
+  open document to the new path). Both are in `SaveClose.cs`. Read the lessons in `docs/troubleshooting.md` before
   editing the C#. A helper serves up to eight clients at once, but COM
   calls stay on office-host's one STA thread: listeners queue work to it
   and never call COM themselves. In particular, PowerPoint's `Visible`, `DisplayAlerts`,

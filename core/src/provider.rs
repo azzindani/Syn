@@ -378,7 +378,18 @@ pub fn explain_error(status: u16, body: &str) -> String {
     let note = note.trim();
     match status {
         429 => format!("rate limited (429): {note}"),
+        // Zen, asked for a free model it keeps to OpenCode's own app. Not a
+        // bad key, so "check your key" sent people to the wrong place.
+        403 if note.contains("free tier can only be used from within OpenCode") => format!(
+            "rejected ({status}): {note}. OpenCode keeps this free model to its own app: pick another model tagged free, or set AGENT_API_KEY_OPENCODE."
+        ),
         401 | 403 => format!("rejected ({status}): {note}. Check AGENT_API_KEY."),
+        // OpenCode serves some models only on another wire format (its
+        // /messages or /responses), and says so this way when asked for one
+        // over /chat/completions, the one format Syn speaks.
+        400 if note.contains("does not support this protocol") => format!(
+            "this model is not served over an API Syn speaks, chat or responses ({note}). Pick another model"
+        ),
         _ => format!("provider error ({status}): {note}"),
     }
 }
@@ -565,22 +576,156 @@ fn digits_after(json: &str, key: &str) -> Option<String> {
     (!n.is_empty()).then_some(n)
 }
 
-/// Returns (http_status, response_body).
+/// The conversation the next request belongs to, for providers that route
+/// by it. Set by the CLI at the start of each turn; one process runs one
+/// conversation at a time.
+static SESSION: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+pub fn set_session(id: &str) {
+    if let Ok(mut s) = SESSION.lock() {
+        s.clear();
+        s.push_str(id);
+    }
+}
+
+/// What Syn says about itself on every request.
+///
+/// OpenCode Go refused every request that did not, with "Request is missing
+/// x-opencode-session and cannot be routed efficiently". Its docs ("Where
+/// can I use it?") open it to other coding agents that name themselves with
+/// their own user agent -- not a generic HTTP library's, which `curl/8.x`
+/// is -- and send a stable session ID per conversation. The user agent goes
+/// to every provider; the session only to OpenCode's own endpoints, and it
+/// is the chat's id, which says nothing about what is in it.
+fn identity_headers(base_url: &str) -> Vec<String> {
+    let mut h = vec![format!("User-Agent: syn/{}", env!("CARGO_PKG_VERSION"))];
+    if base_url.starts_with("https://opencode.ai/")
+        && let Ok(s) = SESSION.lock()
+        && !s.is_empty()
+    {
+        h.push(format!("x-opencode-session: {s}"));
+    }
+    h
+}
+
+/// The body as this provider spells it.
+///
+/// `chat_body` writes OpenRouter's `"reasoning":{"effort":"high"}`. Other
+/// OpenAI-compatible hosts spell the same setting `"reasoning_effort":"high"`,
+/// and a strict one refuses the object outright: GLM behind OpenCode Go
+/// answered "Extra inputs are not permitted, field: 'reasoning'". Only the
+/// field this crate wrote is touched -- text inside a message has its quotes
+/// escaped, so the unescaped key cannot come from there.
+fn for_provider(base_url: &str, body: &str) -> String {
+    const KEY: &str = r#""reasoning":{"effort":""#;
+    if base_url.contains("openrouter.ai") {
+        return body.to_string();
+    }
+    let Some(at) = body.find(KEY) else { return body.to_string() };
+    let rest = &body[at + KEY.len()..];
+    let Some(end) = rest.find('"') else { return body.to_string() };
+    if !rest[end..].starts_with("\"}") {
+        return body.to_string();
+    }
+    format!(r#"{}"reasoning_effort":"{}"{}"#, &body[..at], &rest[..end], &rest[end + 2..])
+}
+
+/// Models a provider serves only on the Responses API, as `base|model`.
+/// Learned from the provider's own refusal rather than listed: no catalog
+/// says which wire a model speaks, and a list would be wrong by next week.
+static RESPONSES_ONLY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn model_of(body: &str) -> String {
+    crate::json::parse(body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(crate::json::Value::as_str).map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn uses_responses(base_url: &str, model: &str) -> bool {
+    RESPONSES_ONLY.lock().map(|l| l.iter().any(|k| *k == format!("{base_url}|{model}"))).unwrap_or(false)
+}
+
+/// "Model does not support this protocol": OpenCode, for a model it serves
+/// on `/responses` only (Muse Spark on Go).
+fn wrong_wire(code: u16, body: &str) -> bool {
+    code == 400 && body.contains("does not support this protocol")
+}
+
+/// Remember that this model speaks Responses, and say whether it was news.
+fn learn_responses(base_url: &str, model: &str) -> bool {
+    let key = format!("{base_url}|{model}");
+    match RESPONSES_ONLY.lock() {
+        Ok(mut l) if !l.contains(&key) => {
+            l.push(key);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Send a chat request and return (http_status, body in the chat shape),
+/// on whichever wire this model is served: the chat API first, and the
+/// Responses API once the provider has said the model is only there.
 pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u16, String), String> {
+    let model = model_of(body);
+    let r = post_once(base_url, api_key_env, body, uses_responses(base_url, &model))?;
+    if wrong_wire(r.0, &r.1) && learn_responses(base_url, &model) {
+        return post_once(base_url, api_key_env, body, true);
+    }
+    Ok(r)
+}
+
+/// As [`send_via_curl`], streamed.
+pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dyn FnMut(crate::sse::Kind, &str)) -> Result<(u16, String), String> {
+    let model = model_of(body);
+    let r = stream_once(base_url, api_key_env, body, on, uses_responses(base_url, &model))?;
+    if wrong_wire(r.0, &r.1) && learn_responses(base_url, &model) {
+        return stream_once(base_url, api_key_env, body, on, true);
+    }
+    Ok(r)
+}
+
+/// The bearer a request goes out with: the stored or configured key first,
+/// and failing that `public` for a model that needs none (a free model on
+/// OpenCode Zen, `catalog::keyless`). The model is read from the body this
+/// crate built, so no caller has to thread it through.
+fn bearer(base_url: &str, api_key_env: &str, body: &str) -> Result<String, String> {
+    if let Some(k) = crate::auth::resolve(base_url, api_key_env) {
+        return Ok(k);
+    }
+    let model = model_of(body);
+    if crate::catalog::keyless(base_url, &model) {
+        return Ok(crate::catalog::PUBLIC_KEY.to_string());
+    }
+    Err(format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))
+}
+
+/// Returns (http_status, response_body).
+fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> Result<(u16, String), String> {
+    let wired = for_provider(base_url, body);
+    let body = wired.as_str();
     // The stored credential for this endpoint first, then the env var.
     // `auth.json` is keyed by provider, so adding a second provider is a
     // row in a file rather than a new env var invented for it -- and an
     // OAuth token that has expired is skipped rather than sent, because a
     // stale token answers 401 and reads exactly like a bad key.
-    let key = crate::auth::resolve(base_url, api_key_env)
-        .ok_or_else(|| format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))?;
-    let url = format!("{base_url}/chat/completions");
+    let key = bearer(base_url, api_key_env, body)?;
+    let converted;
+    let body = if responses {
+        converted = crate::responses::to_request(body)?;
+        converted.as_str()
+    } else {
+        body
+    };
+    let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
     let out = std::process::Command::new("curl")
         // Five minutes: a reply that is not streamed arrives all at once, and a
         // model that thinks first used to be cut off at sixty seconds and
         // reported as "no HTTP response".
         .args(["-sS", "-m", "300", "-X", "POST", &url])
         .args(["-H", "Content-Type: application/json"])
+        .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
         .args(["-H", &format!("Authorization: Bearer {key}")])
         .args(["--data-binary", "@-"])
         .arg("-w")
@@ -622,7 +767,7 @@ pub fn send_via_curl(base_url: &str, api_key_env: &str, body: &str) -> Result<(u
             format!("curl transport failed: {stderr}")
         });
     }
-    Ok((code, payload.to_string()))
+    Ok((code, if responses && code == 200 { crate::responses::to_chat_reply(payload) } else { payload.to_string() }))
 }
 
 /// How long a streamed reply may go quiet before it is given up on.
@@ -648,12 +793,20 @@ const MAX_REPLY: usize = 32 << 20;
 /// result is folded back into the shape a non-streamed reply has, so every
 /// check downstream reads it unchanged. The only time limit is on silence
 /// ([`stream_idle_secs`]) plus a generous ceiling for the whole reply.
-pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dyn FnMut(crate::sse::Kind, &str)) -> Result<(u16, String), String> {
+fn stream_once(
+    base_url: &str,
+    api_key_env: &str,
+    body: &str,
+    on: &mut dyn FnMut(crate::sse::Kind, &str),
+    responses: bool,
+) -> Result<(u16, String), String> {
+    let wired = for_provider(base_url, body);
+    let body = wired.as_str();
     use std::io::{BufRead, Write};
-    let key = crate::auth::resolve(base_url, api_key_env)
-        .ok_or_else(|| format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))?;
-    let url = format!("{base_url}/chat/completions");
+    let key = bearer(base_url, api_key_env, body)?;
+    let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
     let body = crate::sse::with_stream_flag(body);
+    let body = if responses { crate::responses::to_request(&body)? } else { body };
     let idle = stream_idle_secs().to_string();
     let mut child = std::process::Command::new("curl")
         // -N: hand each chunk over as it arrives instead of filling a buffer
@@ -661,6 +814,7 @@ pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dy
         // `idle` seconds is a dead connection.
         .args(["-sS", "-N", "--max-time", "1800", "--speed-limit", "1", "--speed-time", &idle, "-X", "POST", &url])
         .args(["-H", "Content-Type: application/json"])
+        .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
         .args(["-H", "Accept: text/event-stream"])
         .args(["-H", &format!("Authorization: Bearer {key}")])
         .args(["--data-binary", "@-"])
@@ -683,10 +837,32 @@ pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dy
         return Err(format!("stdin: {e}"));
     }
     let mut fold = crate::sse::Fold::new();
+    let mut rfold = crate::responses::StreamFold::default();
     let mut code = String::new();
     let mut total = 0usize;
     let mut oversized = false;
-    if let Some(out) = child.stdout.take() {
+    let out = child.stdout.take();
+    // A stop pressed while the model is still writing: the read below is
+    // blocked on curl and cannot look for it, so a watcher ends curl, the
+    // read returns, and the turn stops where it is. Shared rather than moved
+    // so the reply's status can still be collected after.
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (child, done) = (std::sync::Arc::clone(&child), std::sync::Arc::clone(&done));
+        std::thread::spawn(move || {
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                if crate::stop::requested() {
+                    if let Ok(mut c) = child.lock() {
+                        let _ = c.kill();
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        })
+    };
+    if let Some(out) = out {
         let mut out = std::io::BufReader::new(out);
         let mut th = crate::sse::Throttle::new(on);
         let mut buf = Vec::new();
@@ -698,7 +874,9 @@ pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dy
             }
             if total > MAX_REPLY {
                 oversized = true;
-                let _ = child.kill();
+                if let Ok(mut c) = child.lock() {
+                    let _ = c.kill();
+                }
                 break;
             }
             // `-w` puts the status after a newline and ends without one,
@@ -707,12 +885,26 @@ pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dy
                 code = String::from_utf8_lossy(&buf).into_owned();
                 break;
             }
-            fold.line(&String::from_utf8_lossy(&buf), &mut |k, t| th.push(k, t));
+            let line = String::from_utf8_lossy(&buf);
+            if responses {
+                rfold.line(&line, &mut |k, t| th.push(k, t));
+            } else {
+                fold.line(&line, &mut |k, t| th.push(k, t));
+            }
             th.tick();
         }
         th.flush();
     }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = watcher.join();
+    let child = std::sync::Arc::try_unwrap(child)
+        .map_err(|_| "curl: the stop watcher still holds the process".to_string())?
+        .into_inner()
+        .map_err(|_| "curl: the process lock was poisoned".to_string())?;
     let res = child.wait_with_output().map_err(|e| format!("curl wait: {e}"))?;
+    if crate::stop::requested() {
+        return Err(crate::stop::STOPPED.into());
+    }
     if oversized {
         return Err(format!("the reply passed {} MB and was refused", MAX_REPLY >> 20));
     }
@@ -730,7 +922,7 @@ pub fn send_streaming(base_url: &str, api_key_env: &str, body: &str, on: &mut dy
             format!("curl transport failed: {stderr}")
         });
     }
-    Ok((code, fold.finish()))
+    Ok((code, if responses { rfold.finish() } else { fold.finish() }))
 }
 
 #[cfg(test)]
@@ -826,6 +1018,49 @@ mod tests {
         let m = explain_error(401, r#"{"error":{"message":"No auth credentials found"}}"#);
         assert!(m.contains("No auth credentials found"), "{m}");
         assert!(m.contains("AGENT_API_KEY"), "{m}");
+    }
+
+    #[test]
+    fn a_model_on_another_wire_format_says_so_instead_of_error_400() {
+        // Verbatim from OpenCode Go, for muse-spark-1.3-contributor.
+        let m = explain_error(400, r#"{"type":"error","error":{"type":"error","message":"Model does not support this protocol."}}"#);
+        assert!(m.contains("not served over an API Syn speaks") && m.contains("Pick another model"), "{m}");
+    }
+
+    #[test]
+    fn the_thinking_level_is_spelled_the_way_each_provider_reads_it() {
+        let body = chat_body("glm-5.3", route(TaskKind::Routine), &[Msg::User("say \"reasoning\":{\"effort\":\"x\"}".into())], None);
+        // OpenRouter keeps its own object.
+        assert_eq!(for_provider(DEFAULT_BASE_URL, &body), body);
+        // Everyone else gets the flat OpenAI field, and only the field:
+        // the same words inside a message stay as they were written.
+        let go = for_provider("https://opencode.ai/zen/go/v1", &body);
+        assert!(go.contains(r#""reasoning_effort":""#) && !go.contains(r#""reasoning":{"effort""#), "{go}");
+        assert!(go.contains(r#"say \"reasoning\":{\"effort\":\"x\"}"#), "{go}");
+        assert!(crate::json::parse(&go).is_ok(), "still JSON: {go}");
+    }
+
+    #[test]
+    fn syn_names_itself_everywhere_and_sends_its_session_only_to_opencode() {
+        // Verbatim from OpenCode Go, with a valid key: "Request is missing
+        // x-opencode-session and cannot be routed efficiently".
+        set_session("c1790473865-7aa0");
+        let go = identity_headers("https://opencode.ai/zen/go/v1");
+        assert!(go.iter().any(|h| h.starts_with("User-Agent: syn/")), "{go:?}");
+        assert!(go.contains(&"x-opencode-session: c1790473865-7aa0".to_string()), "{go:?}");
+        let or = identity_headers(DEFAULT_BASE_URL);
+        assert_eq!(or.len(), 1, "the conversation id goes to OpenCode alone: {or:?}");
+        assert!(or[0].starts_with("User-Agent: syn/"));
+    }
+
+    #[test]
+    fn a_free_model_opencode_keeps_to_itself_is_not_blamed_on_the_key() {
+        // Verbatim from Zen, for mimo-v2.5-free sent with the public key.
+        let body = r#"{"type":"error","error":{"type":"ForbiddenError","message":"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"}}"#;
+        let m = explain_error(403, body);
+        assert!(m.contains("can only be used from within OpenCode"), "{m}");
+        assert!(m.contains("pick another model tagged free"), "{m}");
+        assert!(!m.contains("Check AGENT_API_KEY."), "{m}");
     }
 
     #[test]

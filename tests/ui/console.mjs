@@ -7,8 +7,14 @@ export const repo = path.resolve(here, "..", "..");
 export const urlFile = path.join(here, ".console-url.txt");
 export const stateFile = path.join(here, ".console.json");
 
-/** The console binary. `ui.exe` on Windows, plain `ui` everywhere else. */
-export const uiBin = path.join(repo, "core", "target", "debug", process.platform === "win32" ? "ui.exe" : "ui");
+/**
+ * The console binary. `ui.exe` on Windows, plain `ui` everywhere else.
+ * `SYN_UI_BIN` points at another build: a console left running from
+ * target/debug locks it on Windows, and a build elsewhere
+ * (CARGO_TARGET_DIR) can be tested without stopping that console.
+ */
+export const uiBin =
+  process.env.SYN_UI_BIN || path.join(repo, "core", "target", "debug", process.platform === "win32" ? "ui.exe" : "ui");
 
 export function readState() {
   return JSON.parse(fs.readFileSync(stateFile, "utf8"));

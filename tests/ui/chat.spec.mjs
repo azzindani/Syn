@@ -22,10 +22,9 @@ test("a typed prompt reaches the model and the reply lands in the thread", async
   const box = page.locator("#box");
   await box.fill(prompt);
 
-  // The spinner shares its line with the keyboard legend, so it is also the
-  // check that hiding the legend did not hide the only sign of a running
-  // turn. Start watching before the keystroke, or a fast model wins the race.
-  const working = expect(page.locator("#hint .spin")).toBeVisible({ timeout: 20_000 });
+  // A running turn turns the send button into Stop. Start watching before
+  // the keystroke, or a fast model wins the race.
+  const working = expect(page.locator("#send.stop")).toBeVisible({ timeout: 20_000 });
   await box.press("Enter");
   await working;
 
@@ -72,8 +71,28 @@ test("the machinery sits behind the status control, not in the sidebar", async (
   await page.locator("#hands").click();
   await expect(pop).toBeVisible();
   await expect(pop.locator("#killbtn")).toBeVisible();
-  await expect(pop.locator("#wire button").first()).toBeVisible();
 
   await page.keyboard.press("Escape");
   await expect(pop).toBeHidden();
+});
+
+test("nothing asks to be connected: apps join by themselves, and a live session breathes", async ({ page }) => {
+  // There was a "connect" button per app, and nothing worked until the
+  // right one was pressed. Now there are none to press.
+  await page.locator("#hands").click();
+  const pop = page.locator("#pop");
+  await expect(pop.locator("#wire")).toHaveCount(0);
+  await expect(pop.locator("#appshint")).toContainText("Nothing to connect");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#hands .lbl")).not.toHaveText("No apps connected");
+
+  // Three breathing dots in the status pill while a run is going, and none
+  // when it is not.
+  const dots = page.locator("#hands .dots");
+  await expect(dots).toBeHidden();
+  await page.evaluate(() => document.body.classList.add("busy"));
+  await expect(dots).toBeVisible();
+  await expect(dots.locator("i")).toHaveCount(3);
+  await page.evaluate(() => document.body.classList.remove("busy"));
+  await expect(dots).toBeHidden();
 });

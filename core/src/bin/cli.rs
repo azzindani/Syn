@@ -47,7 +47,9 @@ use std::io::BufRead;
 /// Print, and mirror to this run's live log so a console in another
 /// process can show the run happening. Every line the CLI emits goes
 /// through here: a progress view that shows some of the output is worse
-/// than one that shows none, because it looks complete.
+/// than one that shows none, because it looks complete. The one exception
+/// is the replies to `keys` and `key`, which belong to Settings and not
+/// to any run.
 macro_rules! pr {
     () => {{ println!(); core::live::append(""); }};
     ($($arg:tt)*) => {{
@@ -147,7 +149,7 @@ fn choose(task: TaskKind, pick: &Option<(core::catalog::Provider, String)>, thin
 ///
 /// A chat that is only written on a clean exit loses the run that crashed,
 /// which is the one the human most wants to look at afterwards.
-fn save_chat(id: &str, a: &Agent) {
+fn save_chat(id: &str, a: &Agent, workspace: &Option<std::path::PathBuf>) {
     let msgs = a.transcript().to_vec();
     let chat = chats::Chat {
         meta: chats::ChatMeta {
@@ -155,6 +157,7 @@ fn save_chat(id: &str, a: &Agent) {
             title: chats::title_from(&msgs),
             updated: chats::now(),
             turns: 0,
+            workspace: workspace.as_deref().map(core::workspace::shown).unwrap_or_default(),
         },
         msgs,
     };
@@ -186,7 +189,14 @@ fn drive(
     sp: &ShellPolicy,
 ) -> Option<String> {
     loop {
-        let outcome = a.step(brain, relay, runner, sp);
+        // Between steps is where a stop is honoured cleanly: nothing is
+        // half done, and the transcript says where the run was left.
+        let outcome = if core::stop::requested() {
+            core::stop::clear();
+            Step::Stopped(core::stop::STOPPED.into())
+        } else {
+            a.step(brain, relay, runner, sp)
+        };
         // What the model is being told about its own budget, told to the
         // human too. The console shows it as a meter beside the composer,
         // and it says what will happen at the end rather than only where
@@ -304,7 +314,8 @@ fn wait_and_retry(
             .unwrap_or(0);
         let ms = provider::retry_delay_ms(attempt, pct);
         pr!("RECEIPT waiting {ms}ms (attempt {attempt}/{}) then asking {model} again", provider::RETRY_MAX_RETRIES);
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+        // A stop wakes the wait; `drive` then sees it and ends the turn.
+        core::stop::sleep(std::time::Duration::from_millis(ms));
         stopped = drive(a, brain, relay, runner, sp);
     }
     stopped
@@ -314,6 +325,21 @@ fn wait_and_retry(
 /// a bare `.` means body text. Keeps the prose last on the line.
 fn word_style(tok: &str) -> String {
     if tok == "." { String::new() } else { tok.replace('_', " ") }
+}
+
+/// Give the runner the desk's door, so a model's `open` and `find` work
+/// and every wired helper is reached without a "connect" button.
+///
+/// Helpers are started on demand, the way MCP starts them: a person who
+/// asks for a workbook to be opened should not first have to start the
+/// program that opens it. The executables come from `.env` or this
+/// repository's build output, never from anything a model says, and a
+/// helper started here is stopped when the console stops; the application
+/// it drove, and every document in it, stays open.
+fn fit_door(runner: &mut Runner) {
+    let launch = std::env::var("AGENT_LAUNCH").map(|v| v.trim() != "0").unwrap_or(true);
+    let doors = core::desk::Doors::new(Box::new(core::desk::EnvConnector::new(launch)));
+    runner.set_door(Box::new(doors));
 }
 
 fn main() {
@@ -326,6 +352,7 @@ fn main() {
     let mut relay = Relay::new();
     let mut session = "cli".to_string();
     let mut runner = Runner::new(&session);
+    fit_door(&mut runner);
     relay.handshake(&session, "cli");
 
     let stdin = std::io::stdin();
@@ -346,6 +373,9 @@ fn main() {
     // has chosen them. None means the slot decides.
     let mut pick: Option<(core::catalog::Provider, String)> = None;
     let mut think: Option<core::router::Effort> = None;
+    // The folder this chat works in, picked above the message box. None is
+    // everywhere, as before there were workspaces.
+    let mut workspace: Option<std::path::PathBuf> = None;
     // Where the current run is being sent, so an approval resumes it on
     // the same endpoint: after a fallback, or on a picked provider, the
     // slot's own endpoint is somewhere else.
@@ -368,7 +398,11 @@ fn main() {
             },
         };
         // Journal live input only: a `replay <path>` line re-expands on recovery.
-        if live {
+        // A line carrying an API key is never written anywhere: not to the
+        // history a journal backfills from, not to the journal itself. The
+        // key goes to the keys file and nowhere else.
+        let secret = line.starts_with("key ");
+        if live && !secret {
             use std::io::Write;
             if !line.starts_with("replay ") {
                 history.push(line.clone());
@@ -395,6 +429,8 @@ fn main() {
                 session = rest.to_string();
                 relay.handshake(&session, "cli");
                 runner = Runner::new(&session);
+                fit_door(&mut runner);
+                runner.confine(workspace.iter().cloned().collect());
                 pr!("RECEIPT session={session}");
             }
             "attach" => {
@@ -875,14 +911,17 @@ fn main() {
                     continue;
                 }
                 let c = choose(task, &pick, think);
-                if core::auth::resolve(&c.base_url, &c.key_env).is_none() {
-                    pr!("ERROR do: no key for {}: set {} (see .env.example)", c.base_url, c.key_env);
+                if core::auth::resolve(&c.base_url, &c.key_env).is_none() && !core::catalog::keyless(&c.base_url, &c.model) {
+                    pr!("ERROR do: no API key for {}: add one in Settings, or set {} in .env", c.base_url, c.key_env);
                     continue;
                 }
                 let (r, model) = (c.route, c.model);
                 // A new goal is the human's go-ahead after a repeated call
                 // or a dead pipe froze the last run.
                 runner.thaw(&mut relay);
+                core::stop::clear();
+                provider::set_session(&chat_id);
+                runner.connect_running(&mut relay);
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
@@ -890,6 +929,7 @@ fn main() {
                 let mut brain = watched(&on);
                 let mut a = Agent::new(&session, rest.trim(), &model, r);
                 a.fit_context(core::catalog::context_of(&model));
+                a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
                 drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 agent = Some(a);
@@ -904,8 +944,8 @@ fn main() {
                     continue;
                 }
                 let c = choose(task, &pick, think);
-                if core::auth::resolve(&c.base_url, &c.key_env).is_none() {
-                    pr!("ERROR say: no key for {}: set {} (see .env.example)", c.base_url, c.key_env);
+                if core::auth::resolve(&c.base_url, &c.key_env).is_none() && !core::catalog::keyless(&c.base_url, &c.model) {
+                    pr!("ERROR say: no API key for {}: add one in Settings, or set {} in .env", c.base_url, c.key_env);
                     continue;
                 }
                 let (r, model) = (c.route, c.model);
@@ -915,6 +955,10 @@ fn main() {
                 // died on its first call with "queue is not running", with
                 // nothing in the console able to resume it.
                 runner.thaw(&mut relay);
+                // A stop pressed after the last turn finished is not for this one.
+                core::stop::clear();
+                // The conversation is the session OpenCode routes and caches by.
+                provider::set_session(&chat_id);
                 match agent.as_mut() {
                     Some(a) => {
                         if let Err(e) = a.follow_up(text) {
@@ -934,6 +978,9 @@ fn main() {
                 // Before every turn, not once at construction: a hand
                 // attached mid-conversation has to be visible to the next
                 // message, or the model keeps saying it cannot reach anything.
+                // And any helper running now is attached now, unasked: the
+                // person should never have to say which apps to connect.
+                runner.connect_running(&mut relay);
                 let open: Vec<(String, bool)> = relay
                     .registry(&session)
                     .unwrap_or_default()
@@ -944,12 +991,20 @@ fn main() {
                     })
                     .collect();
                 a.show_registry(&open);
-                pr!("RECEIPT say model={model} open={}", open.len());
+                // Listed again every turn: a file saved into the folder since
+                // the last message is one the model should know about.
+                a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
+                // The chat is named so a console can light the right thread in its
+                // sidebar, whichever process the run is in.
+                pr!("RECEIPT say model={model} open={} chat={chat_id}", open.len());
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
                 on = (c.base_url, c.key_env);
                 let mut brain = watched(&on);
+                // Saved before the turn runs, so the message survives a turn
+                // that has to be cut off (Stop, when the CLI is restarted).
+                save_chat(&chat_id, a, &workspace);
                 let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
 
                 // Wait and ask the SAME model again before giving up on
@@ -966,7 +1021,20 @@ fn main() {
                 // about the next. Walk the rest rather than handing the
                 // human a provider's JSON and asking them to know which
                 // slot to pick.
-                for (m, id) in fallbacks(&model) {
+                // A model the person picked is the one they meant. Walking the
+                // .env slots behind it sent "muse-spark" turns to a rate-
+                // limited qwen, and the notice named a model they never
+                // chose. Automatic is what may walk; a pick stops and says so.
+                if let (Some((p, id)), Some(why)) = (&pick, stopped.as_deref())
+                    && provider::worth_another_model(why)
+                {
+                    pr!(
+                        "STOPPED the model you picked ({id} on {}) is not answering right now: {why}. Pick another model, or Automatic to let Syn choose",
+                        p.label
+                    );
+                }
+                let walk = if pick.is_some() { Vec::new() } else { fallbacks(&model) };
+                for (m, id) in walk {
                     let Some(why) = stopped.as_deref() else { break };
                     if !provider::worth_another_model(why) {
                         break;
@@ -989,7 +1057,8 @@ fn main() {
                     // The new slot gets the same patience as the first.
                     stopped = wait_and_retry(&id, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
-                if let Some(why) = &stopped
+                if pick.is_none()
+                    && let Some(why) = &stopped
                     && provider::worth_another_model(why)
                 {
                     pr!("STOPPED every model slot is rate limited right now: wait a moment and send again");
@@ -999,8 +1068,98 @@ fn main() {
                 if let Some(why) = &stopped {
                     a.note_stop(why);
                 }
-                save_chat(&chat_id, a);
+                save_chat(&chat_id, a, &workspace);
             }
+            // API keys, for Settings: where each provider's key comes from,
+            // and its last four characters. Never the key. Both commands
+            // answer with println! and not pr!: the reply is for the Settings
+            // dialog alone, and mirrored into the live log a refused paste
+            // was drawn a second time, as a failure in the chat behind it.
+            "keys" => {
+                for p in core::catalog::providers() {
+                    let (src, tail) = core::auth::source(&p.base_url, &p.key_env);
+                    let (source, env) = match src {
+                        core::auth::Source::Saved => ("saved", String::new()),
+                        core::auth::Source::Env(v) => ("env", v),
+                        core::auth::Source::Missing => ("none", String::new()),
+                    };
+                    println!(
+                        "KEY {{\"provider\":{:?},\"label\":{:?},\"env\":{:?},\"source\":{:?},\"from\":{:?},\"tail\":{:?}}}",
+                        p.name, p.label, p.key_env, source, env, tail
+                    );
+                }
+                println!(
+                    "RECEIPT keys {{\"file\":{:?},\"sealed\":{}}}",
+                    core::auth::auth_path().display().to_string(),
+                    cfg!(windows)
+                );
+            }
+            // `key <provider> <value>` saves, `key <provider> off` forgets.
+            // Nothing here repeats the value, and the line itself is kept out
+            // of the journal above.
+            "key" => {
+                let mut a = rest.splitn(2, ' ');
+                let name = a.next().unwrap_or("").trim();
+                let value = a.next().unwrap_or("").trim();
+                let Some(p) = core::catalog::provider_named(name) else {
+                    let names: Vec<String> = core::catalog::providers().into_iter().map(|p| p.name).collect();
+                    println!("ERROR key: no provider {name:?}; the providers are {}", names.join(", "));
+                    continue;
+                };
+                let done = if value.eq_ignore_ascii_case("off") {
+                    core::auth::forget_key(&p.base_url).map(|_| ())
+                } else {
+                    core::auth::save_key(&p.base_url, value)
+                };
+                match done {
+                    Ok(()) => {
+                        let (src, tail) = core::auth::source(&p.base_url, &p.key_env);
+                        let source = match src {
+                            core::auth::Source::Saved => "saved",
+                            core::auth::Source::Env(_) => "env",
+                            core::auth::Source::Missing => "none",
+                        };
+                        println!("RECEIPT key {{\"provider\":{:?},\"source\":{source:?},\"tail\":{tail:?}}}", p.name);
+                    }
+                    Err(e) => println!("ERROR key: {e}"),
+                }
+            }
+            // The folder this chat works in. `workspace` alone says which;
+            // `workspace off` goes back to everywhere.
+            "workspace" => {
+                let arg = rest.trim();
+                if !arg.is_empty() {
+                    let next = if arg.eq_ignore_ascii_case("off") {
+                        None
+                    } else {
+                        match core::workspace::resolve(arg) {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                pr!("ERROR {e}");
+                                continue;
+                            }
+                        }
+                    };
+                    workspace = next;
+                    runner.confine(workspace.iter().cloned().collect());
+                    if let Some(a) = agent.as_mut() {
+                        a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
+                        save_chat(&chat_id, a, &workspace);
+                    }
+                }
+                pr!("RECEIPT workspace {{\"path\":{:?}}}", workspace.as_deref().map(core::workspace::shown).unwrap_or_default());
+            }
+            // Folders to choose a workspace from: a browser will not give a
+            // page the real path of a folder, so the picker asks here.
+            "dirs" => match core::workspace::dirs(Some(rest.trim())) {
+                Ok(list) => {
+                    for d in list {
+                        pr!("DIR {{\"name\":{:?},\"path\":{:?}}}", d.name, d.path);
+                    }
+                    pr!("RECEIPT dirs {{\"path\":{:?}}}", rest.trim());
+                }
+                Err(e) => pr!("ERROR {e}"),
+            },
             "chat" => {
                 let mut a = rest.split_whitespace();
                 match a.next().unwrap_or("msgs") {
@@ -1026,6 +1185,21 @@ fn main() {
                                 agent = Some(Agent::resume(&session, c.msgs, &config::model_id(r.model), r));
                                 chat_id = c.meta.id;
                                 pr!("RECEIPT chat={chat_id} title={:?}", c.meta.title);
+                                // Each chat has its own workspace. One whose
+                                // folder has gone (moved, a drive unplugged)
+                                // falls back to everywhere, and says so.
+                                workspace = match c.meta.workspace.as_str() {
+                                    "" => None,
+                                    w => match core::workspace::resolve(w) {
+                                        Ok(p) => Some(p),
+                                        Err(e) => {
+                                            pr!("NOTE {e}; this chat now works everywhere");
+                                            None
+                                        }
+                                    },
+                                };
+                                runner.confine(workspace.iter().cloned().collect());
+                                pr!("RECEIPT workspace {{\"path\":{:?}}}", workspace.as_deref().map(core::workspace::shown).unwrap_or_default());
                             }
                             Err(e) => pr!("ERROR chat open {e}"),
                         }
@@ -1103,7 +1277,7 @@ fn main() {
                     let mut brain = watched(&on);
                     let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
-                save_chat(&chat_id, a);
+                save_chat(&chat_id, a, &workspace);
             }
             "open" => {
                 // `open <app> <path>`: the harness setting up its own
@@ -1116,8 +1290,12 @@ fn main() {
                     pr!("ERROR usage: open <app> <path>");
                     continue;
                 };
-                match runner.open_file(app.trim(), path.trim()) {
-                    Ok(detail) => pr!("RECEIPT open {app} {detail}"),
+                // Through the door: connected, opened, registered and bound
+                // live in one go, as the model's `open` and MCP's are. It
+                // used to stop at "opened", and the model was then told
+                // nothing was open.
+                match runner.open_doc(&mut relay, app.trim(), path.trim()) {
+                    Ok(doc) => pr!("RECEIPT open {} {}", doc.handle, doc.summary.replace('\n', " ")),
                     Err(e) => pr!("ERROR open {e}"),
                 }
             }
@@ -1199,6 +1377,10 @@ fn main() {
                 pr!("RECEIPT attached={h}");
             }
             "hands" => {
+                // What the console's status shows, so it attaches first:
+                // an app whose helper is running reads as connected without
+                // anyone pressing anything.
+                runner.connect_running(&mut relay);
                 if !runner.has_hand() {
                     pr!("RECEIPT hands none");
                 }

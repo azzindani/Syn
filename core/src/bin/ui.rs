@@ -28,7 +28,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -220,7 +220,10 @@ fn main() {
     let live = Arc::new(Live::default());
     // The log this console's own child writes, which the view follows
     // while a turn the person started here is running.
-    let own_log = cli.lock().ok().map(|c| core::live::log_of(c.child.id()));
+    let own_log_cell = Arc::new(Mutex::new(cli.lock().ok().map(|c| core::live::log_of(c.child.id()))));
+    // The child's pid outside its lock, so `/stop` can reach a turn that
+    // holds the lock for as long as it runs.
+    let child_pid = Arc::new(AtomicU32::new(cli.lock().map(|c| c.child.id()).unwrap_or(0)));
     // A run in another process writes its own log; `--tail` pins the
     // console to one file rather than following whichever is newest.
     let pinned: Option<std::path::PathBuf> = args
@@ -264,7 +267,10 @@ fn main() {
         let live = Arc::clone(&live);
         let catalog = Arc::clone(&catalog);
         let pinned = pinned.clone();
-        let own_log = own_log.clone();
+        let own_log_cell = Arc::clone(&own_log_cell);
+        let own_log: Option<std::path::PathBuf> = own_log_cell.lock().ok().and_then(|g| g.clone());
+        let child_pid = Arc::clone(&child_pid);
+        let exe = exe.clone();
         let allowed_origins = allowed_origins.clone();
         std::thread::spawn(move || {
             let mut s = s;
@@ -466,12 +472,83 @@ fn main() {
             // and never waits on a provider. What is in memory is kept
             // fresh by `keep_catalog_fresh`.
             ("GET", "/models") => {
-                let body = catalog.lock().map(|c| c.clone()).unwrap_or_default();
+                // From the cache file each time rather than the string kept
+                // at the last refresh: `ready` says whether a key is set now,
+                // and a key saved in Settings a moment ago has to count
+                // without waiting a quarter of an hour for the next refresh.
+                let snaps = core::catalog::load();
+                let body = if snaps.is_empty() {
+                    catalog.lock().map(|c| c.clone()).unwrap_or_default()
+                } else {
+                    core::catalog::to_json(&snaps)
+                };
                 let _ = respond(&mut s, "200 OK", "application/json", &body);
             }
             // The picker's refresh button: ask every provider now. A POST
             // behind the same Origin rule as /cmd, because it makes this
             // machine send requests.
+            // Stop the turn that is running. Not through `/cmd`: a turn holds
+            // the child's one stdin, so a stop sent there queued behind the
+            // very turn it was meant to end -- which is how a run stuck on
+            // Excel left the page with no way out. Asked first (the CLI
+            // looks for the flag between steps, while it waits, and while
+            // a reply streams); when it cannot look, because it is inside
+            // a call that is not coming back, the child is restarted.
+            ("POST", "/stop") => {
+                if req.origin.is_none() {
+                    let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /stop needs an Origin header");
+                    return;
+                }
+                if !live.busy.load(Ordering::SeqCst) {
+                    let _ = respond(&mut s, "200 OK", "application/json", "{\"stopped\":\"idle\"}");
+                    return;
+                }
+                let pid = child_pid.load(Ordering::SeqCst);
+                let _ = core::stop::request(pid);
+                let settled = |secs: u64| {
+                    let until = Instant::now() + Duration::from_secs(secs);
+                    while Instant::now() < until {
+                        if !live.busy.load(Ordering::SeqCst) {
+                            return true;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    false
+                };
+                if settled(4) {
+                    let _ = respond(&mut s, "200 OK", "application/json", "{\"stopped\":\"clean\"}");
+                    return;
+                }
+                // Not coming back by itself. The whole tree goes: curl, and
+                // any helper this CLI started, which is the thing stuck on
+                // the application. The application and its documents stay;
+                // a helper never closes what it did not open.
+                let _ = if cfg!(windows) {
+                    Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output()
+                } else {
+                    Command::new("kill").args(["-9", &pid.to_string()]).output()
+                };
+                // The `/cmd` thread that held the turn now reads end-of-file,
+                // answers, and lets go of the lock.
+                settled(10);
+                let _ = std::fs::remove_file(core::stop::flag_for(pid));
+                let fresh = match Cli::start(&exe) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = respond(&mut s, "500 Internal Server Error", "text/plain", &format!("stopped, but the cli would not restart: {e}"));
+                        return;
+                    }
+                };
+                let new_pid = fresh.child.id();
+                if let Ok(mut c) = cli.lock() {
+                    *c = fresh;
+                }
+                child_pid.store(new_pid, Ordering::SeqCst);
+                if let Ok(mut l) = own_log_cell.lock() {
+                    *l = Some(core::live::log_of(new_pid));
+                }
+                let _ = respond(&mut s, "200 OK", "application/json", "{\"stopped\":\"restarted\"}");
+            }
             ("POST", "/models") => {
                 if req.origin.is_none() {
                     let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /models needs an Origin header");

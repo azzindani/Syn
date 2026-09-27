@@ -105,9 +105,22 @@ namespace Syn.Sidecar
                 foreach (var sh in e.ScratchSheets) DropScratchSheet(_appRef, sh);
         }
 
-        /// <summary>Methods that change nothing, and so leave nothing to undo.</summary>
+        /// <summary>A closed document's changes can no longer be taken back:
+        /// its stack goes, with the temp files and scratch sheets it held.
+        /// Left behind, a document reopened under the same name would inherit
+        /// an undo of edits made to a different copy of it.</summary>
+        private static void ForgetUndo(string doc)
+        {
+            if (!Undos.TryGetValue(doc, out var s)) return;
+            foreach (var e in s) Drop(e);
+            Undos.Remove(doc);
+        }
+
+        /// <summary>Methods that change nothing undo could put back, and so
+        /// leave nothing to undo. `save` writes the document as it stands;
+        /// `close` forgets its stack itself (ForgetUndo).</summary>
         private static bool ReadOnly(string method, string line) =>
-            method is "read" or "find" or "open" or "undo"
+            method is "read" or "find" or "open" or "undo" or "save" or "close"
             || (method == "export" && _app != "word")
             || (method == "macro" && JsonField(JsonField(line, "args"), "action").ToLowerInvariant() is "read" or "list");
 
@@ -312,10 +325,52 @@ namespace Syn.Sidecar
             }
             dynamic wb = app.Workbooks.Add();
             try { wb.Windows[1].Visible = false; } catch { }
+            // Signed with this helper's process, so the next helper can tell
+            // it from a workbook of the user's (msoPropertyTypeString 4).
+            try { wb.CustomDocumentProperties.Add(ScratchTag, false, 4, Environment.ProcessId.ToString(CultureInfo.InvariantCulture)); } catch { }
             _scratchName = wb.Name;
             wb.Saved = true;
             _scratch = wb;
             return wb;
+        }
+
+        private const string ScratchTag = "SynUndoScratch";
+
+        /// <summary>Close scratch workbooks whose helper is gone.</summary>
+        ///
+        /// A helper stopped hard never reaches CloseScratch, and its hidden
+        /// scratch stays in Excel for the rest of the session: two turned up
+        /// as Book4 and Book5 after helpers were killed. Only a workbook
+        /// carrying the tag, never saved to a file, whose helper process is
+        /// no longer running, is closed: anything else could be the user's.
+        private static void SweepOrphanScratch(object appO)
+        {
+            dynamic app = appO;
+            var closed = new List<string>();
+            try
+            {
+                foreach (dynamic wb in app.Workbooks)
+                {
+                    try
+                    {
+                        if ((string)wb.Path != "") continue;
+                        string owner = (string)wb.CustomDocumentProperties[ScratchTag].Value;
+                        if (!int.TryParse(owner, out var pid) || pid == Environment.ProcessId || Alive(pid)) continue;
+                        closed.Add((string)wb.Name);
+                        wb.Saved = true;
+                        wb.Close(false);
+                    }
+                    catch { /* no tag: not ours */ }
+                }
+            }
+            catch { }
+            if (closed.Count > 0) Console.WriteLine($"closed scratch left by stopped helpers: {string.Join(", ", closed)}");
+        }
+
+        private static bool Alive(int pid)
+        {
+            try { return !System.Diagnostics.Process.GetProcessById(pid).HasExited; }
+            catch { return false; }
         }
 
         private static bool IsScratch(string name) => _scratchName.Length > 0 && name == _scratchName;

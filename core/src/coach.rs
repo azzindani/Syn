@@ -23,12 +23,15 @@
 //! sheet, a closed window) it says to ask one rather than to work around
 //! them: they are looking at the screen, and the application is theirs.
 
-/// Who the advice is for: a model in Syn's own loop, which can ask the
-/// human in prose but cannot open files, or one behind MCP, which can.
+/// Whether the model the advice is for has an `open` tool. MCP always
+/// has; Syn's own loop has whenever a door is fitted, which the console and
+/// the REPL always do. These were `Mcp` and `Loop` until the loop learned
+/// to open files, and the loop kept telling its model to ask the human to
+/// reopen a document it could have opened itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Caller {
-    Loop,
-    Mcp,
+    CannotOpen,
+    CanOpen,
 }
 
 /// One known failure.
@@ -256,8 +259,8 @@ pub fn advice(app: &str, error: &str, caller: Caller) -> Option<&'static str> {
         .filter(|r| r.apps.is_empty() || r.apps.contains(&app))
         .find(|r| hay.contains(&r.needle.to_ascii_lowercase()))
         .map(|r| match caller {
-            Caller::Mcp => r.mcp.unwrap_or(r.advice),
-            Caller::Loop => r.advice,
+            Caller::CanOpen => r.mcp.unwrap_or(r.advice),
+            Caller::CannotOpen => r.advice,
         })
 }
 
@@ -285,7 +288,7 @@ pub fn app_key(app: &str) -> &str {
 pub fn selectors(app: &str) -> &'static str {
     match app_key(app) {
         "excel" => "Excel selectors name the sheet: Sheet1!A1:D10, or 'Q3 sales'!B2 when the name has a space.",
-        "word" => "Word selectors are body (the text, numbered), p3 for one paragraph or p3:p9 for several; p0 is the first.",
+        "word" => "Word selectors are body (the text, numbered), p3 for one paragraph or p3:p9 for several; p0 is the first. t2 is the second table, t2.r1 its first row, t2.c3 a column.",
         "ppt" => "PowerPoint selectors are deck, or s1, s2 ... for one slide, s2.notes for its notes.",
         "web" => "Selectors on a web page are CSS: h1, #total, table tr:nth-child(2).",
         "ui" => "Window selectors are :tree for the control list, or id=..., name=..., type=... joined by commas.",
@@ -310,7 +313,7 @@ mod tests {
             ("web", "live app refused the op: no element matches #total in :doc", "selector body"),
         ];
         for (app, err, want) in cases {
-            let got = advice(app, err, Caller::Loop).unwrap_or_else(|| panic!("no advice for {err}"));
+            let got = advice(app, err, Caller::CannotOpen).unwrap_or_else(|| panic!("no advice for {err}"));
             assert!(got.contains(want), "{err}\n  -> {got}");
         }
     }
@@ -319,16 +322,16 @@ mod tests {
     fn a_protected_sheet_is_named_as_that_not_as_the_vague_excel_code() {
         // The code and the words arrive together; the words are the more
         // useful, so that rule has to win.
-        let got = advice("excel", "com 0x800A03EC: ... on a protected sheet.", Caller::Loop).unwrap();
+        let got = advice("excel", "com 0x800A03EC: ... on a protected sheet.", Caller::CannotOpen).unwrap();
         assert!(got.contains("protected against changes"), "{got}");
     }
 
     #[test]
-    fn behind_mcp_the_way_out_is_open_and_in_the_loop_it_is_the_user() {
+    fn a_model_that_can_open_is_told_to_open_and_one_that_cannot_asks_the_user() {
         let e = "com 0x800706BA: The RPC server is unavailable.";
-        assert!(advice("excel", e, Caller::Mcp).unwrap().contains("Call `open`"));
-        let l = advice("excel", e, Caller::Loop).unwrap();
-        assert!(!l.contains("`open`"), "the loop has no open tool: {l}");
+        assert!(advice("excel", e, Caller::CanOpen).unwrap().contains("Call `open`"));
+        let l = advice("excel", e, Caller::CannotOpen).unwrap();
+        assert!(!l.contains("`open`"), "no open tool to name: {l}");
         assert!(l.contains("Ask the user"));
     }
 
@@ -336,14 +339,14 @@ mod tests {
     fn an_error_from_another_app_does_not_borrow_its_advice() {
         // "no element matches" is the browser's; a window's miss says
         // something else, and an Excel code means nothing to Word.
-        assert!(advice("word", "com 0x800A03EC", Caller::Loop).is_none());
-        assert!(advice("excel", "no element matches x", Caller::Loop).is_none());
+        assert!(advice("word", "com 0x800A03EC", Caller::CannotOpen).is_none());
+        assert!(advice("excel", "no element matches x", Caller::CannotOpen).is_none());
     }
 
     #[test]
     fn an_unknown_error_is_passed_through_untouched() {
-        assert_eq!(explain("excel", "something new", Caller::Loop), "something new");
-        let e = explain("excel", "com 0x800AC472: busy", Caller::Mcp);
+        assert_eq!(explain("excel", "something new", Caller::CannotOpen), "something new");
+        let e = explain("excel", "com 0x800AC472: busy", Caller::CanOpen);
         assert!(e.starts_with("com 0x800AC472: busy\nWhat to do: "), "the app's own words stay first: {e}");
     }
 

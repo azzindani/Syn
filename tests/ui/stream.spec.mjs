@@ -141,6 +141,17 @@ test("the stream survives a quiet minute", async ({ page }) => {
   await expect(page.locator(".act")).toHaveCount(before + 1, { timeout: 3000 });
 });
 
+test("a turn this page redrew is not drawn again by its late stream lines", async ({ page }) => {
+  // Seen live: the answer showed twice, because the page redrew the saved
+  // turn and the stream then delivered the same ANSWER line after it.
+  await page.evaluate(() => { window.live.render([{ role: "user", text: "q" }, { role: "assistant", text: "the answer" }], {}); window.live.settle(); });
+  await page.evaluate(() => window.live.step("ANSWER the answer"));
+  await expect(page.locator("#tl .bot")).toHaveCount(1);
+  // The next turn is drawn as usual.
+  await page.evaluate(() => { window.live.step("RECEIPT say model=vendor/x open=0"); window.live.step("ANSWER a new one"); });
+  await expect(page.locator("#tl .bot")).toHaveCount(2);
+});
+
 test("a line already drawn is not drawn again when the stream connects", async ({ page }) => {
   // The bug a real run made obvious: the stream named its source on
   // connect, the page treated that as a change of run, and the server

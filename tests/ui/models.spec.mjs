@@ -102,7 +102,9 @@ test("the model and thinking level picked are what the provider is sent", async 
   const sent = bodies[bodies.length - 1];
   expect(bodies.length).toBeGreaterThan(before);
   expect(sent.model).toBe("vendor/thinker");
-  expect(sent.reasoning).toEqual({ effort: "high" });
+  // OpenRouter takes `reasoning: {effort}`; every other OpenAI-compatible host
+  // takes `reasoning_effort`, and this fake is one of those.
+  expect(sent.reasoning_effort ?? sent.reasoning?.effort).toBe("high");
 });
 
 test("a fresh window shows what the console will use, and automatic goes back to the .env model", async ({ page }) => {
@@ -122,7 +124,7 @@ test("a fresh window shows what the console will use, and automatic goes back to
   await expect(page.locator("#tl .bot").last()).toContainText("pineapple", { timeout: 60_000 });
   const sent = bodies[bodies.length - 1];
   expect(sent.model).toBe("openrouter/auto");
-  expect(sent.reasoning).toEqual({ effort: "low" });
+  expect(sent.reasoning_effort ?? sent.reasoning?.effort).toBe("low");
 });
 
 test("the choice survives a reload", async ({ page }) => {

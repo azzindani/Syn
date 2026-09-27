@@ -480,6 +480,24 @@ namespace Syn.Sidecar
         private static string WordDelete(dynamic doc, string handle, string selector)
         {
             Snapshot(handle);
+            // A whole table by its name: its cells are dozens of paragraph
+            // numbers, and a range that misses one leaves a stub behind.
+            var tm = Regex.Match(selector.Trim(), @"^t(\d+)$", RegexOptions.IgnoreCase);
+            if (tm.Success)
+            {
+                var s = TableOf(TableSpans((object)doc), int.Parse(tm.Groups[1].Value, CultureInfo.InvariantCulture));
+                int had = doc.Paragraphs.Count;
+                ((dynamic)s.Table).Delete();
+                // Word keeps the paragraph the table was built in, empty,
+                // where the table stood: a table taken out left a blank line
+                // behind every time. Only that one, only when it is empty.
+                if ((int)doc.Paragraphs.Count == had - (s.Last - s.First + 1) + 1
+                    && s.First + 1 < (int)doc.Paragraphs.Count
+                    && ((string)doc.Paragraphs[s.First + 1].Range.Text).Trim('\r', '\a', ' ') == "")
+                    doc.Paragraphs[s.First + 1].Range.Delete();
+                doc.Saved = false;
+                return Ok($"deleted table t{s.Index} (p{s.First}:p{s.Last}); the paragraphs after moved up, so p{s.First} is now what followed");
+            }
             var (a, b) = ParaSpan((object)doc, selector, "delete");
             dynamic r = doc.Range(doc.Paragraphs[a + 1].Range.Start, doc.Paragraphs[b + 1].Range.End);
             r.Delete();

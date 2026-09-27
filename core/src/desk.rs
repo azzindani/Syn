@@ -1216,7 +1216,11 @@ mod tests {
         d.open("excel", "top.xlsx").unwrap();
         // The helper is sent the full path under the workspace, JSON-escaped.
         let sent = log.borrow().envelopes.join("\n").replace("\\\\", "\\");
-        let under = |rel: &str| ws.join(rel).display().to_string();
+        // Against the folder as the desk resolved it. The CI runner's temp
+        // dir is the 8.3 form (`C:\Users\RUNNER~1\...`) and the desk sends
+        // the long one, which is the same file and a different string.
+        let root = std::fs::canonicalize(&ws).unwrap();
+        let under = |rel: &str| crate::find::display(&root.join(rel));
         assert!(sent.contains(&under(r"q3\plan.xlsx")), "q3\\plan.xlsx under the workspace: {sent}");
         assert!(sent.contains(&under("top.xlsx")), "a bare name that is a file there: {sent}");
         assert!(!sent.contains(r"\\?\"), "Office gets a plain path, not the long-path form: {sent}");

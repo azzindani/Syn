@@ -385,6 +385,102 @@ namespace Syn.Sidecar
             }
         }
 
+        /// Open a .csv with its columns split, whatever this machine's
+        /// separators are. Returns a note for the reply: empty when the
+        /// columns came out, and what happened when they could not.
+        ///
+        /// `Workbooks.Open` splits a CSV on Excel's own list separator, and
+        /// on a machine whose decimal is "," that is ";". A comma file of
+        /// 483,054 rows arrived as one column of whole lines, every count
+        /// a model took of it was wrong, and it reached for a macro to
+        /// split the column. Worse, a two-column line such as `1,5` became
+        /// the number 1.5. Neither `Local` nor `OpenText` helps: Excel
+        /// ignores OpenText's delimiter for a file named .csv (it honoured
+        /// it for one test file with a byte-order mark and CRLFs, which is
+        /// how that looked like a fix for an hour).
+        ///
+        /// So the file is opened as usual -- the workbook stays this file,
+        /// and save and close treat it as one -- and its sheet is then
+        /// refilled by a text import that does take the delimiter: a
+        /// QueryTable, deleted once it has run so nothing refreshes later.
+        /// The delimiter is read off the file, because semicolon CSVs exist
+        /// too, and the decimal separator goes with it.
+        private static string OpenCsv(dynamic app, string full)
+        {
+            var (delim, utf8) = SniffCsv(full);
+            bool semi = delim == ';';
+            dynamic wb = app.Workbooks.Open(full);
+            try
+            {
+                dynamic ws = wb.Worksheets[1];
+                ws.Cells.Clear();
+                dynamic qt = ws.QueryTables.Add("TEXT;" + full, ws.Range["A1"]);
+                qt.TextFilePlatform = utf8 ? 65001 : 2; // UTF-8, else xlWindows (ANSI)
+                qt.TextFileStartRow = 1;
+                qt.TextFileParseType = 1; // xlDelimited
+                qt.TextFileTextQualifier = 1; // xlTextQualifierDoubleQuote
+                qt.TextFileConsecutiveDelimiter = false;
+                qt.TextFileCommaDelimiter = delim == ',';
+                qt.TextFileSemicolonDelimiter = semi;
+                qt.TextFileTabDelimiter = delim == '\t';
+                qt.TextFileSpaceDelimiter = false;
+                qt.TextFileDecimalSeparator = semi ? "," : ".";
+                qt.TextFileThousandsSeparator = semi ? "." : ",";
+                qt.AdjustColumnWidth = true;
+                qt.RefreshStyle = 0; // xlOverwriteCells
+                qt.Refresh(false);
+                qt.Delete();
+                // What is in the sheet is what is in the file: nothing to save.
+                wb.Saved = true;
+                return "";
+            }
+            catch (Exception e)
+            {
+                // A sheet left half-imported is worse than one column. This
+                // helper opened the workbook a moment ago, so it closes it
+                // and opens it again the ordinary way.
+                try { wb.Close(false); } catch { }
+                app.Workbooks.Open(full);
+                return $" (its columns could not be split: {e.Message}; it is open as Excel reads it, one column per line)";
+            }
+        }
+
+        /// The delimiter a CSV uses (the commonest of , ; and tab in its
+        /// first line, outside quotes; "," when none), and whether its
+        /// start reads as UTF-8.
+        internal static (char delim, bool utf8) SniffCsv(string path)
+        {
+            var buf = new byte[64 * 1024];
+            int n;
+            using (var f = File.OpenRead(path)) n = f.Read(buf, 0, buf.Length);
+            bool bom = n >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF;
+            bool utf8 = bom;
+            string text = "";
+            // The chunk can end inside a multi-byte character: try shorter.
+            for (var cut = 0; cut < 4 && cut <= n && text == ""; cut++)
+            {
+                try
+                {
+                    text = new System.Text.UTF8Encoding(false, true).GetString(buf, 0, n - cut);
+                    utf8 = true;
+                }
+                catch (System.Text.DecoderFallbackException) { }
+            }
+            if (text == "") text = System.Text.Encoding.Latin1.GetString(buf, 0, n);
+            int comma = 0, semi = 0, tab = 0;
+            var quoted = false;
+            foreach (var c in text)
+            {
+                if (c == '"') quoted = !quoted;
+                else if (!quoted && (c == '\n' || c == '\r')) break;
+                else if (!quoted && c == ',') comma++;
+                else if (!quoted && c == ';') semi++;
+                else if (!quoted && c == '\t') tab++;
+            }
+            var delim = semi > comma && semi >= tab ? ';' : tab > comma && tab > semi ? '\t' : ',';
+            return (delim, utf8);
+        }
+
         /// Open a file in this sidecar's application, and show it.
         ///
         /// Idempotent: a document already open is returned as it is rather
@@ -423,9 +519,13 @@ namespace Syn.Sidecar
                             if ((string)app.Workbooks[i].Name == name)
                                 return Ok($"already open: {name}");
                         app.Visible = true;
-                        app.Workbooks.Open(full);
+                        var note = "";
+                        if (Path.GetExtension(full).Equals(".csv", StringComparison.OrdinalIgnoreCase))
+                            note = OpenCsv(app, full);
+                        else
+                            app.Workbooks.Open(full);
                         OpenedHere.Add(name);
-                        return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s)");
+                        return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s){note}");
                     }
                     case "powerpoint":
                     {
@@ -941,6 +1041,13 @@ namespace Syn.Sidecar
                 foreach (var bad in new[] { "MsgBox", "InputBox" })
                     if (code.IndexOf(bad, StringComparison.OrdinalIgnoreCase) >= 0)
                         return Fail($"refused: {bad} waits for someone to click, and the run would wait with it: write the result to a cell and read it back instead");
+                // A model that escapes its JSON twice sends `\n` as two
+                // characters. The module was stored as one line, which does
+                // not compile, and running it only said "Cannot run the
+                // macro ... may not be available", which sent the run
+                // looking at Trust Center instead of at its own code.
+                if (!code.Contains('\n') && code.Contains("\\n"))
+                    return Fail("refused: the code arrived as one line, with each line break written as the two characters \\n: send real line breaks between the lines of code");
             }
 
             // Running needs no VBA project access: Application.Run calls a
@@ -1642,6 +1749,11 @@ namespace Syn.Sidecar
         // file stopped being the one on screen, and every later call on the
         // handle failed with "workbook not open", because its name had
         // changed to the export's.
+        /// XlFileFormat values that hold one sheet of text: the CSV family
+        /// (6, 22, 23, 24, 62), the text family (19, 20, 21, 36, 42), and
+        /// xlCurrentPlatformText.
+        private static readonly HashSet<int> TextFormats = new() { 6, 19, 20, 21, 22, 23, 24, 36, 42, 62, -4158 };
+
         private static string ExportWb(dynamic wb, string handle, string format, string path, string sheet)
         {
             var f = format.ToLowerInvariant();
@@ -1681,6 +1793,27 @@ namespace Syn.Sidecar
                     {
                         wb.SaveCopyAs(full);
                         return Ok($"exported {full}");
+                    }
+                    // A workbook read from a text file (CSV, TXT) saves a copy
+                    // as that text: the active sheet alone. Exporting a CSV
+                    // with a Stats sheet on top gave an xlsx holding only
+                    // Stats, renamed after the temporary file, and none of
+                    // the 483,054 rows. Copy every sheet into a new workbook
+                    // instead; this helper made it, so this helper closes it.
+                    if (TextFormats.Contains((int)wb.FileFormat))
+                    {
+                        dynamic app0 = wb.Application;
+                        bool alerts0 = app0.DisplayAlerts;
+                        app0.DisplayAlerts = false;
+                        wb.Sheets.Copy();
+                        dynamic book = app0.ActiveWorkbook;
+                        try { book.SaveAs(full, 51); }
+                        finally
+                        {
+                            try { book.Close(false); } catch { }
+                            app0.DisplayAlerts = alerts0;
+                        }
+                        return Ok($"exported {full} ({(int)wb.Sheets.Count} sheet(s))");
                     }
                     // SaveCopyAs keeps the workbook's own format (xlsm, xls),
                     // which a .xlsx name would misdescribe. Copy, open the

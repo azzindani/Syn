@@ -114,6 +114,17 @@ pub enum Step {
     Stopped(String),
 }
 
+/// One call a step ran, and how it ended: what a watcher is shown as a row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settled {
+    pub tool: String,
+    pub args: String,
+    /// `Done` or `Refused`; a call that stopped the run or waits for a
+    /// human is the step's own outcome, not a row.
+    pub status: labels::Status,
+    pub detail: String,
+}
+
 /// How many model turns one goal gets. A job with five deliverables in two
 /// applications does not fit in the handful a chat reply needs, and the old
 /// fixed 24 was spent on the first one. 40 still cut real work short: a
@@ -405,6 +416,11 @@ pub struct Agent {
     /// (`labels::summarise`). A transcript answers the same question, but
     /// only to somebody willing to read three hundred steps of JSON.
     calls: Vec<(String, String)>,
+    /// The calls the latest step ran, in order. A step returns one outcome,
+    /// and a caller that showed only that outcome showed the last call of
+    /// each batch: an `open` sent in the same turn as a `manual` never
+    /// appeared, and the workbook on screen seemed to have opened itself.
+    settled: Vec<Settled>,
     /// Whether the one out-of-budget summary turn has been spent. Bounded
     /// at one: a model that cannot produce a summary must not be asked
     /// round the loop forever for one.
@@ -753,6 +769,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             protected_ids: Vec::new(),
             touched: Vec::new(),
             calls: Vec::new(),
+            settled: Vec::new(),
             summarised: false,
             summarised_turns: 0,
             window: None,
@@ -922,6 +939,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
         runner: &mut Runner,
         shell_policy: &ShellPolicy,
     ) -> Step {
+        self.settled.clear();
         if self.pending.is_some() {
             return Step::Stopped("waiting for approval: call approve() or deny()".into());
         }
@@ -1051,6 +1069,17 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
         let mut last = Step::Stopped("the turn announced tool calls but ran none".into());
         for (i, slot) in planned.slots.iter().enumerate() {
             let step = self.dispatch(slot.call.clone(), relay, runner, shell_policy);
+            let row = |status, detail: &str| Settled {
+                tool: slot.call.name.clone(),
+                args: slot.call.arguments.clone(),
+                status,
+                detail: detail.to_string(),
+            };
+            match &step {
+                Step::Ran { detail, .. } => self.settled.push(row(labels::Status::Done, detail)),
+                Step::Refused(why) => self.settled.push(row(labels::Status::Refused, why)),
+                _ => {}
+            }
             // Everything still owed an answer if this call ends the turn.
             let rest = || planned.slots[i + 1..].iter().flat_map(|s| s.ids()).collect::<Vec<_>>();
             match step {
@@ -1138,6 +1167,12 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     /// Every call this run dispatched, in order, as `(tool, arguments)`.
     pub fn calls(&self) -> &[(String, String)] {
         &self.calls
+    }
+
+    /// The calls the latest step ran, one per row a watcher should see.
+    /// Empty for a step that ran nothing (an answer, a nudge, a stop).
+    pub fn settled(&self) -> &[Settled] {
+        &self.settled
     }
 
     fn dispatch(&mut self, tc: ToolCall, relay: &mut Relay, runner: &mut Runner, shell_policy: &ShellPolicy) -> Step {
@@ -2173,6 +2208,34 @@ mod tests {
             .expect("a multi-call turn should announce itself");
         assert!(note.starts_with("Reading 1 range and writing into 1 document"), "{note:?}");
         assert!(note.contains("3 calls, 1 of them repeats"), "the saving should be visible: {note:?}");
+    }
+
+    #[test]
+    fn every_call_in_a_batch_is_a_row_for_the_watcher_not_only_the_last() {
+        // An `open` sent beside a `manual` ran and was never shown: the
+        // console drew the step's one outcome, which was the manual.
+        let (mut relay, mut runner, _s, h) = world();
+        let sel = format!(r#"{{"handle":"{h}","selector":"Sheet1!A1:B2"}}"#);
+        let mut brain = FakeBrain::new(&[batch_reply(&[
+            ("c1", "read", sel.clone()),
+            ("c2", "write", format!(r#"{{"handle":"{h}","selector":"Sheet1!D1"}}"#)),
+            ("c3", "manual", r#"{"topic":"index"}"#.to_string()),
+        ])]);
+        let mut a = agent("x");
+        a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default());
+
+        let rows: Vec<(&str, labels::Status)> = a.settled().iter().map(|s| (s.tool.as_str(), s.status)).collect();
+        assert_eq!(
+            rows,
+            [("read", labels::Status::Done), ("write", labels::Status::Refused), ("manual", labels::Status::Done)],
+            "one row per call, the refused one included"
+        );
+        assert!(a.settled()[0].detail.contains("2x2"), "{:?}", a.settled()[0]);
+
+        // The next step starts its own rows.
+        let mut brain = FakeBrain::new(&[prose_reply("done")]);
+        a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default());
+        assert!(a.settled().is_empty(), "an answer ran nothing: {:?}", a.settled());
     }
 
     #[test]

@@ -121,3 +121,16 @@ C# helper is written the way it is:
    leaves VBA paused in the debugger, so the watcher then presses Run >
    Reset through its own COM connection. Compiling first would be tidier,
    but Debug > Compile reports itself disabled while the editor is hidden.
+9. **Excel splits a CSV on its own list separator, not on commas.** With
+   the decimal separator set to "," the list separator is ";", and
+   `Workbooks.Open` on a comma file of 483,054 rows gave one column of
+   whole lines; a two-column line such as `1,5` became the number 1.5.
+   `Local` changes nothing, and `OpenText` ignores its delimiter for a file
+   named `.csv` (it honoured it once, for a test file with a byte-order
+   mark and CRLFs, which made it look like the fix). The helper opens the
+   file as usual, so the workbook stays that file, then refills the sheet
+   with a text `QueryTable` given the delimiter read off the file's first
+   line, and deletes the query. The same file exported to xlsx used to
+   lose its data: `SaveCopyAs` on a workbook read from text writes text,
+   one sheet, so a text workbook is now exported by copying all its sheets
+   into a new workbook.

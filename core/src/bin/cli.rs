@@ -208,38 +208,35 @@ fn drive(
         // line is what broke the live view the moment its wording changed,
         // and a UI that breaks when a message is reworded is a UI nobody
         // can safely improve.
-        let receipt = |a: &Agent, status: core::labels::Status, detail: &str| {
-            let (name, args) = a.calls().last()?;
-            Some(format!(
+        //
+        // One row per call the step ran, not one per step: a batched turn
+        // runs several, and printing only the step's outcome dropped all
+        // but the last (an `open` beside a `manual` was never shown).
+        for s in a.settled() {
+            let label = core::labels::sentence(&s.tool, &s.args, s.status);
+            if s.status == core::labels::Status::Done {
+                pr!("STEP {label}");
+            } else {
+                pr!("REFUSED {}", s.detail);
+            }
+            pr!(
                 "RECEIPT step {{\"label\":{:?},\"tool\":{:?},\"app\":{:?},\"status\":{:?},\"detail\":{:?}}}",
-                core::labels::sentence(name, args, status),
-                name,
-                core::labels::app(args).unwrap_or_default(),
-                status_name(status),
-                detail
-            ))
-        };
+                label,
+                s.tool,
+                core::labels::app(&s.args).unwrap_or_default(),
+                status_name(s.status),
+                s.detail
+            );
+        }
+        let shown = !a.settled().is_empty();
         match outcome {
-            Step::Ran { tool, detail } => {
-                match receipt(a, core::labels::Status::Done, &detail) {
-                    Some(r) => {
-                        let label = a
-                            .calls()
-                            .last()
-                            .map(|(n, args)| core::labels::sentence(n, args, core::labels::Status::Done))
-                            .unwrap_or_else(|| tool.clone());
-                        pr!("STEP {label}");
-                        pr!("{r}");
-                    }
-                    None => pr!("STEP {tool}: {detail}"),
-                }
-            }
-            Step::Refused(why) => {
-                pr!("REFUSED {why}");
-                if let Some(r) = receipt(a, core::labels::Status::Refused, &why) {
-                    pr!("{r}");
-                }
-            }
+            // Already drawn above, one row per call.
+            Step::Ran { .. } if shown => {}
+            Step::Refused(_) if shown => {}
+            Step::Ran { tool, detail } => pr!("STEP {tool}: {detail}"),
+            // A refusal that ran no call (an empty turn, prose before any
+            // work): the loop's own nudge, with no call to draw a row for.
+            Step::Refused(why) => pr!("REFUSED {why}"),
             Step::Answered(text) => {
                 pr!("ANSWER {}", text.replace('\n', " "));
                 report(a);

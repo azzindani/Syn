@@ -719,7 +719,10 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
         body
     };
     let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
-    let out = std::process::Command::new("curl")
+    let mut cmd = std::process::Command::new("curl");
+    // A CLI killed mid-request must not leave curl waiting out its timeout.
+    crate::tether::bind(&mut cmd);
+    let out = cmd
         // Five minutes: a reply that is not streamed arrives all at once, and a
         // model that thinks first used to be cut off at sixty seconds and
         // reported as "no HTTP response".
@@ -737,6 +740,7 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
         .map_err(|e| format!("curl spawn failed: {e}"))?;
     use std::io::Write;
     let mut child = out;
+    crate::tether::adopt(&child);
     // A curl that died early (bad URL, TLS failure) closes stdin, so the
     // write fails with BrokenPipe. That is not the interesting error: the
     // reason is on stderr, so keep going and report that instead.
@@ -808,7 +812,10 @@ fn stream_once(
     let body = crate::sse::with_stream_flag(body);
     let body = if responses { crate::responses::to_request(&body)? } else { body };
     let idle = stream_idle_secs().to_string();
-    let mut child = std::process::Command::new("curl")
+    let mut cmd = std::process::Command::new("curl");
+    // Streams run to half an hour; one must not outlive the CLI that asked.
+    crate::tether::bind(&mut cmd);
+    let mut child = cmd
         // -N: hand each chunk over as it arrives instead of filling a buffer
         // first. --speed-limit/--speed-time: fewer than 1 byte a second for
         // `idle` seconds is a dead connection.
@@ -825,6 +832,7 @@ fn stream_once(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("curl spawn failed: {e}"))?;
+    crate::tether::adopt(&child);
     // curl reads all of `@-` before it sends anything, so the body is
     // written and closed before the first byte of the reply is read. A
     // BrokenPipe means curl died early; its reason is on stderr.

@@ -104,10 +104,36 @@ pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_dir())
 }
 
+/// Syn's own source checkout, when it runs from one: the folder holding
+/// `core/Cargo.toml` and `widget/index.html`, found above the program or
+/// the folder it started in.
+///
+/// Never searched unless named. It is full of test fixtures -- sample
+/// workbooks, memos and decks, and a 52 MB CSV of the capability test's
+/// data -- and `scripts/console.ps1` starts the console in it, so "the
+/// folder Syn runs in" was the checkout. Reported from use: runs kept
+/// searching for and opening the capability test's solar files, which the
+/// person had never mentioned, because a search for "csv" or "xlsx" found
+/// them and handed back an `open` call to copy.
+pub(crate) fn own_tree() -> Option<PathBuf> {
+    let mut from = Vec::new();
+    if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        from.push(d);
+    }
+    if let Ok(c) = std::env::current_dir() {
+        from.push(c);
+    }
+    from.iter()
+        .flat_map(|s| s.ancestors())
+        .find(|a| a.join("core").join("Cargo.toml").is_file() && a.join("widget").join("index.html").is_file())
+        .and_then(|a| std::fs::canonicalize(a).ok())
+}
+
 /// Where people keep documents, when no folder is named: the usual three
 /// under the profile, the synced cloud folder, and the folder Syn was
-/// started in. A start inside another start is dropped, so a Documents
-/// folder redirected into OneDrive is walked once.
+/// started in, unless that is Syn's own checkout (`own_tree`). A start
+/// inside another start is dropped, so a Documents folder redirected into
+/// OneDrive is walked once.
 pub(crate) fn usual_places() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(h) = home() {
@@ -126,7 +152,11 @@ pub(crate) fn usual_places() -> Vec<PathBuf> {
         out.push(PathBuf::from(od));
     }
     if let Ok(c) = std::env::current_dir() {
-        out.push(c);
+        let own = own_tree();
+        let inside = std::fs::canonicalize(&c).ok().zip(own).is_some_and(|(c, o)| c.starts_with(o));
+        if !inside {
+            out.push(c);
+        }
     }
     distinct(out)
 }
@@ -190,14 +220,17 @@ pub fn search(query: &str, folder: Option<&str>, roots: &[PathBuf]) -> Result<St
     }
 
     let pattern = Pattern::parse(q);
-    let (hits, stopped) = walk(&starts, &pattern, Instant::now() + DEADLINE);
+    // A checkout kept under Documents is still skipped on the way past; one
+    // the model named, or a start inside it, is searched as asked.
+    let own = own_tree().filter(|o| !starts.iter().any(|s| s.starts_with(o)));
+    let (hits, stopped) = walk(&starts, &pattern, own.as_deref(), Instant::now() + DEADLINE);
     Ok(report(q, &starts, hits, stopped))
 }
 
 /// Breadth-first, so the shallow files people mean are found before the
 /// budget goes on something buried. Symbolic links and junctions are not
 /// followed: they loop, and they lead out of the folders searched.
-fn walk(starts: &[PathBuf], pattern: &Pattern, deadline: Instant) -> (Vec<Hit>, Option<&'static str>) {
+fn walk(starts: &[PathBuf], pattern: &Pattern, skip: Option<&Path>, deadline: Instant) -> (Vec<Hit>, Option<&'static str>) {
     let mut hits = Vec::new();
     let mut queue: std::collections::VecDeque<(PathBuf, usize)> = starts.iter().map(|s| (s.clone(), 0)).collect();
     let mut visits = 0usize;
@@ -214,7 +247,7 @@ fn walk(starts: &[PathBuf], pattern: &Pattern, deadline: Instant) -> (Vec<Hit>, 
             let Ok(ft) = e.file_type() else { continue };
             let name = e.file_name().to_string_lossy().to_string();
             if ft.is_dir() {
-                if depth + 1 < MAX_DEPTH && !skipped(&name) {
+                if depth + 1 < MAX_DEPTH && !skipped(&name) && skip.is_none_or(|o| !same_dir(&e.path(), o)) {
                     queue.push_back((e.path(), depth + 1));
                 }
             } else if ft.is_file() && !name.starts_with("~$") && pattern.matches(&name) && hits.len() < MAX_KEPT {
@@ -232,6 +265,12 @@ fn walk(starts: &[PathBuf], pattern: &Pattern, deadline: Instant) -> (Vec<Hit>, 
         }
     }
     (hits, None)
+}
+
+/// Whether `dir` is `canonical`, comparing the cheap way first: only a
+/// folder with the same name is worth resolving.
+fn same_dir(dir: &Path, canonical: &Path) -> bool {
+    dir.file_name() == canonical.file_name() && std::fs::canonicalize(dir).is_ok_and(|d| d == canonical)
 }
 
 fn report(q: &str, starts: &[PathBuf], mut hits: Vec<Hit>, stopped: Option<&str>) -> String {
@@ -262,13 +301,26 @@ fn report(q: &str, starts: &[PathBuf], mut hits: Vec<Hit>, stopped: Option<&str>
     if let Some(why) = stopped {
         out.push_str(&format!(" Stopped early ({why}): a file deeper down may be missing from this list."));
     }
-    // The call to copy, for the newest file some app here opens.
-    if let Some((h, app)) = hits.iter().find_map(|h| {
-        let name = h.path.file_name()?.to_string_lossy().to_string();
-        crate::desk::app_for_file(&name).map(|a| (h, a))
-    }) {
-        let args = crate::json::obj(vec![("app", crate::json::s(app)), ("path", crate::json::s(display(&h.path)))]);
-        out.push_str(&format!("\nNext: open{} if that is the one.", args.to_json()));
+    // The call to copy, when exactly one file here is one an app opens.
+    // With several, newest is a guess: the newest CSV on a disk is rarely
+    // "the CSV" a person means, and a model handed a call to copy opens it.
+    let openable: Vec<(&Hit, &str)> = hits
+        .iter()
+        .filter_map(|h| {
+            let name = h.path.file_name()?.to_string_lossy().to_string();
+            crate::desk::app_for_file(&name).map(|a| (h, a))
+        })
+        .collect();
+    match openable.as_slice() {
+        [] => {}
+        [(h, app)] => {
+            let args = crate::json::obj(vec![("app", crate::json::s(*app)), ("path", crate::json::s(display(&h.path)))]);
+            out.push_str(&format!("\nNext: open{} if that is the one.", args.to_json()));
+        }
+        many => out.push_str(&format!(
+            "\n{} of these could be opened. Open the one the user's words pick out; if they do not pick out one, ask which, rather than taking the newest.",
+            many.len()
+        )),
     }
     out
 }
@@ -380,6 +432,40 @@ mod tests {
         let path = v.get("path").and_then(crate::json::Value::as_str).unwrap();
         assert!(Path::new(path).is_file(), "the path given must be one `open` can use: {path}");
         assert!(!path.starts_with(r"\\?\"), "no verbatim prefix for a model to copy: {path}");
+    }
+
+    #[test]
+    fn several_openable_matches_are_listed_and_the_model_is_told_to_ask_not_guess() {
+        // Handed an `open` call for the newest of several, a model opens it:
+        // the newest CSV on a disk is rarely "the CSV" a person means.
+        let t = Tree::new("many", &["a/sales.csv", "b/sales-2025.csv"]);
+        let got = search("sales", Some(&t.at()), &[]).unwrap();
+        assert!(got.contains("sales.csv") && got.contains("sales-2025.csv"), "{got}");
+        assert!(!got.contains("Next: open"), "no call to copy when it would be a guess: {got}");
+        assert!(got.contains("ask which"), "{got}");
+    }
+
+    #[test]
+    fn syn_own_checkout_is_not_one_of_the_usual_places() {
+        // `cargo test` runs in core/, inside the checkout, just as the
+        // console does: the folder it starts in must not be searched, or
+        // the capability fixtures come back for every "csv" or "xlsx".
+        let own = own_tree().expect("the tests run inside the checkout");
+        assert!(own.join("core").join("Cargo.toml").is_file());
+        for p in usual_places() {
+            assert!(!p.starts_with(&own), "{} is inside Syn's own checkout", p.display());
+        }
+    }
+
+    #[test]
+    fn a_checkout_below_a_searched_folder_is_walked_past() {
+        let t = Tree::new("own", &["Syn/core/Cargo.toml", "Syn/widget/index.html", "Syn/testbed/budget.xlsx", "work/budget.xlsx"]);
+        let own = std::fs::canonicalize(t.0.join("Syn")).unwrap();
+        let starts = vec![std::fs::canonicalize(&t.0).unwrap()];
+        let (hits, _) = walk(&starts, &Pattern::parse("budget"), Some(&own), Instant::now() + DEADLINE);
+        let found: Vec<String> = hits.iter().map(|h| h.path.display().to_string()).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("work"), "{found:?}");
     }
 
     #[test]

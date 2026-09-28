@@ -42,6 +42,7 @@ pub mod snapshots;
 pub mod stream;
 pub mod summarise;
 pub mod surface;
+pub mod tether;
 pub mod tools;
 pub mod vfs;
 pub mod ws;

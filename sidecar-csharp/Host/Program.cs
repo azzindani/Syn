@@ -1175,7 +1175,8 @@ namespace Syn.Sidecar
                     "chart" => Chart(wb, handle, JsonField(args, "kind"), JsonField(args, "source"),
                                      JsonField(args, "title"), JsonField(args, "at"),
                                      JsonField(line, "payload")),
-                    "table" => MakeTable(wb, handle, JsonField(args, "source"), JsonField(args, "name")),
+                    "table" => MakeTable(wb, handle, JsonField(args, "source"), JsonField(args, "name"),
+                                         JsonField(args, "style")),
                     "name" => NameRange(wb, handle, JsonField(args, "name"), JsonField(args, "at")),
                     "conditional" => Conditional(wb, handle, selector, JsonField(line, "payload")),
                     "slicer" => Slicer(wb, handle, JsonField(args, "name"), JsonField(args, "rows"),
@@ -1502,7 +1503,12 @@ namespace Syn.Sidecar
             catch (COMException) { target.Formula = formula; }
         }
 
-        private static string MakeTable(dynamic wb, string handle, string source, string name)
+        // `style` is a table design, already normalised by the core to
+        // Excel's own name (TableStyleMedium9) or "none". A design this
+        // Excel does not have is reported and the table keeps the default,
+        // like a Word style that is not in the document: the table itself
+        // was the request, and it exists.
+        private static string MakeTable(dynamic wb, string handle, string source, string name, string style)
         {
             Snapshot(handle);
             var (sheet, addr) = SplitRange(source);
@@ -1516,7 +1522,17 @@ namespace Syn.Sidecar
             // xlSrcRange = 1, xlYes = 1 (the first row is headers)
             dynamic lo = ws.ListObjects.Add(1, ws.Range[addr], Type.Missing, 1);
             lo.Name = name;
-            return Ok($"table {name} over {sheet}!{addr} ({((int)lo.ListRows.Count).ToString("N0", CultureInfo.InvariantCulture)} rows)");
+            var note = "";
+            if (!string.IsNullOrWhiteSpace(style))
+            {
+                try
+                {
+                    lo.TableStyle = style == "none" ? "" : style;
+                    note = style == "none" ? ", plain" : $", {style}";
+                }
+                catch { note = $", style {style} is not in this Excel, left as the default"; }
+            }
+            return Ok($"table {name} over {sheet}!{addr} ({((int)lo.ListRows.Count).ToString("N0", CultureInfo.InvariantCulture)} rows{note})");
         }
 
         private static string NameRange(dynamic wb, string handle, string name, string target)

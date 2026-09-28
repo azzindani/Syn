@@ -710,7 +710,11 @@ impl EnvConnector {
         // for Start-Process -Redirect.
         cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         no_inherit::prepare(&mut cmd);
+        // Dies with this process however it ends: `Drop` below is only the
+        // clean exit, and Stop, Stop-Process and Ctrl+C are not clean.
+        crate::tether::bind(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("could not start {}: {e}", argv[0].to_string_lossy()))?;
+        crate::tether::adopt(&child);
         self.started.push(child);
         Ok(())
     }

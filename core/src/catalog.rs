@@ -260,7 +260,11 @@ fn run(mut cmd: std::process::Command, stdin: Option<String>) -> Result<Vec<Entr
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The console refreshes this from a thread that waits for curl, so the
+    // thread-bound signal on Linux is safe here too.
+    crate::tether::bind(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("curl spawn failed: {e}"))?;
+    crate::tether::adopt(&child);
     if let (Some(text), Some(mut sink)) = (stdin, child.stdin.take()) {
         let _ = sink.write_all(text.as_bytes());
     }

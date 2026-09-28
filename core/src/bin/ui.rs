@@ -54,7 +54,11 @@ struct Cli {
 
 impl Cli {
     fn start(exe: &std::path::Path) -> std::io::Result<Self> {
+        // The CLI watches for this console to go (`tether::watch_parent`):
+        // killed with Stop-Process, the console used to leave its CLI
+        // finishing a turn for nobody, and that CLI's helpers with it.
         let mut child = Command::new(exe)
+            .env(core::tether::PARENT_ENV, std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -521,8 +525,10 @@ fn main() {
                 }
                 // Not coming back by itself. The whole tree goes: curl, and
                 // any helper this CLI started, which is the thing stuck on
-                // the application. The application and its documents stay;
-                // a helper never closes what it did not open.
+                // the application -- on Windows through taskkill's /T, on
+                // Linux because each was bound to the CLI (`tether`) and is
+                // signalled when it dies. The application and its documents
+                // stay; a helper never closes what it did not open.
                 let _ = if cfg!(windows) {
                     Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output()
                 } else {

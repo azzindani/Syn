@@ -81,7 +81,9 @@ pub enum StructArgs {
     /// same reason.
     Chart { kind: String, source: String, title: String, at: String, style: String },
     /// Turn a range into a real Excel Table, so it sorts, filters and grows.
-    Table { source: String, name: String },
+    /// `style` is its table design (TableStyleMedium2, ...); empty keeps
+    /// Excel's default, which is already a shaded header and banded rows.
+    Table { source: String, name: String, style: String },
     /// Give a range a name, so a formula can say what it means.
     Name { name: String, at: String },
     /// Shade a range by its values: dataBar, colorScale, iconSet, top10,

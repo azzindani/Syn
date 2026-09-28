@@ -85,12 +85,18 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      # The runner image has no NSIS: without this step run #48 built only
+      # the zip and still went green. -RequireInstaller makes that a failure.
+      - name: install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
       - name: build the package
         shell: pwsh
-        run: ./scripts/package.ps1
+        run: ./scripts/package.ps1 -RequireInstaller
       - uses: actions/upload-artifact@v4
         with:
           name: syn-windows
+          if-no-files-found: error
           path: |
             dist/*-setup.exe
             dist/*.zip

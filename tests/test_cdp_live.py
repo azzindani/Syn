@@ -108,18 +108,34 @@ class BrowserThroughMcp(unittest.TestCase):
         threading.Thread(target=cls.http.serve_forever, daemon=True).start()
         cls.site = "http://127.0.0.1:%d" % cls.http.server_address[1]
 
+        # A cold browser on a CI runner can take well over twenty seconds to
+        # open its port; the old wait gave up at twenty and carried on, and
+        # every test then failed with "connection refused" and nothing to say
+        # why. Wait longer, and if it never answers, fail once with what the
+        # browser itself printed.
+        cls.errlog = open(os.path.join(cls.dir, "browser.err"), "w+")
         cls.port = free_port()
         cls.browser = subprocess.Popen(
             [browser(), "--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
+             "--disable-gpu", "--disable-dev-shm-usage",
              "--remote-debugging-port=%d" % cls.port, "--user-data-dir=" + os.path.join(cls.dir, "profile"),
              cls.site + "/index.html"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=cls.errlog)
         cls.devtools = "http://127.0.0.1:%d" % cls.port
-        for _ in range(80):
+        deadline = time.time() + 90
+        while True:
             try:
-                urllib.request.urlopen(cls.devtools + "/json/version", timeout=1).read()
+                urllib.request.urlopen(cls.devtools + "/json/version", timeout=2).read()
                 break
             except OSError:
+                if cls.browser.poll() is not None or time.time() > deadline:
+                    cls.browser.kill()
+                    cls.errlog.seek(0)
+                    tail = cls.errlog.read()[-2000:]
+                    shutil.rmtree(cls.dir, ignore_errors=True)
+                    cls.http.shutdown()
+                    raise RuntimeError("%s never opened its DevTools port %d (exit %s):\n%s"
+                                       % (browser(), cls.port, cls.browser.poll(), tail))
                 time.sleep(0.25)
         env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_")}
         env.update(AGENT_ENV_FILE=os.path.join(cls.dir, "no.env"), AGENT_HOME=os.path.join(cls.dir, "home"),
@@ -139,6 +155,7 @@ class BrowserThroughMcp(unittest.TestCase):
         cls.browser.kill()
         cls.browser.wait(30)
         cls.http.shutdown()
+        cls.errlog.close()
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     @classmethod
@@ -164,6 +181,7 @@ class BrowserThroughMcp(unittest.TestCase):
             if any(t.get("title") == "Syn CDP testbed" for t in tabs):
                 return
             time.sleep(0.25)
+        self.fail("the testbed page never loaded: %s" % [t.get("title") or t.get("url") for t in tabs])
 
     def page(self):
         self.loaded()

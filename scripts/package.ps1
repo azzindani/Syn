@@ -5,8 +5,11 @@
 #
 # The installer (setup.exe) is what a person downloads: one file, a Start
 # menu and desktop shortcut, an entry in Settings > Apps. It needs NSIS on
-# the building machine (makensis; GitHub's Windows runners have it); without
-# NSIS only the zip is made. scripts/installer.nsi is the installer.
+# the building machine (makensis; `choco install nsis` or nsis.sourceforge.io);
+# without NSIS only the zip is made, unless -RequireInstaller is given, which
+# CI passes: GitHub's Windows runners have no NSIS, and a release job that
+# quietly shipped only the zip went green. scripts/installer.nsi is the
+# installer.
 #
 # Needs Rust and the .NET 8 SDK on the machine that builds it. The machine
 # that runs it needs neither: office-host is published self-contained, so
@@ -17,7 +20,8 @@
 # hand are not in it; they stay in the source build for whoever turns them on.
 
 param(
-    [string]$Out = ''
+    [string]$Out = '',
+    [switch]$RequireInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -141,6 +145,8 @@ if (Test-Path $makensis) {
     if ($LASTEXITCODE) { throw "makensis failed" }
     Write-Host "made   $setup"
     Write-Host ("sha256 " + (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower())
+} elseif ($RequireInstaller) {
+    throw "no NSIS (makensis) and -RequireInstaller: the setup.exe was not made"
 } else {
     Write-Host "no NSIS (makensis): made the zip only. Install NSIS for the setup.exe."
 }

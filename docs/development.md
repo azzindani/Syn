@@ -18,8 +18,17 @@ cd core && cargo build --bins
 cd ../tests/ui && npm install && npm test
 ```
 
-See `tests/ui/README.md` for the specs, and `node showcase.mjs` for
-screenshots of every console state in light and dark, desktop and phone.
+See `tests/ui/README.md` for the specs, `node showcase.mjs` for
+screenshots of every console state in light and dark, desktop and phone,
+and `npm run audit` there for a PASS/FAIL audit of how the console behaves.
+
+Two more checks run real processes, and are run by hand rather than in CI
+(`tests/dev/README.md`):
+
+```
+python3 tests/dev/turn.py        # a turn ends with its stream; the API key stays off command lines
+python3 tests/dev/leftovers.py   # nothing is left running when Syn is killed mid-work
+```
 
 CI (`.github/workflows/ci.yml`) runs clippy and the Rust tests on Linux,
 macOS and Windows; builds both C# helpers; parses every PowerShell script;

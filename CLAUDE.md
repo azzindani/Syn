@@ -61,6 +61,8 @@ index is `docs/README.md`, and background notes are in `docs/design/`.
   `tool`, never off a verb (`core/tests/console_contract.rs`).
 - `tests/ui/`: Playwright against the real console.
   `tests/capability/`: the v0.1.0 capability test and its recorded runs.
+  `tests/dev/`: hand-run checks with real processes (`turn.py`,
+  `leftovers.py`, a `fakemodel.py` to point things at).
 - `scripts/`: Windows bring-up and live smoke tests (PowerShell).
 
 ## Commands
@@ -82,7 +84,10 @@ test`. In the cloud sandbox don't run `playwright install`: use the
 preinstalled Chromium with `PW_CHROMIUM=/opt/pw-browsers/chromium npm test`,
 and copy `.env.example` to `.env` first (one spec needs a wired hand). After
 a UI change, `node showcase.mjs` writes screenshots of every state, dark and
-light, desktop and phone, to `testbed/shots/showcase`: look at them.
+light, desktop and phone, to `testbed/shots/showcase`: look at them. Then
+`npm run audit` checks how it behaves (PASS/FAIL, exit 1 on a failure).
+After a change to the provider, the loop's process handling or anything
+that spawns, run `python3 tests/dev/turn.py` and `tests/dev/leftovers.py`.
 
 ## What a cloud session can and cannot verify
 

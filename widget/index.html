@@ -710,6 +710,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   /* Fingers, not pointers: 30px controls were below any touch guideline. */
   #toggle{width:40px;height:40px}
   .pick{height:36px}
+  #think{height:34px}
   #send{width:40px;height:40px}
   #setgear{width:40px;height:40px}
   .pill.model{display:none}
@@ -961,6 +962,18 @@ function tagged(out, tag) {
 
 // A turn that recovered on another slot is a success, not an error: showing
 // the 429 it walked past would teach the reader to distrust a good answer.
+// A run that stopped, as the one banner in front. A refused key is fixed in
+// Settings, so that banner says so and carries the way there: it used to be
+// a second notice, filed behind "The run stopped" under "1 more notice",
+// where the button that fixes it could not be seen.
+const KEY_REFUSED = /\b(401|403)\b|API key/;
+function stoppedBanner(why) {
+  return KEY_REFUSED.test(why)
+    ? { variant: "error", priority: "urgent", title: "The provider refused the API key", description: why,
+        action: { label: "Open settings", run: () => openSettings() } }
+    : { variant: "error", priority: "urgent", title: "The run stopped", description: why };
+}
+
 function verdict(out) {
   const lines = out.split("\n");
   return {
@@ -2259,7 +2272,7 @@ function liveStep(line) {
   }
   if (m) {
     setBanner("busy", null);
-    setBanner("run", { variant: "error", priority: "urgent", title: "The run stopped", description: m[1] });
+    setBanner("run", stoppedBanner(m[1]));
     liveRow(el("div", "fail", m[1]));
     return void liveClose();
   }
@@ -2488,14 +2501,9 @@ async function send() {
     } else if (!r.answered && r.failure && !r.stopped) {
       tl.appendChild(el("div", "fail", r.failure));
     }
-    // A refused key is fixed in Settings, and the failure row alone did not
-    // say where Settings is.
-    setBanner("keyfail", !r.answered && r.failure && /\b(401|403)\b|API key/.test(r.failure) ? {
-      variant: "error",
-      title: "The provider refused the API key",
-      description: "Replace the key for this provider, then send again.",
-      action: { label: "Open settings", run: () => openSettings() },
-    } : null);
+    // The live view raises this banner as the run stops; said again here
+    // for a page with no live view (the poller, a dropped stream).
+    if (!r.answered && r.failure && KEY_REFUSED.test(r.failure)) setBanner("run", stoppedBanner(r.failure));
     await loadChats();
   } catch (e) {
     // A fetch that never got an answer is the console gone; one that got a

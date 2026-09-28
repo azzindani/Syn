@@ -28,6 +28,20 @@ approval, the status menu — and writes a PNG of each in dark and light, at
 desktop and phone width, to `testbed/shots/showcase`. It asserts nothing;
 it is for judging the design by eye, which no spec can do.
 
+**Checking how it behaves.** `npm run audit` (`node audit.mjs`) starts a
+console of its own against a fake model and drives it the way a person
+does: the keyboard, a real turn, a refused key, a message too long, a
+phone. It checks what they would notice -- the send button with nothing to
+send, the status pill during a run, a focus ring at every tab stop, where a
+refused key sends you, whether an oversized message is lost, tap-target
+sizes -- prints PASS or FAIL for each, exits 1 on a failure, and writes a
+screenshot per stage and `report.md` to `testbed/shots/audit`. Every check
+is something an audit once found broken; pointed at the build before that
+audit (`SYN_UI_BIN=<old build>/ui`), it fails eight of them. Colour contrast
+is judged in the showcase shots, not here: the page's colours are
+`color-mix()` over custom properties, and a checker that misreads them
+cries wolf.
+
 **Rebuild after editing the page.** `widget/index.html` is `include_str!`'d
 into `ui.exe`, so a spec run against a stale binary tests the previous page
 and passes. `global-setup.mjs` refuses to start when the page is newer than

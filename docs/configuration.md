@@ -88,7 +88,7 @@ wrong would connect to something else, so there is no built-in default.
 | Variable | Default | Meaning |
 |---|---|---|
 | `AGENT_MCP_APPS` | all | Only these apps may be opened, e.g. `excel,word`. Checked before anything is launched; a name that is not an app allows nothing. |
-| `AGENT_MCP_ROOTS` | anywhere | `open` only accepts files under these folders, separated by `;`. |
+| `AGENT_MCP_ROOTS` | anywhere | `open` only accepts files under these folders, and `export` only writes there; separated by `;`. |
 | `AGENT_MCP_LAUNCH` | on | `0`: never start a helper, only connect to ones already running. |
 
 ## Safety switches

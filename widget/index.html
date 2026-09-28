@@ -1071,7 +1071,12 @@ function md(src) {
   // start of a line, every one of them had already become `&gt;`. With `<`
   // escaped there is no context left in which a lone `>` can open or close
   // anything, so as text it is inert.
-  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  //
+  // `"` is escaped because a link's address goes inside href="...": a
+  // reply holding [x](https://a"onmouseover="...) closed the attribute and
+  // added its own, and a reply can be steered by text in a document. This
+  // page can send the CLI any command, approvals included.
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
   // Fenced code first, so nothing inside it is parsed as anything else.
   const fences = [];

@@ -123,6 +123,8 @@ def split_range(selector):
 
 # How many places `find` lists before it says "and more", as office-host.
 FIND_SHOWN = 20
+# The application a person knows, by the --app this helper serves.
+APP_NAMES = {"excel": "Excel", "word": "Word", "powerpoint": "PowerPoint"}
 
 
 def refuse(msg):
@@ -270,6 +272,15 @@ class Office:
         name = os.path.basename(full)
         for d in self.docs():
             if self.name_of(d) == name:
+                # office-host's rule: the same name from another folder is
+                # a different document, and is refused rather than taken
+                # for the one open (handles tell documents apart by name).
+                there = uno.fileUrlToSystemPath(d.getURL()) if d.getURL() else ""
+                if there and os.path.normcase(os.path.abspath(there)) != os.path.normcase(full):
+                    raise Refused(
+                        "a different %s is already open in %s, from %s. Syn tells documents apart by name, "
+                        "so it cannot hold both: close that one first, or work on it instead if it is the one meant"
+                        % (name, APP_NAMES.get(self.app, self.app), os.path.dirname(there)))
                 return "already open: %s" % name
         doc = self.desktop.loadComponentFromURL(uno.systemPathToFileUrl(full), "_blank", 0,
                                                 (prop("Hidden", not self.visible),))

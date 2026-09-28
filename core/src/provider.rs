@@ -701,6 +701,60 @@ fn bearer(base_url: &str, api_key_env: &str, body: &str) -> Result<String, Strin
     Err(format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))
 }
 
+/// The Authorization header, where curl reads it from.
+///
+/// It went on curl's command line, and a command line is readable by other
+/// processes on the machine -- on Linux by every user -- for as long as the
+/// request runs, which for a streamed reply is minutes. The catalog already
+/// kept its key off argv. `-H @file` names a file instead: one only this
+/// user can read, in Syn's own data folder beside the saved keys, removed
+/// when the request is over. If it cannot be written the header goes on the
+/// command line as before, because a request that cannot be sent at all is
+/// the worse failure.
+struct Bearer {
+    file: Option<std::path::PathBuf>,
+    arg: String,
+}
+
+impl Bearer {
+    fn new(key: &str) -> Self {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::chats::home();
+        let file = dir.join(format!(".bearer-{}-{n}", std::process::id()));
+        let line = format!("Authorization: Bearer {key}\n");
+        match std::fs::create_dir_all(&dir).and_then(|_| write_private(&file, &line)) {
+            Ok(()) => Self { arg: format!("@{}", file.display()), file: Some(file) },
+            Err(_) => Self { file: None, arg: format!("Authorization: Bearer {key}") },
+        }
+    }
+
+    fn arg(&self) -> &str {
+        &self.arg
+    }
+}
+
+impl Drop for Bearer {
+    fn drop(&mut self) {
+        if let Some(f) = &self.file {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+}
+
+/// A new file only this user may read. Never over an existing one.
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)?.write_all(text.as_bytes())
+}
+
 /// Returns (http_status, response_body).
 fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> Result<(u16, String), String> {
     let wired = for_provider(base_url, body);
@@ -710,7 +764,7 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
     // row in a file rather than a new env var invented for it -- and an
     // OAuth token that has expired is skipped rather than sent, because a
     // stale token answers 401 and reads exactly like a bad key.
-    let key = bearer(base_url, api_key_env, body)?;
+    let bearer = Bearer::new(&bearer(base_url, api_key_env, body)?);
     let converted;
     let body = if responses {
         converted = crate::responses::to_request(body)?;
@@ -729,7 +783,7 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
         .args(["-sS", "-m", "300", "-X", "POST", &url])
         .args(["-H", "Content-Type: application/json"])
         .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
-        .args(["-H", &format!("Authorization: Bearer {key}")])
+        .args(["-H", bearer.arg()])
         .args(["--data-binary", "@-"])
         .arg("-w")
         .arg("\n%{http_code}")
@@ -807,7 +861,7 @@ fn stream_once(
     let wired = for_provider(base_url, body);
     let body = wired.as_str();
     use std::io::{BufRead, Write};
-    let key = bearer(base_url, api_key_env, body)?;
+    let bearer = Bearer::new(&bearer(base_url, api_key_env, body)?);
     let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
     let body = crate::sse::with_stream_flag(body);
     let body = if responses { crate::responses::to_request(&body)? } else { body };
@@ -823,7 +877,7 @@ fn stream_once(
         .args(["-H", "Content-Type: application/json"])
         .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
         .args(["-H", "Accept: text/event-stream"])
-        .args(["-H", &format!("Authorization: Bearer {key}")])
+        .args(["-H", bearer.arg()])
         .args(["--data-binary", "@-"])
         .arg("-w")
         .arg("\n%{http_code}")
@@ -949,6 +1003,22 @@ mod tests {
             *self.seen_body.borrow_mut() = body.into();
             Ok(r#"{"choices":[]}"#.into())
         }
+    }
+
+    #[test]
+    fn the_key_is_named_by_file_not_written_on_the_command_line() {
+        let b = Bearer::new("sk-secret-123");
+        assert!(b.arg().starts_with('@'), "the key went on argv: {}", b.arg());
+        assert!(!b.arg().contains("sk-secret-123"));
+        let file = b.file.clone().expect("a header file");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Authorization: Bearer sk-secret-123\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(b);
+        assert!(!file.exists(), "the file outlived the request");
     }
 
     #[test]

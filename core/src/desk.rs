@@ -164,6 +164,8 @@ impl Desk {
 
     /// Confine `open` to files under these folders (AGENT_MCP_ROOTS).
     pub fn confine_to(&mut self, roots: Vec<PathBuf>) {
+        // The runner too: `export` writes, and is held to the same folders.
+        self.runner.confine(roots.clone());
         self.doors.confine_to(roots);
     }
 
@@ -435,7 +437,22 @@ impl Doors {
     }
 
     fn confined(&self, p: &Path) -> Result<PathBuf, String> {
-        let full = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        // A path that cannot be resolved (the file is not there) is judged
+        // with its `..` taken out, or `root\..\elsewhere\x.xlsx` would pass
+        // for a path under the root.
+        let full = std::fs::canonicalize(p).unwrap_or_else(|_| {
+            let mut clean = PathBuf::new();
+            for c in p.components() {
+                match c {
+                    std::path::Component::ParentDir => {
+                        clean.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    other => clean.push(other),
+                }
+            }
+            clean
+        });
         if self.roots.is_empty() || self.roots.iter().any(|r| full.starts_with(r)) {
             return Ok(p.to_path_buf());
         }
@@ -507,7 +524,12 @@ impl Doors {
         for h in &open {
             let about = self.docs.iter().find(|d| &d.handle == h).map(|d| d.summary.clone()).unwrap_or_default();
             let live = if runner.is_live(h) { "" } else { " (not connected to a live app)" };
-            out.push_str(&format!("  {h}{live}{}\n", if about.is_empty() { String::new() } else { format!(" -- {about}") }));
+            // What a document says about itself (sheet names, its first
+            // paragraph) is the document's text, and fenced like any other.
+            out.push_str(&format!(
+                "  {h}{live}{}\n",
+                if about.is_empty() { String::new() } else { format!(" -- {}", crate::security::fence_user_content(&about)) }
+            ));
         }
         // The selector grammar of each app open, once each: the handle and
         // how to address a part of it, side by side.
@@ -1203,6 +1225,13 @@ mod tests {
         let here = std::env::temp_dir();
         d.confine_to(vec![here.join("syn-allowed-root")]);
         let e = d.open("excel", r"C:\elsewhere\plan.xlsx").unwrap_err();
+        assert!(e.contains("outside the folders"), "{e}");
+        // Nor by climbing out of the root with `..` to a file not there.
+        let root = std::fs::canonicalize(&here).unwrap().join("syn-allowed-root");
+        std::fs::create_dir_all(&root).unwrap();
+        d.confine_to(vec![root.clone()]);
+        let climb = root.join("..").join("elsewhere").join("plan.xlsx");
+        let e = d.open("excel", &climb.to_string_lossy()).unwrap_err();
         assert!(e.contains("outside the folders"), "{e}");
         assert!(log.borrow().connects.is_empty());
     }

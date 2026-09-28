@@ -85,10 +85,14 @@ running with the user's full privileges. It is **off by default**:
 - **A save writes the document to its own file**, when a model calls
   `struct` `save`: a plain Save, never a Save As, so the document never
   moves to another path. It does not stop for approval.
-- **Exports are copies**; the open document keeps its own path.
+- **Exports are copies**; the open document keeps its own path. An export
+  never replaces a file this session did not write (it is refused, and the
+  model is told to pick a new name or ask), a relative path lands in the
+  workspace, and with a workspace or `AGENT_MCP_ROOTS` set it cannot write
+  outside those folders.
 - **`open` is idempotent** and never discards unsaved work.
 - **`AGENT_MCP_ROOTS`** confines which folders an MCP client may open files
-  from. In the console the chat's **workspace** does the same: once set,
+  from and export into. In the console the chat's **workspace** does the same: once set,
   `open` refuses a file outside it and `search` looks nowhere else. The
   model is shown the documents' names, sizes and dates, fenced as untrusted
   like any other result, never their contents.
@@ -100,7 +104,13 @@ running with the user's full privileges. It is **off by default**:
 - **The console** binds `127.0.0.1` only, and accepts a command only when its
   `Origin` header is the console's own page. Browsers cannot forge `Origin`,
   so a web page you visit cannot post commands to it, and requests with no
-  `Origin` are refused.
+  `Origin` are refused. Every request, reads included, must also be
+  addressed to `127.0.0.1` or `localhost` in its `Host` header, which stops
+  a page on a domain re-pointed at this machine (DNS rebinding) from
+  reading the live transcript. A message over 64 KB is refused, not cut.
+- **The console page** escapes everything a model or a document writes
+  before rendering it, quotes included, so a reply cannot add markup or
+  attributes to the page that holds the approve button.
 - **The helpers** listen on named pipes (Unix sockets off Windows) local to
   the machine.
 - **The browser hand** needs a Chromium started with

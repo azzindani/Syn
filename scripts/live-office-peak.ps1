@@ -34,6 +34,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $docs = Join-Path $root 'testbed\docs'
 $out = Join-Path $root 'testbed\out'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+# Exports never replace a file this session did not write, so the last
+# run's copies go first.
+Remove-Item (Join-Path $out 'peak*') -Force -ErrorAction SilentlyContinue
 
 # --- what has to be built ---------------------------------------------------
 $gate = @('core\target\release\mcpgate.exe', 'core\target\debug\mcpgate.exe') |

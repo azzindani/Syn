@@ -958,7 +958,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     }
 
     fn observe(&mut self, call_id: &str, text: &str) {
-        self.msgs.push(Msg::Tool { id: call_id.into(), content: security::truncate_output(text) });
+        self.msgs.push(Msg::Tool { id: call_id.into(), content: security::truncate_result(text) });
     }
 
     /// Wrap a result as untrusted data, flagging injection shapes.

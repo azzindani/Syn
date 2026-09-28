@@ -170,3 +170,17 @@ fn the_cli_sends_a_label_and_a_status_for_every_call() {
         assert!(page.contains(&format!("data-status=\"{status}\"")), "the page has no style for {status:?}");
     }
 }
+
+#[test]
+fn markdown_escapes_every_character_that_can_leave_an_attribute() {
+    // A link's address is written inside href="...". With `"` left alone a
+    // reply holding [x](https://a"onmouseover="...) added an attribute of
+    // its own, and a reply can be steered by text in a document; the page
+    // can send the CLI anything, approvals included.
+    let p = page();
+    let at = p.find("function md(src)").expect("the markdown renderer");
+    let esc = p[at..].lines().find(|l| l.contains("const esc =")).expect("its escaper");
+    for (ch, entity) in [("&", "&amp;"), ("<", "&lt;"), ("\"", "&quot;")] {
+        assert!(esc.contains(entity), "md() does not escape {ch}: {esc}");
+    }
+}

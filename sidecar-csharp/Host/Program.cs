@@ -507,7 +507,9 @@ namespace Syn.Sidecar
                     {
                         for (var i = 1; i <= (int)app.Documents.Count; i++)
                             if ((string)app.Documents[i].Name == name)
-                                return Ok($"already open: {name}");
+                                return SameFile((string)app.Documents[i].FullName, full)
+                                    ? Ok($"already open: {name}")
+                                    : Fail(OtherCopy(name, (string)app.Documents[i].FullName, "Word"));
                         app.Visible = true;
                         app.Documents.Open(full);
                         OpenedHere.Add(name);
@@ -517,7 +519,9 @@ namespace Syn.Sidecar
                     {
                         for (var i = 1; i <= (int)app.Workbooks.Count; i++)
                             if ((string)app.Workbooks[i].Name == name)
-                                return Ok($"already open: {name}");
+                                return SameFile((string)app.Workbooks[i].FullName, full)
+                                    ? Ok($"already open: {name}")
+                                    : Fail(OtherCopy(name, (string)app.Workbooks[i].FullName, "Excel"));
                         app.Visible = true;
                         var note = "";
                         if (Path.GetExtension(full).Equals(".csv", StringComparison.OrdinalIgnoreCase))
@@ -531,7 +535,9 @@ namespace Syn.Sidecar
                     {
                         for (var i = 1; i <= (int)app.Presentations.Count; i++)
                             if ((string)app.Presentations[i].Name == name)
-                                return Ok($"already open: {name}");
+                                return SameFile((string)app.Presentations[i].FullName, full)
+                                    ? Ok($"already open: {name}")
+                                    : Fail(OtherCopy(name, (string)app.Presentations[i].FullName, "PowerPoint"));
                         // MsoTriState, not a boolean: PowerPoint differs
                         // from the other two here and the boolean form
                         // fails the cast rather than the call.
@@ -545,6 +551,27 @@ namespace Syn.Sidecar
                 }
             });
         }
+
+        // A document is addressed by its file name (app:file:unit), so
+        // "already open" was decided by name alone: asked to open
+        // C:\b\report.xlsx while the person had C:\a\report.xlsx open, the
+        // helper said "already open" and every call after it went to the
+        // person's copy in C:\a. Excel cannot hold two workbooks with one
+        // name at all. The full paths are compared now, and a different
+        // file of the same name is refused with where the open one lives.
+        // A synced document reports a web address as its FullName, which
+        // no local path equals: that case keeps the old answer.
+        private static bool SameFile(string openFull, string full)
+        {
+            if (openFull.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return true;
+            try { return string.Equals(Path.GetFullPath(openFull), full, StringComparison.OrdinalIgnoreCase); }
+            catch { return true; }
+        }
+
+        private static string OtherCopy(string name, string openFull, string appName) =>
+            $"a different {name} is already open in {appName}, from {Path.GetDirectoryName(openFull)}. "
+            + "Syn tells documents apart by name, so it cannot hold both: close that one first, "
+            + "or work on it instead if it is the one meant";
 
         // ---- Word ----
         private static string WordDispatch(dynamic app, string method, string handle, string line, string selector) =>

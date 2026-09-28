@@ -3,7 +3,18 @@
 use std::fmt;
 
 /// Opencode-derived budgets: tool outputs truncate, recent window preserved.
+/// This is the size of a one-line preview: the event feed, and an old
+/// result the loop has pruned.
 pub const TOOL_OUTPUT_MAX_CHARS: usize = 2_000;
+/// The most of one fresh result a model is handed, in characters.
+///
+/// It used to be the preview's 2,000, and a read of 200 cells, or of the
+/// sixty paragraphs Word sends at a time, is several times that: the model
+/// saw the first part, lost the helper's own "read p60:p120 next" at the
+/// end, and re-read the same document in slices -- more steps, more round
+/// trips, for what one call had already fetched. Old results are still cut
+/// back to the preview size by pruning once they stop mattering.
+pub const RESULT_MAX_CHARS: usize = 24_000;
 /// Refuse (never silently truncate) bulk writes over this many cells.
 pub const BULK_CAP_CELLS: usize = 1_000;
 /// Doom-loop gate: N identical consecutive (op, args) calls require confirm.

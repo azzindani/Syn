@@ -627,6 +627,20 @@ pub fn canonical_name(raw: &str) -> String {
     best.unwrap_or(raw).to_string()
 }
 
+/// The first argument a tool's schema does not declare, as a refusal that
+/// names the ones it does. None when all are known, or when the arguments
+/// are not an object at all (that has its own refusal further on).
+fn unknown_field(tool: &str, args: &str) -> Option<String> {
+    let schema = crate::json::parse(spec(tool)?.params).ok()?;
+    let known: Vec<&str> = match schema.get("properties")? {
+        crate::json::Value::Obj(kv) => kv.iter().map(|(k, _)| k.as_str()).collect(),
+        _ => return None,
+    };
+    let crate::json::Value::Obj(given) = crate::json::parse(args).ok()? else { return None };
+    let (bad, _) = given.iter().find(|(k, _)| !known.contains(&k.as_str()))?;
+    Some(format!("{tool}: unknown field {bad:?}; {tool} takes {}", known.join(", ")))
+}
+
 /// An Excel table design by the name Excel gives it, from what a model
 /// writes: `TableStyleMedium9`, `Medium 9`, `medium9` and `Table Style
 /// Medium 9` are all the same design. `none` is a plain table with no
@@ -754,6 +768,25 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
             .and_then(|v| capped(k, v))
     };
 
+    // Unknown keys are refused, never ignored -- the rule the schemas state
+    // with additionalProperties:false and MCP already enforced. Here a
+    // misspelt `styel` or a `sheet` on `write` vanished without a word, and
+    // the call ran as if the model had asked for less than it did.
+    //
+    // Except one: a `search` shaped like struct `find` -- a handle and a
+    // text -- wants words inside a document, not a file on disk, and is
+    // told the call that does that rather than which keys search takes.
+    if tc.name == "search" && field(a, "name").is_none() && (field(a, "handle").is_some() || field(a, "text").is_some()) {
+        return Err(
+            "search looks on disk for files by name. To find text inside an open document, call struct{\"handle\":\"...\",\"verb\":\"find\",\"text\":\"...\"}"
+                .into(),
+        );
+    }
+    let schema_of = if STRUCT_VERBS.contains(&tc.name.as_str()) { "struct" } else { tc.name.as_str() };
+    if let Some(why) = unknown_field(schema_of, a) {
+        return Err(why);
+    }
+
     if tc.name == "shell" {
         return Ok(Action::Shell(ShellRequest {
             program: need("program")?,
@@ -771,15 +804,8 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
         return Ok(Action::Open { app, target: need("path")? });
     }
     if tc.name == "search" {
-        // A call shaped like struct `find` -- a handle and a text -- wants
-        // words inside a document, not a file on disk: say the call that
-        // does that rather than "missing required field name".
-        if field(a, "name").is_none() && (field(a, "handle").is_some() || field(a, "text").is_some()) {
-            return Err(
-                "search looks on disk for files by name. To find text inside an open document, call struct{\"handle\":\"...\",\"verb\":\"find\",\"text\":\"...\"}"
-                    .into(),
-            );
-        }
+        // A call shaped like struct `find` was answered above, before the
+        // unknown-key check could say something less useful about it.
         return Ok(Action::Search { name: need("name")?, folder: opt("folder")?.filter(|f| !f.trim().is_empty()) });
     }
 
@@ -947,6 +973,19 @@ mod tests {
             Action::Doc { call: Call::Struct(StructArgs::Office { verb, args, payload }), .. } => Ok((verb, args, payload)),
             other => panic!("not an office verb: {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused_with_the_keys_that_exist() {
+        let call = |name: &str, args: &str| to_action(&ToolCall { id: "c".into(), name: name.into(), arguments: args.into() });
+        let why = call("write", r#"{"handle":"excel:b.xlsx:data","selector":"data!A1","values":"1","sheet":"data"}"#).unwrap_err();
+        assert!(why.contains("unknown field \"sheet\"") && why.contains("selector"), "{why}");
+        let why = call("format", r#"{"handle":"h","selector":"A1","styel":"bold=1"}"#).unwrap_err();
+        assert!(why.contains("\"styel\""), "{why}");
+        // Every key a schema declares still goes through, including a verb
+        // called by its own name and a struct field named `values`.
+        assert!(call("insertParagraph", r#"{"handle":"word:m.docx:body","text":"x","name":"Heading 1"}"#).is_ok());
+        assert!(call("struct", r#"{"handle":"excel:b.xlsx:d","verb":"pivot","source":"d!A1:C9","rows":"a","values":"b","at":"P!A1"}"#).is_ok());
     }
 
     #[test]

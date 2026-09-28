@@ -46,6 +46,12 @@ jobs:
         env:
           AGENT_PYTHON: /usr/bin/python3
           SYN_REQUIRE_LO: "1"
+      # The browser hand, live: the runner's own Chrome, headless, on a
+      # throwaway profile. SYN_REQUIRE_BROWSER=1 fails rather than skips.
+      - name: live test through mcpgate against a real browser
+        run: /usr/bin/python3 -m unittest discover -s tests -p test_cdp_live.py -v
+        env:
+          SYN_REQUIRE_BROWSER: "1"
 
   # The C# side drives Office through late-bound COM, so almost none of it
   # can run without Office installed -- but all of it has to compile, and

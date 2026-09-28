@@ -426,12 +426,33 @@ impl Doors {
         notes.extend(self.ensure_hand(relay, runner, app)?);
         let handle = new_handle(app, target, unit_for(app));
         self.register(relay, runner, &handle, app)?;
-        let doc = Doc {
-            handle,
-            app: app.into(),
-            summary: join_notes(notes, &format!("matched by {}", if app == "web" { "title or address" } else { "window title" })),
-            sheets: vec![],
+        // A page is looked at once, like a document: "opened" used to be
+        // said for any words at all, matching tab or not, and the failure
+        // came on the next call. Asked now, through the gates, a miss is
+        // refused here with the tabs there are. (Windows are left as they
+        // were: their hand exists only on Windows.)
+        let seen = if app == "web" {
+            let look = runner.run(
+                relay,
+                &handle,
+                "desk:open",
+                crate::ops::Call::Export(crate::ops::ExportArgs { format: "title".into(), path: None, sheet: None }),
+            );
+            match look {
+                Ok(Some(crate::ops::OpOut::Text { detail })) => format!("page: {}", detail.replace('\n', " — ")),
+                Err(e) if e.to_string().contains("no debuggable target") => {
+                    self.unregister(relay, runner, &handle);
+                    return Err(format!(
+                        "no browser tab has {target:?} in its title or address. {}",
+                        e.to_string().split("open targets: ").nth(1).map(|t| format!("The tabs open are: {t}. Use part of one of those.")).unwrap_or_default()
+                    ));
+                }
+                _ => "matched by title or address".to_string(),
+            }
+        } else {
+            "matched by window title".to_string()
         };
+        let doc = Doc { handle, app: app.into(), summary: join_notes(notes, &seen), sheets: vec![] };
         self.remember(doc.clone());
         Ok(doc)
     }

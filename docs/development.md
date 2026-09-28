@@ -43,7 +43,7 @@ What can be proven depends on what the machine has:
 |---|---|---|
 | 1 | nothing | The loop, the parser, the schemas, the gates, and that the Rust and C# sides of the wire agree. `cargo test`, on any OS. |
 | 2 | an API key | How a model behaves over a long run, against Syn's in-memory documents (`attach` without `live`). No formulas and no Office-only verbs. |
-| 2½ | LibreOffice + `python3-uno` | The whole stack live — MCP, `open`, the gates, the wire, the guidance — against a real office engine, on real `.xlsx`/`.docx`/`.pptx`, formulas included. `tests/test_lo_live.py`. |
+| 2½ | LibreOffice + `python3-uno` | The whole stack live — MCP, `open`, the gates, the wire, the guidance — against a real office engine, on real `.xlsx`/`.docx`/`.pptx`, formulas included. `tests/test_lo_live.py`. The browser hand, live against a headless Chromium: `tests/test_cdp_live.py`. |
 | 3 | Windows + Microsoft Office | That the COM calls are right and the documents end up correct. `scripts\live-office-peak.ps1`. |
 
 Tier 2½ runs the real `mcpgate` against `sidecar-lo/lo_host.py`:

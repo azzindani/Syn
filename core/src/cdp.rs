@@ -410,6 +410,41 @@ impl<S: Read + Write> Cdp<S> {
         &self.targets
     }
 
+    /// The target a handle names, asking the browser again when the list
+    /// this hand holds has nothing that matches.
+    ///
+    /// The list was taken once, at connect, and never again. Syn connects
+    /// to a running browser before every turn, so it held whatever tabs
+    /// existed then -- in a live run, one tab whose page had not loaded yet
+    /// and so had no title. Opening "Syn CDP testbed" succeeded and every
+    /// call after it failed with `open targets: [""]`. A tab opened,
+    /// navigated or renamed after Syn connected was out of reach the same
+    /// way. The browser is asked over the socket already open, not by a
+    /// new HTTP request, and only on a miss, so a call that matches costs
+    /// what it always did.
+    fn target_for(&mut self, want: &str) -> std::io::Result<Option<Target>> {
+        if let Some(t) = pick(&self.targets, want) {
+            return Ok(Some(t.clone()));
+        }
+        self.refresh_targets()?;
+        Ok(pick(&self.targets, want).cloned())
+    }
+
+    /// Replace the target list with the browser's own, now.
+    fn refresh_targets(&mut self) -> std::io::Result<()> {
+        let reply = self.call("Target.getTargets", "{}", None)?;
+        let parsed = crate::json::parse(&reply).map_err(|e| other(format!("Target.getTargets: {e}")))?;
+        let Some(crate::json::Value::Arr(infos)) = parsed.get("result").and_then(|r| r.get("targetInfos")) else {
+            return Err(other(format!("Target.getTargets answered without targetInfos: {reply}")));
+        };
+        let s = |v: &crate::json::Value, k: &str| v.get(k).and_then(crate::json::Value::as_str).unwrap_or("").to_string();
+        self.targets = infos
+            .iter()
+            .map(|t| Target { id: s(t, "targetId"), kind: s(t, "type"), title: s(t, "title"), url: s(t, "url") })
+            .collect();
+        Ok(())
+    }
+
     /// Send one command and return the matching reply.
     ///
     /// Events arrive interleaved with replies on the same socket and are
@@ -504,7 +539,7 @@ impl<S: Read + Write + std::fmt::Debug> LiveHand for Cdp<S> {
         if let Call::Export(ExportArgs { format, path: Some(path), .. }) = call
             && format == "png"
         {
-            let Some(target) = pick(&self.targets, file).cloned() else {
+            let Some(target) = self.target_for(file)? else {
                 return Ok(Reply { ok: false, preview: String::new(), error: format!("no target matches {file:?}") });
             };
             let session = self.attach(&target.id)?;
@@ -528,8 +563,11 @@ impl<S: Read + Write + std::fmt::Debug> LiveHand for Cdp<S> {
                 error: format!("{:?} is not supported by the cdp hand", call.op()),
             });
         };
-        let Some(target) = pick(&self.targets, file).cloned() else {
-            let open: Vec<&str> = self.targets.iter().map(|t| t.title.as_str()).take(8).collect();
+        let Some(target) = self.target_for(file)? else {
+            // A tab with no title yet (still loading, or a bare document) is
+            // named by its address: `[""]` told a model nothing it could use.
+            let open: Vec<&str> =
+                self.targets.iter().map(|t| if t.title.is_empty() { t.url.as_str() } else { t.title.as_str() }).take(8).collect();
             return Ok(Reply {
                 ok: false,
                 preview: String::new(),
@@ -873,14 +911,46 @@ mod tests {
         assert!(r.error.contains("no element matches"), "{}", r.error);
     }
 
+    /// A `Target.getTargets` reply listing what the fake browser has open.
+    fn listing(id: u64, tabs: &[(&str, &str)]) -> String {
+        let infos: Vec<String> = tabs
+            .iter()
+            .map(|(tid, title)| format!(r#"{{"targetId":"{tid}","type":"page","title":"{title}","url":"http://x/"}}"#))
+            .collect();
+        format!(r#"{{"id":{id},"result":{{"targetInfos":[{}]}}}}"#, infos.join(","))
+    }
+
     #[test]
     fn an_unknown_target_is_refused_before_anything_is_sent() {
-        let (mut c, w) = cdp(&[]);
+        // Nothing is attached to or run on a page the handle cannot name.
+        // The browser is asked which tabs it has -- the list held may be
+        // stale -- and that is all that goes on the wire.
+        let reply = listing(1, &[("T1", "Visual Studio Code")]);
+        let (mut c, w) = cdp(&[&reply]);
         let r = c.dispatch_call(&Call::Read(ReadArgs { selector: "h1".into() }), "code:photoshop:#e").unwrap();
         assert!(!r.ok);
         assert!(r.error.contains("no debuggable target"));
         assert!(r.error.contains("Visual Studio Code"), "say what IS open");
-        assert!(sent(&w).is_empty(), "nothing may go on the wire for a handle we cannot resolve");
+        let msgs = sent(&w);
+        assert_eq!(msgs.len(), 1, "{msgs:?}");
+        assert!(msgs[0].contains("Target.getTargets"), "{msgs:?}");
+    }
+
+    #[test]
+    fn a_tab_opened_after_connecting_is_found() {
+        // Live: the list was taken at connect, when the page had no title
+        // yet, and every call after that failed with `open targets: [""]`.
+        let reply = listing(1, &[("NEW", "Quarterly report")]);
+        let (mut c, w) = cdp(&[
+            &reply,
+            "{\"id\":2,\"result\":{\"sessionId\":\"S1\"}}",
+            "{\"id\":3,\"result\":{\"result\":{\"type\":\"string\",\"value\":\"Q3\"}}}",
+        ]);
+        let r = c.dispatch_call(&Call::Read(ReadArgs { selector: "h1".into() }), "web:Quarterly report::doc").unwrap();
+        assert!(r.ok, "{}", r.error);
+        assert_eq!(r.preview, "Q3");
+        let msgs = sent(&w);
+        assert!(msgs[1].contains("Target.attachToTarget") && msgs[1].contains("NEW"), "{msgs:?}");
     }
 
     #[test]

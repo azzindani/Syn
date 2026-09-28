@@ -103,7 +103,8 @@ There are three tiers (`docs/development.md`):
    `libreoffice-calc libreoffice-writer libreoffice-impress`, and has
    `python3-uno`; run it with `/usr/bin/python3`). It proves everything
    above the C#, formulas included. Use it for any change to MCP, the desk,
-   the wire or the guidance.
+   the wire or the guidance. `tests/test_cdp_live.py` does the same for the
+   browser hand, against the sandbox's headless Chromium.
 3. Windows with Office installed, the only way to prove a COM call is
    right.
 

@@ -209,10 +209,10 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
             ),
             (!style.is_empty()).then_some(style.as_str()),
         )),
-        Call::Struct(StructArgs::Table { source, name }) => Some(envelope(
+        Call::Struct(StructArgs::Table { source, name, style }) => Some(envelope(
             "table",
             handle,
-            &format!("{{\"source\":\"{}\",\"name\":\"{}\"}}", esc(source), esc(name)),
+            &format!("{{\"source\":\"{}\",\"name\":\"{}\",\"style\":\"{}\"}}", esc(source), esc(name), esc(style)),
             None,
         )),
         Call::Struct(StructArgs::Name { name, at }) => Some(envelope(
@@ -482,6 +482,16 @@ mod tests {
 
     fn sent(w: &Rc<RefCell<Vec<u8>>>) -> String {
         String::from_utf8(w.borrow().clone()).unwrap()
+    }
+
+    #[test]
+    fn a_table_carries_its_design_to_the_helper() {
+        let e = envelope_for(
+            &Call::Struct(StructArgs::Table { source: "data!A1:C9".into(), name: "Sales".into(), style: "TableStyleMedium9".into() }),
+            "excel:b.xlsx:data",
+        )
+        .unwrap();
+        assert!(e.contains(r#""method":"table""#) && e.contains(r#""style":"TableStyleMedium9""#), "{e}");
     }
 
     #[test]

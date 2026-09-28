@@ -100,7 +100,13 @@ fn streamed_call(id: &str, tool: &str, args: &str) -> String {
 
 /// Feed the CLI these lines and return everything it printed.
 fn cli(p: &Provider, lines: &[&str]) -> String {
-    let home = std::env::temp_dir().join(format!("syn-cli-turns-{}-{}", std::process::id(), p.url.len()));
+    // One folder per provider, by its port: the URL's length, used before,
+    // is the same for every test running in parallel, so one test's
+    // cleanup deleted the folder under another's running CLI -- which,
+    // once the API key was handed to curl as a file there, failed that
+    // request one run in three.
+    let port = p.url.rsplit(':').next().unwrap_or("0").trim_end_matches('/').to_string();
+    let home = std::env::temp_dir().join(format!("syn-cli-turns-{}-{port}", std::process::id()));
     let mut child = Command::new(env!("CARGO_BIN_EXE_cli"))
         .env("AGENT_ENV_FILE", home.join("none.env"))
         .env("AGENT_HOME", &home)

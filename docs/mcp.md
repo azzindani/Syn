@@ -93,7 +93,7 @@ up. The server is written for that model:
 | Variable | Effect |
 |---|---|
 | `AGENT_MCP_APPS` | Only these apps, e.g. `excel,word`. |
-| `AGENT_MCP_ROOTS` | `open` only takes files under these folders (`;`-separated). |
+| `AGENT_MCP_ROOTS` | `open` only takes files under these folders, and `export` only writes there (`;`-separated). |
 | `AGENT_MCP_LAUNCH` | `0`: connect only to helpers that are already running. |
 | `AGENT_OFFICE_HOST`, `AGENT_UIA_HOST` | Where the helpers are, if not in this repository's Release build. |
 | `AGENT_VBA` | `1` to allow `macro` for this server's session. |

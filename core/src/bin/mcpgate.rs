@@ -10,7 +10,7 @@
 //! likes -- for the pipe names, the browser address and these:
 //!
 //!   AGENT_MCP_APPS    only these apps, e.g. excel,word (default: all)
-//!   AGENT_MCP_ROOTS   only open files under these folders, `;`-separated
+//!   AGENT_MCP_ROOTS   only open files under, and export into, these folders, `;`-separated
 //!   AGENT_MCP_LAUNCH  0 to connect only to helpers already running
 //!   AGENT_OFFICE_HOST / AGENT_UIA_HOST   where the helpers are, if not
 //!                     in this repository's own Release build

@@ -3,7 +3,28 @@
 Syn drives Word, Excel and PowerPoint through COM, which needs Windows and a
 desktop install of Microsoft Office.
 
-## Requirements
+## From the package
+
+The quickest way, and the only one that needs no toolchain: download
+`Syn-<version>-setup.exe` from the repository's Releases (or, for an
+unreleased build, the `syn-windows` artifact of any CI run) and run it. It
+installs for the current user into `%LOCALAPPDATA%\Programs\Syn` with no
+administrator prompt, adds Syn to the Start menu and the desktop, and
+appears in Settings > Apps to uninstall; uninstalling asks before it
+deletes your chats and saved keys. The same files come as
+`Syn-<version>-win-x64.zip` for anyone who would rather unzip and
+double-click `Syn.cmd`. The installer is not code-signed yet, so Windows
+SmartScreen warns the first time: More info, then Run anyway. The package is Office only: the console, the CLI, the MCP server
+and a self-contained Office helper, which carries its own .NET. It needs
+Windows 10 or 11 and desktop Office, nothing else.
+
+To build them yourself: `powershell -File scripts\package.ps1` (needs Rust,
+the .NET 8 SDK, and [NSIS](https://nsis.sourceforge.io) for the installer),
+which writes both to `dist\`. `scripts\installer.nsi` is the installer.
+
+## From source
+
+### Requirements
 
 - Windows 10 or 11
 - Microsoft Office desktop apps (Microsoft 365 or a perpetual version)
@@ -14,7 +35,7 @@ desktop install of Microsoft Office.
 - For the model-driven agent: an API key for an OpenAI-compatible provider
   (OpenRouter by default). Not needed to use Syn from an MCP client.
 
-## Build
+### Build
 
 From the repository root:
 
@@ -27,7 +48,7 @@ dotnet build -c Release sidecar-csharp\Host   # office-host.exe (Office)
 dotnet build -c Release sidecar-csharp\Uia    # uia-host.exe (any window)
 ```
 
-## Configure
+### Configure
 
 ```
 copy .env.example .env
@@ -37,11 +58,11 @@ Then edit `.env`:
 
 ```
 AGENT_API_KEY=sk-or-v1-...          # for the console and the CLI's agent
-AGENT_PIPE_EXCEL=hand-excel
-AGENT_PIPE_WORD=hand-word
-AGENT_PIPE_PPT=hand-powerpoint
-AGENT_PIPE_UIA=hand-uia
+AGENT_PIPE_UIA=hand-uia             # only to drive native windows too
 ```
+
+The Office pipes default to `hand-excel`, `hand-word` and `hand-powerpoint`;
+set one to `off` to stop offering that application.
 
 Everything else has a working default; see [configuration.md](configuration.md).
 The key can instead be pasted into the console's Settings (the menu on the

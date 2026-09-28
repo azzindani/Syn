@@ -115,6 +115,33 @@ class LiveAgainstLibreOffice(unittest.TestCase):
     def value(self, text):
         return re.search(r"= (.*)\n</user_content>", text).group(1)
 
+    def test_a_file_of_the_same_name_from_another_folder_is_refused_not_mistaken(self):
+        # Handles tell documents apart by name. "already open" used to be
+        # decided by name alone, so a second sales.xlsx from another folder
+        # came back as the first one, and every call went to the wrong file.
+        self.ok("open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
+        other = os.path.join(self.out, "elsewhere")
+        os.makedirs(other, exist_ok=True)
+        shutil.copy(os.path.join(self.docs, "sales.xlsx"), other)
+        err, text = self.call("open", app="excel", path=os.path.join(other, "sales.xlsx"))
+        self.assertTrue(err, text)
+        self.assertIn("a different sales.xlsx is already open", text)
+
+    def test_an_export_never_replaces_a_file_it_did_not_write(self):
+        opened = self.ok("open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
+        h = re.search(r"Handle: (\S+)", opened).group(1)
+        theirs = os.path.join(self.out, "theirs.xlsx")
+        with open(theirs, "wb") as f:
+            f.write(b"the person's own")
+        err, text = self.call("export", handle=h, format="xlsx", path=theirs)
+        self.assertTrue(err, text)
+        self.assertIn("already exists", text)
+        with open(theirs, "rb") as f:
+            self.assertEqual(f.read(), b"the person's own")
+        err, text = self.call("export", handle=h, format="xlsx", path="/tmp/syn-outside-the-roots.xlsx")
+        self.assertTrue(err, text)
+        self.assertIn("outside the folders", text)
+
     def test_a_workbook_is_opened_computed_and_saved(self):
         opened = self.ok("open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
         self.assertIn("sheets: data, Q3 sales", opened)

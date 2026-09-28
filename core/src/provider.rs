@@ -383,7 +383,10 @@ pub fn explain_error(status: u16, body: &str) -> String {
         403 if note.contains("free tier can only be used from within OpenCode") => format!(
             "rejected ({status}): {note}. OpenCode keeps this free model to its own app: pick another model tagged free, or set AGENT_API_KEY_OPENCODE."
         ),
-        401 | 403 => format!("rejected ({status}): {note}. Check AGENT_API_KEY."),
+        // Where the key lives depends on how Syn was started: Settings in
+        // the console, an AGENT_API_KEY* line in .env for a slot. Naming one
+        // variable sent console users to a file they had never opened.
+        401 | 403 => format!("rejected ({status}): {note}. The provider refused the API key: replace it in Settings, or in .env (AGENT_API_KEY, or the slot's own AGENT_API_KEY_*)."),
         // OpenCode serves some models only on another wire format (its
         // /messages or /responses), and says so this way when asked for one
         // over /chat/completions, the one format Syn speaks.
@@ -701,6 +704,60 @@ fn bearer(base_url: &str, api_key_env: &str, body: &str) -> Result<String, Strin
     Err(format!("no credential for {base_url}: set {api_key_env} or add it to .agent/auth.json"))
 }
 
+/// The Authorization header, where curl reads it from.
+///
+/// It went on curl's command line, and a command line is readable by other
+/// processes on the machine -- on Linux by every user -- for as long as the
+/// request runs, which for a streamed reply is minutes. The catalog already
+/// kept its key off argv. `-H @file` names a file instead: one only this
+/// user can read, in Syn's own data folder beside the saved keys, removed
+/// when the request is over. If it cannot be written the header goes on the
+/// command line as before, because a request that cannot be sent at all is
+/// the worse failure.
+struct Bearer {
+    file: Option<std::path::PathBuf>,
+    arg: String,
+}
+
+impl Bearer {
+    fn new(key: &str) -> Self {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::chats::home();
+        let file = dir.join(format!(".bearer-{}-{n}", std::process::id()));
+        let line = format!("Authorization: Bearer {key}\n");
+        match std::fs::create_dir_all(&dir).and_then(|_| write_private(&file, &line)) {
+            Ok(()) => Self { arg: format!("@{}", file.display()), file: Some(file) },
+            Err(_) => Self { file: None, arg: format!("Authorization: Bearer {key}") },
+        }
+    }
+
+    fn arg(&self) -> &str {
+        &self.arg
+    }
+}
+
+impl Drop for Bearer {
+    fn drop(&mut self) {
+        if let Some(f) = &self.file {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+}
+
+/// A new file only this user may read. Never over an existing one.
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)?.write_all(text.as_bytes())
+}
+
 /// Returns (http_status, response_body).
 fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> Result<(u16, String), String> {
     let wired = for_provider(base_url, body);
@@ -710,7 +767,7 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
     // row in a file rather than a new env var invented for it -- and an
     // OAuth token that has expired is skipped rather than sent, because a
     // stale token answers 401 and reads exactly like a bad key.
-    let key = bearer(base_url, api_key_env, body)?;
+    let bearer = Bearer::new(&bearer(base_url, api_key_env, body)?);
     let converted;
     let body = if responses {
         converted = crate::responses::to_request(body)?;
@@ -719,14 +776,17 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
         body
     };
     let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
-    let out = std::process::Command::new("curl")
+    let mut cmd = std::process::Command::new("curl");
+    // A CLI killed mid-request must not leave curl waiting out its timeout.
+    crate::tether::bind(&mut cmd);
+    let out = cmd
         // Five minutes: a reply that is not streamed arrives all at once, and a
         // model that thinks first used to be cut off at sixty seconds and
         // reported as "no HTTP response".
         .args(["-sS", "-m", "300", "-X", "POST", &url])
         .args(["-H", "Content-Type: application/json"])
         .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
-        .args(["-H", &format!("Authorization: Bearer {key}")])
+        .args(["-H", bearer.arg()])
         .args(["--data-binary", "@-"])
         .arg("-w")
         .arg("\n%{http_code}")
@@ -737,6 +797,7 @@ fn post_once(base_url: &str, api_key_env: &str, body: &str, responses: bool) -> 
         .map_err(|e| format!("curl spawn failed: {e}"))?;
     use std::io::Write;
     let mut child = out;
+    crate::tether::adopt(&child);
     // A curl that died early (bad URL, TLS failure) closes stdin, so the
     // write fails with BrokenPipe. That is not the interesting error: the
     // reason is on stderr, so keep going and report that instead.
@@ -803,12 +864,15 @@ fn stream_once(
     let wired = for_provider(base_url, body);
     let body = wired.as_str();
     use std::io::{BufRead, Write};
-    let key = bearer(base_url, api_key_env, body)?;
+    let bearer = Bearer::new(&bearer(base_url, api_key_env, body)?);
     let url = format!("{base_url}/{}", if responses { "responses" } else { "chat/completions" });
     let body = crate::sse::with_stream_flag(body);
     let body = if responses { crate::responses::to_request(&body)? } else { body };
     let idle = stream_idle_secs().to_string();
-    let mut child = std::process::Command::new("curl")
+    let mut cmd = std::process::Command::new("curl");
+    // Streams run to half an hour; one must not outlive the CLI that asked.
+    crate::tether::bind(&mut cmd);
+    let mut child = cmd
         // -N: hand each chunk over as it arrives instead of filling a buffer
         // first. --speed-limit/--speed-time: fewer than 1 byte a second for
         // `idle` seconds is a dead connection.
@@ -816,7 +880,7 @@ fn stream_once(
         .args(["-H", "Content-Type: application/json"])
         .args(identity_headers(base_url).iter().flat_map(|h| ["-H".to_string(), h.clone()]))
         .args(["-H", "Accept: text/event-stream"])
-        .args(["-H", &format!("Authorization: Bearer {key}")])
+        .args(["-H", bearer.arg()])
         .args(["--data-binary", "@-"])
         .arg("-w")
         .arg("\n%{http_code}")
@@ -825,6 +889,7 @@ fn stream_once(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("curl spawn failed: {e}"))?;
+    crate::tether::adopt(&child);
     // curl reads all of `@-` before it sends anything, so the body is
     // written and closed before the first byte of the reply is read. A
     // BrokenPipe means curl died early; its reason is on stderr.
@@ -841,6 +906,13 @@ fn stream_once(
     let mut code = String::new();
     let mut total = 0usize;
     let mut oversized = false;
+    // The stream said it was done. Nothing after that is the reply, and
+    // waiting for the connection to close is waiting on the host: one that
+    // keeps it open (keep-alive, a proxy, a gateway flushing late) held
+    // every turn until it let go -- measured, a 2-second reply took 22 with
+    // the connection held 20 seconds past `[DONE]`, and a run pays that on
+    // every step.
+    let mut ended = false;
     let out = child.stdout.take();
     // A stop pressed while the model is still writing: the read below is
     // blocked on curl and cannot look for it, so a watcher ends curl, the
@@ -892,6 +964,13 @@ fn stream_once(
                 fold.line(&line, &mut |k, t| th.push(k, t));
             }
             th.tick();
+            if if responses { rfold.ended() } else { fold.ended() } {
+                ended = true;
+                if let Ok(mut c) = child.lock() {
+                    let _ = c.kill();
+                }
+                break;
+            }
         }
         th.flush();
     }
@@ -909,7 +988,9 @@ fn stream_once(
         return Err(format!("the reply passed {} MB and was refused", MAX_REPLY >> 20));
     }
     let stderr = String::from_utf8_lossy(&res.stderr).trim().to_string();
-    let code: u16 = code.trim().parse().unwrap_or(0);
+    // A stream that finished was a 200: an error answers with a body, not
+    // with events, and curl -- stopped here -- never printed its status.
+    let code: u16 = if ended { 200 } else { code.trim().parse().unwrap_or(0) };
     // As in `send_via_curl`: 000 is no HTTP response at all, and the reason
     // only exists on stderr. A stream that went quiet past the idle limit
     // lands here too, as curl's "Operation too slow".
@@ -941,6 +1022,52 @@ mod tests {
             *self.seen_body.borrow_mut() = body.into();
             Ok(r#"{"choices":[]}"#.into())
         }
+    }
+
+    #[test]
+    fn a_finished_stream_ends_the_turn_even_while_the_host_holds_the_connection() {
+        // Measured: with the connection held 20 seconds past `[DONE]`, a
+        // 2-second reply took 22, on every step of a run.
+        use std::io::{Read as _, Write as _};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n\
+                  data: {\"choices\":[{\"delta\":{\"content\":\"pineapple\"}}]}\n\n\
+                  data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+                  data: [DONE]\n\n",
+            );
+            let _ = s.flush();
+            std::thread::sleep(std::time::Duration::from_secs(20));
+        });
+        // SAFETY: a variable no other test reads or writes.
+        unsafe { std::env::set_var("SYN_TEST_DONE_KEY", "k") };
+        let t0 = std::time::Instant::now();
+        let body = chat_body("m", route(TaskKind::Routine), &[Msg::User("hi".into())], None);
+        let (code, reply) = stream_once(&format!("http://{at}"), "SYN_TEST_DONE_KEY", &body, &mut |_, _| {}, false).unwrap();
+        assert_eq!(code, 200);
+        assert!(reply.contains("pineapple"), "{reply}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(8), "waited {:?} for a host that was done", t0.elapsed());
+    }
+
+    #[test]
+    fn the_key_is_named_by_file_not_written_on_the_command_line() {
+        let b = Bearer::new("sk-secret-123");
+        assert!(b.arg().starts_with('@'), "the key went on argv: {}", b.arg());
+        assert!(!b.arg().contains("sk-secret-123"));
+        let file = b.file.clone().expect("a header file");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Authorization: Bearer sk-secret-123\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(b);
+        assert!(!file.exists(), "the file outlived the request");
     }
 
     #[test]

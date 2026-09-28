@@ -18,8 +18,17 @@ cd core && cargo build --bins
 cd ../tests/ui && npm install && npm test
 ```
 
-See `tests/ui/README.md` for the specs, and `node showcase.mjs` for
-screenshots of every console state in light and dark, desktop and phone.
+See `tests/ui/README.md` for the specs, `node showcase.mjs` for
+screenshots of every console state in light and dark, desktop and phone,
+and `npm run audit` there for a PASS/FAIL audit of how the console behaves.
+
+Two more checks run real processes, and are run by hand rather than in CI
+(`tests/dev/README.md`):
+
+```
+python3 tests/dev/turn.py        # a turn ends with its stream; the API key stays off command lines
+python3 tests/dev/leftovers.py   # nothing is left running when Syn is killed mid-work
+```
 
 CI (`.github/workflows/ci.yml`) runs clippy and the Rust tests on Linux,
 macOS and Windows; builds both C# helpers; parses every PowerShell script;
@@ -34,7 +43,7 @@ What can be proven depends on what the machine has:
 |---|---|---|
 | 1 | nothing | The loop, the parser, the schemas, the gates, and that the Rust and C# sides of the wire agree. `cargo test`, on any OS. |
 | 2 | an API key | How a model behaves over a long run, against Syn's in-memory documents (`attach` without `live`). No formulas and no Office-only verbs. |
-| 2½ | LibreOffice + `python3-uno` | The whole stack live — MCP, `open`, the gates, the wire, the guidance — against a real office engine, on real `.xlsx`/`.docx`/`.pptx`, formulas included. `tests/test_lo_live.py`. |
+| 2½ | LibreOffice + `python3-uno` | The whole stack live — MCP, `open`, the gates, the wire, the guidance — against a real office engine, on real `.xlsx`/`.docx`/`.pptx`, formulas included. `tests/test_lo_live.py`. The browser hand, live against a headless Chromium: `tests/test_cdp_live.py`. |
 | 3 | Windows + Microsoft Office | That the COM calls are right and the documents end up correct. `scripts\live-office-peak.ps1`. |
 
 Tier 2½ runs the real `mcpgate` against `sidecar-lo/lo_host.py`:

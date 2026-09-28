@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "audit": "node audit.mjs",
+    "showcase": "node showcase.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0"

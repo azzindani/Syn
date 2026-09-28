@@ -14,6 +14,7 @@
 
 - [Architecture](architecture.md) — how a call travels, the components, the design rules.
 - [Development](development.md) — building, the test tiers, adding a capability.
+- [v0.1.0 release checklist](release-checklist.md) — what to prove on Windows with Office before the tag.
 - [Design notes](design/README.md) — background: studies of other projects and the harness/tools split.
 
 Component notes live beside the code: `sidecar-lo/README.md` (the

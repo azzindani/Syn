@@ -37,6 +37,10 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => !!window.live);
   await page.waitForFunction(() => window.live.source !== null || window.live.sse, null, { timeout: 15_000 });
   await page.evaluate(() => window.live.quiet());
+  // The "add an API key" notice depends on this machine's .env, not on the
+  // page: the banner specs below count banners, and failed on any machine
+  // without a key.
+  await page.evaluate(() => window.live.banner("nokey", null));
 });
 
 test("one dial moves every colour, and no component knows about it", async ({ page }) => {
@@ -90,7 +94,7 @@ test("activity outranks the error behind it", async ({ page }) => {
   let shown = await page.evaluate(() => window.live.banners);
   expect(shown).toHaveLength(1);
   expect(shown[0].title).toBe("Working");
-  await expect(page.locator("#peek")).toHaveText("2 more");
+  await expect(page.locator("#peek")).toHaveText("2 more notices");
 
   await page.locator("#peek").click();
   shown = await page.evaluate(() => window.live.banners);
@@ -196,6 +200,28 @@ test("while a run is going the send button is Stop, and it goes back after", asy
   await expect(page.locator("#hint")).not.toContainText("working");
   await say("ANSWER done");
   await expect(btn).toHaveAttribute("aria-label", "Send");
+});
+
+test("send is off until there is something to send, and the pill says when Syn is working", async ({ page }) => {
+  // A bright send button over an empty box invited a click that did
+  // nothing; and the pill read "Ready" through a whole run.
+  const btn = page.locator("#send");
+  const box = page.locator("#box");
+  await box.fill("");
+  await expect(btn).toBeDisabled();
+  await box.fill("open the budget");
+  await expect(btn).toBeEnabled();
+  await box.fill("");
+  const say = (l) => page.evaluate((x) => window.live.step(x), l);
+  await say("RECEIPT say model=vendor/x open=0");
+  await expect(page.locator("#hands .lbl")).toHaveText("Working");
+  await say("ANSWER done");
+  await expect(page.locator("#hands .lbl")).not.toHaveText("Working");
+});
+
+test("settings are one click away from the sidebar", async ({ page }) => {
+  await page.locator("#setgear").click();
+  await expect(page.locator("#settings")).toBeVisible();
 });
 
 test("the step budget stays with the model and is not counted down beside the composer", async ({ page }) => {

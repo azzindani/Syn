@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Syn</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%23a855f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M16 7l2.2 6.8L25 16l-6.8 2.2L16 25l-2.2-6.8L7 16l6.8-2.2z' fill='%23fff'/%3E%3C/svg%3E">
 <script>
 // Before first paint, so a dark-mode user never sees a white flash. The
 // page resolves "system" to light or dark itself rather than leaning on a
@@ -240,6 +241,12 @@ kbd{display:inline-block;min-width:1.5em;padding:0 5px;border:1px solid var(--bo
   font-size:11.5px;color:var(--muted-foreground);border-top:1px solid var(--border)}
 #sidefoot i{width:7px;height:7px;border-radius:50%;background:var(--ok);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+/* Settings in plain sight. It lived only inside the status menu behind the
+   "Ready" pill, where nobody looks for API keys, and the one other way in
+   was a banner that can be dismissed. */
+#setgear{margin-left:auto;width:28px;height:28px;border-radius:8px;color:var(--muted-foreground);
+  display:grid;place-items:center;transition:background .12s,color .12s}
+#setgear:hover{background:var(--accent);color:var(--foreground)}
 #sidefoot.down i{background:var(--error-foreground);box-shadow:0 0 0 3px var(--error-surface)}
 
 /* ---------------- top bar ---------------- */
@@ -502,6 +509,10 @@ body.busy #hands .dots,body.running #hands .dots{display:inline-flex}
   border:1px solid var(--border);border-radius:99px;background:var(--card);color:var(--muted-foreground);
   font-size:12.5px;transition:border-color .12s,color .12s}
 .pick:hover,.pick:focus-within{border-color:var(--input);color:var(--foreground)}
+/* The select inside the thinking pill has its outline off (it would draw
+   inside the pill); the pill carries the keyboard ring instead. Without it
+   tabbing onto the select showed nothing at all. */
+.pick:has(#think:focus-visible){outline:2px solid var(--ring);outline-offset:2px}
 #think{height:28px;max-width:12rem;padding:0 20px 0 0;border:0;outline:0;background:none;appearance:none;
   -webkit-appearance:none;font-size:12.5px;font-weight:500;color:inherit;cursor:pointer}
 .pick .caret{position:absolute;right:8px;pointer-events:none}
@@ -696,6 +707,12 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   #comp,#hint{max-width:none}#dock{padding:0 12px 12px}
   .turn{padding-left:0}.turn::before,.turn::after{display:none}
   #hands .lbl{display:none}
+  /* Fingers, not pointers: 30px controls were below any touch guideline. */
+  #toggle{width:40px;height:40px}
+  .pick{height:36px}
+  #think{height:34px}
+  #send{width:40px;height:40px}
+  #setgear{width:40px;height:40px}
   .pill.model{display:none}
   /* Still anchored to the composer, not fixed: its backdrop-filter makes
      it the containing block, so a fixed panel landed below the screen. */
@@ -799,14 +816,15 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
 </style></head>
 
 <body>
-<aside id="side">
+<aside id="side" tabindex="-1">
   <div id="brand">
     <span class="logo" data-icon="spark"></span>
     <span><b>Syn</b><small>Works in the apps you have open</small></span>
   </div>
   <button id="new" type="button"><span class="plus" data-icon="plus"></span>New chat</button>
   <div id="chats"></div>
-  <div id="sidefoot"><i></i><span>Running on this computer only</span></div>
+  <div id="sidefoot"><i></i><span>Running on this computer only</span
+    ><button id="setgear" type="button" title="Settings: API keys and models" aria-label="Settings" data-icon="key"></button></div>
 </aside>
 <div id="scrim"></div>
 
@@ -944,6 +962,18 @@ function tagged(out, tag) {
 
 // A turn that recovered on another slot is a success, not an error: showing
 // the 429 it walked past would teach the reader to distrust a good answer.
+// A run that stopped, as the one banner in front. A refused key is fixed in
+// Settings, so that banner says so and carries the way there: it used to be
+// a second notice, filed behind "The run stopped" under "1 more notice",
+// where the button that fixes it could not be seen.
+const KEY_REFUSED = /\b(401|403)\b|API key/;
+function stoppedBanner(why) {
+  return KEY_REFUSED.test(why)
+    ? { variant: "error", priority: "urgent", title: "The provider refused the API key", description: why,
+        action: { label: "Open settings", run: () => openSettings() } }
+    : { variant: "error", priority: "urgent", title: "The run stopped", description: why };
+}
+
 function verdict(out) {
   const lines = out.split("\n");
   return {
@@ -1071,7 +1101,12 @@ function md(src) {
   // start of a line, every one of them had already become `&gt;`. With `<`
   // escaped there is no context left in which a lone `>` can open or close
   // anything, so as text it is inert.
-  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  //
+  // `"` is escaped because a link's address goes inside href="...": a
+  // reply holding [x](https://a"onmouseover="...) closed the attribute and
+  // added its own, and a reply can be steered by text in a document. This
+  // page can send the CLI any command, approvals included.
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
   // Fenced code first, so nothing inside it is parsed as anything else.
   const fences = [];
@@ -2237,7 +2272,7 @@ function liveStep(line) {
   }
   if (m) {
     setBanner("busy", null);
-    setBanner("run", { variant: "error", priority: "urgent", title: "The run stopped", description: m[1] });
+    setBanner("run", stoppedBanner(m[1]));
     liveRow(el("div", "fail", m[1]));
     return void liveClose();
   }
@@ -2466,10 +2501,20 @@ async function send() {
     } else if (!r.answered && r.failure && !r.stopped) {
       tl.appendChild(el("div", "fail", r.failure));
     }
+    // The live view raises this banner as the run stops; said again here
+    // for a page with no live view (the poller, a dropped stream).
+    if (!r.answered && r.failure && KEY_REFUSED.test(r.failure)) setBanner("run", stoppedBanner(r.failure));
     await loadChats();
   } catch (e) {
-    tl.appendChild(el("div", "fail", "Console unreachable: " + e.message));
-    $("sidefoot").classList.add("down");
+    // A fetch that never got an answer is the console gone; one that got a
+    // refusal is the console saying no -- a message over 64 KB is a 413 --
+    // and the console is fine. Both used to read "Console unreachable".
+    const gone = e instanceof TypeError;
+    tl.appendChild(el("div", "fail", gone ? "Console unreachable: " + e.message : e.message.replace(/^\d+ /, "")));
+    if (gone) $("sidefoot").classList.add("down");
+    // The message did not reach Syn, so it goes back in the box rather than
+    // being lost: a long paste is the likeliest thing to be refused.
+    if (!box.value.trim()) { box.value = v; box.dispatchEvent(new Event("input")); }
   } finally {
     thinking(false);
     // A turn can attach or lose a hand, so the pill is only honest if it is
@@ -2510,8 +2555,9 @@ async function hands() {
     const names = keys.map(k => (APPS[k] || APPS.other).name);
     // "No apps connected" read as a job left for the person. Nothing being
     // connected yet is simply ready: the first task connects what it needs.
-    p.querySelector(".lbl").textContent = !lines.length ? "Ready"
+    p.dataset.idle = !lines.length ? "Ready"
       : names.length <= 2 ? names.join(" · ") : `${names.length} apps connected`;
+    paintSend();
     p.title = lines.length ? "Live: " + names.join(", ") : "Apps connect by themselves when a task needs them";
     $("sidefoot").classList.remove("down");
   } catch {
@@ -2520,6 +2566,7 @@ async function hands() {
 }
 
 box.addEventListener("input", () => {
+  paintSend();
   box.style.height = "auto";
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + "px";
 });
@@ -2531,12 +2578,24 @@ box.addEventListener("keydown", e => {
 // end between steps; one that cannot hear it -- stuck inside an application
 // that is not answering -- is ended by the console restarting its CLI, and
 // the page reloads onto the same conversation.
+// The pill's word. It said "Ready" through a whole run, beside the
+// breathing dots and a card reading "Working in Word": two signs saying
+// opposite things, and the word is the one a glance reads.
+function paintPill() {
+  const p = $("hands");
+  const working = busy || document.body.classList.contains("running");
+  p.querySelector(".lbl").textContent = working ? "Working" : (p.dataset.idle || "Ready");
+}
+
 function paintSend() {
+  paintPill();
   const stopping = busy || document.body.classList.contains("running");
   const b = $("send");
+  // Nothing typed, nothing to send: a bright send button over an empty box
+  // invited a click that did nothing. Stop is always live.
+  b.disabled = !stopping && !box.value.trim();
   if (b.classList.contains("stop") === stopping && b.firstChild) return;
   b.classList.toggle("stop", stopping);
-  b.disabled = false;
   b.title = stopping ? "Stop" : "Send";
   b.setAttribute("aria-label", stopping ? "Stop" : "Send");
   b.innerHTML = svg(stopping ? "square" : "arrow-up", 17, 2.4);
@@ -2611,6 +2670,7 @@ $("killbtn").onclick = () => { closePop(); run("kill"); };
 $("handsbtn").onclick = () => { closePop(); run("hands"); };
 $("evbtn").onclick = () => { closePop(); run("events"); };
 $("setbtn").onclick = () => { closePop(); openSettings(); };
+$("setgear").onclick = () => openSettings();
 // Collapsed state is a per-viewer convenience, so localStorage is the right
 // home for it — and it must survive the accessor throwing in a private window.
 function setSide(hidden) {
@@ -2728,7 +2788,8 @@ function drawBanners() {
   const shown = bannersOpen ? all : all.slice(0, 1);
   for (const b of shown) host.appendChild(bannerRow(b));
   if (all.length > 1) {
-    const more = el("button", null, bannersOpen ? "Show less" : `${all.length - 1} more`);
+    const n = all.length - 1;
+    const more = el("button", null, bannersOpen ? "Show less" : `${n} more ${n === 1 ? "notice" : "notices"}`);
     more.id = "peek";
     more.type = "button";
     more.setAttribute("aria-expanded", String(bannersOpen));

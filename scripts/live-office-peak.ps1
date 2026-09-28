@@ -34,6 +34,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $docs = Join-Path $root 'testbed\docs'
 $out = Join-Path $root 'testbed\out'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+# Exports never replace a file this session did not write, so the last
+# run's copies go first.
+Remove-Item (Join-Path $out 'peak*') -Force -ErrorAction SilentlyContinue
 
 # --- what has to be built ---------------------------------------------------
 $gate = @('core\target\release\mcpgate.exe', 'core\target\debug\mcpgate.exe') |
@@ -148,6 +151,9 @@ Step 'whole numbers 1..10 on E2:E5' 'struct' @{ handle = $x; verb = 'validate'; 
 Step 'a two-line note on A1' 'struct' @{ handle = $x; verb = 'comment'; selector = 'Sheet1!A1'; text = "first line`nsecond line" } | Out-Null
 Step 'a link on A8' 'struct' @{ handle = $x; verb = 'link'; selector = 'Sheet1!A8'; text = 'https://example.com'; title = 'Example' } | Out-Null
 Step 'format keys: underline, valign, height' 'format' @{ handle = $x; selector = 'Sheet1!A1:C1'; style = 'underline=1;valign=center;height=24' } | Out-Null
+Step 'a designed table over Copied!B2:D6, in one call' 'struct' @{ handle = $x; verb = 'table'; source = 'Copied!B2:D6'; name = 'Regions'; style = 'Medium 9' } -Expect 'TableStyleMedium9' | Out-Null
+Step '  undo: the table is cells again' 'undo' @{ handle = $x } -Expect 'undid' | Out-Null
+Step '  a Word table style is refused for Excel' 'struct' @{ handle = $x; verb = 'table'; source = 'Copied!B2:D6'; name = 'Regions'; style = 'Grid Table 4 - Accent 1' } -Fails -Expect 'TableStyleMedium1-28' | Out-Null
 Step 'hide row 5' 'format' @{ handle = $x; selector = 'Sheet1!5:5'; style = 'hidden=1' } | Out-Null
 Step 'show row 5' 'format' @{ handle = $x; selector = 'Sheet1!5:5'; style = 'hidden=0' } | Out-Null
 Step 'scatter chart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'scatter'; source = 'Sheet1!B1:C5'; at = 'Copied!F2:M16'; title = 'Revenue vs growth' } | Out-Null

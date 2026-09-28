@@ -164,6 +164,8 @@ impl Desk {
 
     /// Confine `open` to files under these folders (AGENT_MCP_ROOTS).
     pub fn confine_to(&mut self, roots: Vec<PathBuf>) {
+        // The runner too: `export` writes, and is held to the same folders.
+        self.runner.confine(roots.clone());
         self.doors.confine_to(roots);
     }
 
@@ -424,18 +426,54 @@ impl Doors {
         notes.extend(self.ensure_hand(relay, runner, app)?);
         let handle = new_handle(app, target, unit_for(app));
         self.register(relay, runner, &handle, app)?;
-        let doc = Doc {
-            handle,
-            app: app.into(),
-            summary: join_notes(notes, &format!("matched by {}", if app == "web" { "title or address" } else { "window title" })),
-            sheets: vec![],
+        // A page is looked at once, like a document: "opened" used to be
+        // said for any words at all, matching tab or not, and the failure
+        // came on the next call. Asked now, through the gates, a miss is
+        // refused here with the tabs there are. (Windows are left as they
+        // were: their hand exists only on Windows.)
+        let seen = if app == "web" {
+            let look = runner.run(
+                relay,
+                &handle,
+                "desk:open",
+                crate::ops::Call::Export(crate::ops::ExportArgs { format: "title".into(), path: None, sheet: None }),
+            );
+            match look {
+                Ok(Some(crate::ops::OpOut::Text { detail })) => format!("page: {}", detail.replace('\n', " — ")),
+                Err(e) if e.to_string().contains("no debuggable target") => {
+                    self.unregister(relay, runner, &handle);
+                    return Err(format!(
+                        "no browser tab has {target:?} in its title or address. {}",
+                        e.to_string().split("open targets: ").nth(1).map(|t| format!("The tabs open are: {t}. Use part of one of those.")).unwrap_or_default()
+                    ));
+                }
+                _ => "matched by title or address".to_string(),
+            }
+        } else {
+            "matched by window title".to_string()
         };
+        let doc = Doc { handle, app: app.into(), summary: join_notes(notes, &seen), sheets: vec![] };
         self.remember(doc.clone());
         Ok(doc)
     }
 
     fn confined(&self, p: &Path) -> Result<PathBuf, String> {
-        let full = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        // A path that cannot be resolved (the file is not there) is judged
+        // with its `..` taken out, or `root\..\elsewhere\x.xlsx` would pass
+        // for a path under the root.
+        let full = std::fs::canonicalize(p).unwrap_or_else(|_| {
+            let mut clean = PathBuf::new();
+            for c in p.components() {
+                match c {
+                    std::path::Component::ParentDir => {
+                        clean.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    other => clean.push(other),
+                }
+            }
+            clean
+        });
         if self.roots.is_empty() || self.roots.iter().any(|r| full.starts_with(r)) {
             return Ok(p.to_path_buf());
         }
@@ -507,7 +545,12 @@ impl Doors {
         for h in &open {
             let about = self.docs.iter().find(|d| &d.handle == h).map(|d| d.summary.clone()).unwrap_or_default();
             let live = if runner.is_live(h) { "" } else { " (not connected to a live app)" };
-            out.push_str(&format!("  {h}{live}{}\n", if about.is_empty() { String::new() } else { format!(" -- {about}") }));
+            // What a document says about itself (sheet names, its first
+            // paragraph) is the document's text, and fenced like any other.
+            out.push_str(&format!(
+                "  {h}{live}{}\n",
+                if about.is_empty() { String::new() } else { format!(" -- {}", crate::security::fence_user_content(&about)) }
+            ));
         }
         // The selector grammar of each app open, once each: the handle and
         // how to address a part of it, side by side.
@@ -662,8 +705,16 @@ impl EnvConnector {
             "ui" if cfg!(windows) => ("AGENT_UIA_HOST", "sidecar-csharp/Uia/bin/Release/net8.0-windows/uia-host.exe"),
             _ => return None,
         };
+        // Beside the running program first: a packaged copy is one folder
+        // of executables, where the repository's build paths do not exist
+        // and the helper was never found.
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join(Path::new(rel).file_name().unwrap_or_default())))
+            .filter(|p| p.is_file());
         let found = match std::env::var(var) {
             Ok(p) if !p.trim().is_empty() => Some(PathBuf::from(p.trim())).filter(|p| p.is_file()),
+            _ if beside.is_some() => beside,
             _ => {
                 let mut starts = vec![];
                 if let Ok(c) = std::env::current_dir() {
@@ -710,7 +761,11 @@ impl EnvConnector {
         // for Start-Process -Redirect.
         cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         no_inherit::prepare(&mut cmd);
+        // Dies with this process however it ends: `Drop` below is only the
+        // clean exit, and Stop, Stop-Process and Ctrl+C are not clean.
+        crate::tether::bind(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("could not start {}: {e}", argv[0].to_string_lossy()))?;
+        crate::tether::adopt(&child);
         self.started.push(child);
         Ok(())
     }
@@ -1199,6 +1254,13 @@ mod tests {
         let here = std::env::temp_dir();
         d.confine_to(vec![here.join("syn-allowed-root")]);
         let e = d.open("excel", r"C:\elsewhere\plan.xlsx").unwrap_err();
+        assert!(e.contains("outside the folders"), "{e}");
+        // Nor by climbing out of the root with `..` to a file not there.
+        let root = std::fs::canonicalize(&here).unwrap().join("syn-allowed-root");
+        std::fs::create_dir_all(&root).unwrap();
+        d.confine_to(vec![root.clone()]);
+        let climb = root.join("..").join("elsewhere").join("plan.xlsx");
+        let e = d.open("excel", &climb.to_string_lossy()).unwrap_err();
         assert!(e.contains("outside the folders"), "{e}");
         assert!(log.borrow().connects.is_empty());
     }

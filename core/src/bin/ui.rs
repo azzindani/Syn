@@ -54,7 +54,11 @@ struct Cli {
 
 impl Cli {
     fn start(exe: &std::path::Path) -> std::io::Result<Self> {
+        // The CLI watches for this console to go (`tether::watch_parent`):
+        // killed with Stop-Process, the console used to leave its CLI
+        // finishing a turn for nobody, and that CLI's helpers with it.
         let mut child = Command::new(exe)
+            .env(core::tether::PARENT_ENV, std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -114,7 +118,30 @@ struct Req {
     /// What a browser sends when EventSource reconnects on its own: the
     /// `id:` of the last frame it saw.
     last_event_id: Option<String>,
+    /// The Host header: which name the browser thinks it is talking to.
+    host: Option<String>,
     body: String,
+    /// The body was over the cap and was not read.
+    too_big: bool,
+}
+
+/// The most a request body may hold: a command line, not an upload.
+const MAX_BODY: usize = 64 * 1024;
+
+/// Whether a request was addressed to this console by a name that can only
+/// mean this machine.
+///
+/// The Origin check covers POSTs, and a browser sends no Origin on a plain
+/// GET. A page on a domain whose DNS answer is switched to 127.0.0.1 after
+/// it loads (DNS rebinding) is, to the browser, the same origin as this
+/// console, and could read `/events` and `/stream` -- the live transcript,
+/// cell values included. Its requests still carry its own name in Host,
+/// which is what this refuses.
+fn host_ok(port: u16, r: &Req) -> bool {
+    r.host.as_deref().is_some_and(|h| {
+        let h = h.trim().to_ascii_lowercase();
+        h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}")
+    })
 }
 
 fn read_request(s: &TcpStream) -> std::io::Result<Req> {
@@ -124,7 +151,7 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
     let mut parts = start.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("/").to_string();
-    let (mut len, mut origin, mut last_event_id) = (0usize, None, None);
+    let (mut len, mut origin, mut last_event_id, mut host) = (0usize, None, None, None);
     loop {
         let mut line = String::new();
         if r.read_line(&mut line)? == 0 {
@@ -140,17 +167,21 @@ fn read_request(s: &TcpStream) -> std::io::Result<Req> {
                 "content-length" => len = v.parse().unwrap_or(0),
                 "origin" => origin = Some(v),
                 "last-event-id" => last_event_id = Some(v),
+                "host" => host = Some(v),
                 _ => {}
             }
         }
     }
-    // Cap the body: this is a command line, not an upload.
-    let len = len.min(64 * 1024);
+    // Refused, not cut: a long message pasted into the composer used to
+    // arrive as its first 64 KB and run as if that were all of it.
+    if len > MAX_BODY {
+        return Ok(Req { method, path, origin, last_event_id, host, body: String::new(), too_big: true });
+    }
     let mut body = vec![0u8; len];
     if len > 0 {
         r.read_exact(&mut body)?;
     }
-    Ok(Req { method, path, origin, last_event_id, body: String::from_utf8_lossy(&body).into_owned() })
+    Ok(Req { method, path, origin, last_event_id, host, body: String::from_utf8_lossy(&body).into_owned(), too_big: false })
 }
 
 /// One query parameter, by exact name. `split_once("since=")` also matched
@@ -242,6 +273,9 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // The port actually bound: `--port 0` asks the system for a free one,
+    // and every check below compares against what the browser will use.
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
     let allowed_origins =
         [format!("http://127.0.0.1:{port}"), format!("http://localhost:{port}")];
     let url = format!("http://127.0.0.1:{port}/");
@@ -256,6 +290,17 @@ fn main() {
     }
     println!("the agent console: {url}");
     println!("(loopback only; ctrl-c to stop)");
+    // `--open`: a double-clicked copy has no script around it to open the
+    // page, and a console window holding an address is not an app.
+    if args.iter().any(|a| a == "--open") {
+        let _ = if cfg!(windows) {
+            Command::new("cmd").args(["/C", "start", "", &url]).spawn()
+        } else if cfg!(target_os = "macos") {
+            Command::new("open").arg(&url).spawn()
+        } else {
+            Command::new("xdg-open").arg(&url).spawn()
+        };
+    }
 
     // One thread per connection. The child still has one stdin, so /cmd
     // serialises on the mutex exactly as before -- but a turn that takes
@@ -274,7 +319,24 @@ fn main() {
         let allowed_origins = allowed_origins.clone();
         std::thread::spawn(move || {
             let mut s = s;
+            // A connection that never finishes its request must not hold a
+            // thread for ever. Only the request is read with this; a stream
+            // answered below only writes.
+            let _ = s.set_read_timeout(Some(Duration::from_secs(15)));
             let Ok(req) = read_request(&s) else { return };
+            if !host_ok(port, &req) {
+                let _ = respond(&mut s, "421 Misdirected Request", "text/plain", "this console answers to 127.0.0.1 and localhost only");
+                return;
+            }
+            if req.too_big {
+                let _ = respond(
+                    &mut s,
+                    "413 Content Too Large",
+                    "text/plain",
+                    &format!("the message is over {} KB: send it in parts, or put it in a file and name the file", MAX_BODY / 1024),
+                );
+                return;
+            }
 
         // Reject an Origin that is not ours. Note it must be a MATCH, not
         // an absence: browsers send Origin on same-origin POSTs as well, so
@@ -521,8 +583,10 @@ fn main() {
                 }
                 // Not coming back by itself. The whole tree goes: curl, and
                 // any helper this CLI started, which is the thing stuck on
-                // the application. The application and its documents stay;
-                // a helper never closes what it did not open.
+                // the application -- on Windows through taskkill's /T, on
+                // Linux because each was bound to the CLI (`tether`) and is
+                // signalled when it dies. The application and its documents
+                // stay; a helper never closes what it did not open.
                 let _ = if cfg!(windows) {
                     Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output()
                 } else {
@@ -630,8 +694,38 @@ mod tests {
             path: "/cmd".into(),
             origin: origin.map(str::to_string),
             last_event_id: None,
+            host: Some("127.0.0.1:7777".into()),
             body: "hands".into(),
+            too_big: false,
         }
+    }
+
+    #[test]
+    fn only_a_request_addressed_to_this_machine_is_answered() {
+        // DNS rebinding: a page whose domain now resolves to 127.0.0.1 is
+        // the console's own origin to the browser, and a GET carries no
+        // Origin. Its Host is still its own name.
+        let with = |h: Option<&str>| Req { host: h.map(str::to_string), ..req("GET", None) };
+        assert!(host_ok(7777, &with(Some("127.0.0.1:7777"))));
+        assert!(host_ok(7777, &with(Some("LOCALHOST:7777"))));
+        assert!(!host_ok(7777, &with(Some("evil.example:7777"))));
+        assert!(!host_ok(7777, &with(Some("127.0.0.1:7788"))));
+        assert!(!host_ok(7777, &with(None)));
+    }
+
+    #[test]
+    fn a_body_over_the_cap_is_refused_rather_than_cut() {
+        use std::io::Write as _;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let mut c = TcpStream::connect(at).unwrap();
+            let _ = write!(c, "POST /cmd HTTP/1.1\r\nHost: {at}\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
+        });
+        let (s, _) = l.accept().unwrap();
+        t.join().unwrap();
+        let r = read_request(&s).unwrap();
+        assert!(r.too_big && r.body.is_empty());
     }
 
     /// The rule the token used to share: a command may only come from this

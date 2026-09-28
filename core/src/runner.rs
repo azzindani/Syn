@@ -42,6 +42,12 @@ pub struct Runner {
     /// has a way. `None` in tests and in the in-memory REPL: `open` is then
     /// refused, the way it was before a model could ask for it.
     door: Option<Box<dyn Door>>,
+    /// The folders documents may be written into: the console's workspace,
+    /// MCP's AGENT_MCP_ROOTS. Empty is anywhere. Canonical.
+    roots: Vec<std::path::PathBuf>,
+    /// Files an `export` of this session wrote, which a later export may
+    /// replace. Anything else already on disk is not Syn's to overwrite.
+    written: std::collections::HashSet<std::path::PathBuf>,
 }
 
 /// The way from "a file on disk" to "a handle bound live", for a caller
@@ -99,6 +105,8 @@ impl Runner {
             hands: Vec::new(),
             live: HashMap::new(),
             door: None,
+            roots: Vec::new(),
+            written: std::collections::HashSet::new(),
         }
     }
 
@@ -122,11 +130,82 @@ impl Runner {
         self.door.is_some()
     }
 
-    /// Confine the door to these folders (empty: everywhere).
+    /// Confine the door, and every `export`, to these folders (empty:
+    /// everywhere).
     pub fn confine(&mut self, roots: Vec<std::path::PathBuf>) {
+        self.roots = roots.iter().map(|r| std::fs::canonicalize(r).unwrap_or_else(|_| r.clone())).collect();
         if let Some(d) = self.door.as_mut() {
             d.confine(roots);
         }
+    }
+
+    /// Where an `export` may write, as the full path to send, or why not.
+    ///
+    /// `export` writes a file wherever it is told and a helper's SaveCopyAs
+    /// replaces whatever was there. Nothing held it to the workspace or to
+    /// AGENT_MCP_ROOTS, which confined only `open`, so a document carrying
+    /// "export this to C:\Users\you\Documents\thesis.docx" could have a
+    /// model overwrite the person's own work with a copy of something else.
+    /// Three rules: a relative path is under the workspace (or refused when
+    /// there is none -- it would land wherever the helper was started); the
+    /// path must be inside the roots; and a file already there is replaced
+    /// only when this session's own export wrote it.
+    fn export_target(&self, path: &str) -> std::result::Result<std::path::PathBuf, String> {
+        use std::path::{Component, Path, PathBuf};
+        let raw = Path::new(path.trim());
+        let joined = if raw.is_absolute() || path.contains(':') {
+            raw.to_path_buf()
+        } else if let Some(root) = self.roots.first() {
+            PathBuf::from(crate::find::display(root)).join(raw)
+        } else {
+            return Err(format!(
+                "export: {path:?} is not a full path, and there is no workspace to put it under; give one, e.g. C:\\Users\\you\\Documents\\copy.xlsx"
+            ));
+        };
+        // `..` taken out by hand: canonicalize needs the file to exist, and
+        // an export's usually does not yet.
+        let mut clean = PathBuf::new();
+        for c in joined.components() {
+            match c {
+                Component::ParentDir => {
+                    clean.pop();
+                }
+                Component::CurDir => {}
+                other => clean.push(other),
+            }
+        }
+        if !self.roots.is_empty() {
+            // The deepest folder that exists, resolved, is what decides:
+            // a link inside the workspace can still lead out of it.
+            let mut probe = clean.clone();
+            let mut rest = Vec::new();
+            let resolved = loop {
+                if let Ok(c) = std::fs::canonicalize(&probe) {
+                    break rest.iter().rev().fold(c, |acc: PathBuf, part: &std::ffi::OsString| acc.join(part));
+                }
+                match (probe.file_name().map(|f| f.to_os_string()), probe.parent().map(Path::to_path_buf)) {
+                    (Some(f), Some(p)) => {
+                        rest.push(f);
+                        probe = p;
+                    }
+                    _ => break clean.clone(),
+                }
+            };
+            if !self.roots.iter().any(|r| resolved.starts_with(r)) {
+                return Err(format!(
+                    "export: {} is outside the folders Syn may write here ({}). In the console that is the chat's workspace; behind MCP it is AGENT_MCP_ROOTS.",
+                    clean.display(),
+                    self.roots.iter().map(|r| crate::find::display(r)).collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        if clean.is_file() && !self.written.contains(&clean) {
+            return Err(format!(
+                "export: {} already exists and this session did not write it. Export to a new name, or ask the human whether to replace it.",
+                clean.display()
+            ));
+        }
+        Ok(clean)
     }
 
     /// Lend the door this runner and the relay for one call.
@@ -407,9 +486,31 @@ impl Runner {
                  default in protocol/security_policy.json"
             )));
         }
-        if self.is_live(&job.handle) {
-            return self.pump_live(relay, job).map(Some);
+        // An export writes a file: held to the roots, and never over one
+        // that is not Syn's (`export_target`). The path the helper is sent
+        // is the one checked.
+        let mut job = job;
+        let mut writes = None;
+        if let Call::Export(crate::ops::ExportArgs { path: Some(path), .. }) = &mut job.call
+            && !path.trim().is_empty()
+        {
+            let target = self.export_target(path).map_err(Error::Denied)?;
+            *path = target.to_string_lossy().into_owned();
+            writes = Some(target);
         }
+        let out = if self.is_live(&job.handle) {
+            self.pump_live(relay, job).map(Some)
+        } else {
+            self.pump_model(relay, job)
+        };
+        if let (Ok(_), Some(t)) = (&out, writes) {
+            self.written.insert(t);
+        }
+        out
+    }
+
+    /// Execute a job against the in-memory model.
+    fn pump_model(&mut self, relay: &mut Relay, job: Job) -> Result<Option<OpOut>> {
         match execute(relay, &self.session, &job.handle, job.call) {
             Ok(out) => Ok(Some(out)),
             Err(e) => {
@@ -523,6 +624,57 @@ mod tests {
 
     fn read_job(h: &str) -> Job {
         Job { handle: h.into(), summary: "read".into(), call: Call::Read(ReadArgs { selector: "Sheet1".into() }) }
+    }
+
+    fn export_job(h: &str, path: &str) -> Job {
+        Job {
+            handle: h.into(),
+            summary: "export".into(),
+            call: Call::Export(crate::ops::ExportArgs { format: "xlsx".into(), path: Some(path.into()), sheet: None }),
+        }
+    }
+
+    #[test]
+    fn an_export_stays_in_the_workspace_and_never_replaces_a_file_it_did_not_write() {
+        // A document that says "export this over C:\...\thesis.docx" had a
+        // model overwrite the person's own file: export wrote anywhere, and
+        // SaveCopyAs replaces what is there.
+        let base = std::env::temp_dir().join(format!("syn-export-{}", std::process::id()));
+        let ws = base.join("ws");
+        let away = base.join("elsewhere");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&away).unwrap();
+        std::fs::write(ws.join("theirs.xlsx"), b"the person's own").unwrap();
+        let (mut relay, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.confine(vec![ws.clone()]);
+        let mut go = |run: &mut Runner, path: &str| {
+            run.submit(export_job(&h, path));
+            run.pump(&mut relay)
+        };
+
+        let outside = away.join("copy.xlsx").to_string_lossy().into_owned();
+        assert!(matches!(go(&mut run, &outside), Err(Error::Denied(w)) if w.contains("outside")), "outside the workspace");
+        let sneaky = ws.join("..").join("elsewhere").join("copy.xlsx").to_string_lossy().into_owned();
+        assert!(matches!(go(&mut run, &sneaky), Err(Error::Denied(w)) if w.contains("outside")), ".. does not lead out");
+        let theirs = ws.join("theirs.xlsx").to_string_lossy().into_owned();
+        assert!(matches!(go(&mut run, &theirs), Err(Error::Denied(w)) if w.contains("already exists")), "not over their file");
+        assert_eq!(std::fs::read(ws.join("theirs.xlsx")).unwrap(), b"the person's own");
+
+        // A relative path is under the workspace, and a file this session
+        // wrote may be written again.
+        assert!(go(&mut run, "copy.xlsx").is_ok());
+        assert!(ws.join("copy.xlsx").is_file());
+        assert!(go(&mut run, "copy.xlsx").is_ok(), "its own export may be replaced");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn with_no_workspace_a_relative_export_is_refused_rather_than_put_somewhere() {
+        let (mut relay, s, h) = relay1();
+        let mut run = Runner::new(&s);
+        run.submit(export_job(&h, "copy.xlsx"));
+        assert!(matches!(run.pump(&mut relay), Err(Error::Denied(w)) if w.contains("not a full path")));
     }
 
     #[test]

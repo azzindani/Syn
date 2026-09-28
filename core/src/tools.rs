@@ -57,17 +57,17 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "format",
-        description: "Cosmetic style only: font, fill, bold, size, color, alignment, spacing, and in Excel row height and hiding rows or columns. Does NOT change values or structure. Unknown style keys are rejected, never ignored. Example: format{\"selector\":\"Summary!A1:H1\",\"style\":\"bold=1;fill=#1F4E79;color=#FFFFFF;align=center\"}.",
+        description: "Cosmetic style only: font, fill, bold, size, color, alignment, spacing, and in Excel row height and hiding rows or columns. Does NOT change values or structure. One call styles a whole range, row, column or Word table: format A1:H1 once for a header row, never cell by cell, and send independent format calls together in one turn. Unknown style keys are rejected, never ignored. Example: format{\"selector\":\"Summary!A1:H1\",\"style\":\"bold=1;fill=#1F4E79;color=#FFFFFF;align=center\"}.",
         params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"selector":{"type":"string","maxLength":200},"style":{"type":"string","maxLength":500,"description":"key=value pairs joined by ; e.g. bold=1;size=12;fill=#1F4E79;color=#FFFFFF. Excel keys: bold, italic, underline, strike, size, font, color, fill (six-digit hex), numberFormat, width, height (row height), autofit, autofitSheet, wrap, merge, border, align (left/center/right), valign (top/center/bottom), indent, rotate (degrees), hidden (1 hides the rows 5:7 or columns C:E the selector names), freeze (freezes the window above and left of the selector). Word, on a paragraph p3 or a range p3:p9: style, bold, italic, underline, size, font, color, highlight (yellow, green, cyan, pink, red, blue, gray, none), fill, align, spaceBefore, spaceAfter, lineSpacing (1.5), indent. Word tables, in one call: t2 is the whole table, t2.r1 its first row (t2.r2:r9 several), t2.c3 a column (t2.c2:c4 several); they take the keys above plus fill (a cell colour), and on t2 tableStyle (e.g. Grid Table 4 - Accent 1), banded=1/0, header=1/0, autofit=content or window. PowerPoint, on s3 (the title) or s3.body: bold, italic, underline, size, font, color, align"}},"required":["handle","selector","style"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "struct",
-        description: "Structural change to a document. The verbs, by app -- Excel: addSheet, sheet (rename, delete, copy, hide or show a sheet), insert and delete (rows data!5:7, columns data!C:E, or a block of cells), sort, filter, dedupe, copy, validate (drop-down lists and number limits), table, name, conditional, pivot, slicer, chart, picture, comment, link, header (a sheet's header or footer text), macro. Word: insertParagraph and insertTable (at the end, or before paragraph `at`), delete (p3, p3:p5, or a whole table t2), header (header or footer text), pageBreak, contents, picture, embedChart (a real chart from an open workbook, linked to it: from is the workbook's handle, source Sheet!1 the chart), comment, link. PowerPoint: createSlide, duplicateSlide, moveSlide, delete (s3), textBox, insertTable, picture, theme. Every app: find (where a text appears), replace (every occurrence of `text` becomes `with`), pageSetup (paper, margins, orientation; a deck's slide size), pageNumbers, save (writes the document to its own file in its own format, nothing else: never a Save As; refused for a document never saved or opened read-only, where `export` writes a copy) and close (closes a document Syn opened, once it is saved; refused with unsaved changes -- save first -- and for anything the user had open; never quits the application). A verb the app does not have is refused with the list of the ones it does. `pivot` summarises a range into a new table: rows/cols are column HEADER NAMES from the source, values is the header to aggregate. It groups by a column's values exactly as they are and cannot group dates into months, so for a monthly view either total with SUMIFS or pivot on a column that already holds the month. Its destination sheet must exist: addSheet first. `chart` draws over a range and anchors it on a sheet. `table` turns a range into a real Excel Table that sorts and filters. `name` names a range. `conditional` shades a range by its values. `slicer` adds a filter control wired to a pivot, so build the pivot first. `macro` writes, runs or reads VBA inside the document: action=write with `name` (the module) and `code`, action=run with `title` (the macro to call), action=read with `name`, action=list. Reach for it when the job is more naturally a short program than a long series of calls -- one macro can do what fifty writes would -- and work on it the way you would work on any code: write it, run it, read the error it hands back, fix it, run it again. It is refused unless the human has switched VBA on for this session, and it is the only verb here that executes code, so say what it does before asking for it. `transfer` moves typed data between handles with provenance recorded. `invoke` presses a control. Everything except insertParagraph, insertTable, addSheet, createSlide and transfer needs a LIVE handle and does nothing on a document model. `undo` takes back any of these but `macro`; after a `delete` or a sheet delete, formulas elsewhere that pointed into what was deleted keep their #REF!, so be sure. Unknown verbs are rejected. Example: struct{\"verb\":\"chart\",\"kind\":\"column\",\"source\":\"Summary!A1:B12\",\"at\":\"Dashboard!A1:H16\",\"title\":\"Revenue by region\"} -- anchored to a RANGE, so it fills exactly those cells instead of landing at the default size on top of its neighbour. Example: struct{\"verb\":\"insertParagraph\",\"name\":\"Heading 1\",\"text\":\"Executive summary\"}. Example: struct{\"verb\":\"sort\",\"selector\":\"data!A1:H500\",\"name\":\"Units\",\"rule\":\"desc\"}.",
-        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer","invoke","pivot","chart","table","name","conditional","slicer","macro","pageBreak","contents","pageNumbers","picture","find","replace","delete","insert","sort","filter","dedupe","copy","validate","sheet","comment","link","pageSetup","header","textBox","duplicateSlide","moveSlide","theme","embedChart","save","close"],"description":"Excel: addSheet, sheet, insert, delete, sort, filter, dedupe, copy, validate, table, name, conditional, pivot, slicer, chart, picture, comment, link, header, macro. Word: insertParagraph, insertTable, delete, header, pageBreak, contents, picture, embedChart, comment, link. PowerPoint: createSlide, duplicateSlide, moveSlide, delete, textBox, insertTable, picture, theme. Every app: find, replace, pageSetup, pageNumbers, save, close"},"text":{"type":"string","maxLength":8000,"description":"for insertParagraph: the prose. For find and replace: the text to look for. For comment, header and textBox: what it says. For link: the address, https://... or a file path. For picture and theme: the file path. For pageNumbers: text to sit beside the number in the footer"},"with":{"type":"string","maxLength":4000,"description":"for replace: what each occurrence of `text` becomes"},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by | rows by ; — for pivot: the header name to run down the rows"},"name":{"type":"string","maxLength":200,"description":"for addSheet/table/name/slicer: what to call it. For insertParagraph and insertTable: the Word style, e.g. Heading 1, Title, Quote, List Bullet, List Number. For sort and filter: the column's HEADER NAME. For dedupe: header names that must all match, joined by | (every column when empty). For sheet with rename or copy: the new sheet name. For header: header or footer (in Excel, `selector` names the sheet; every sheet when empty). For textBox: its box in points, left,top,width,height. For pageBreak: page or section. For createSlide: the layout, one of title, titleContent, sectionHeader, twoContent, comparison, titleOnly, blank. For picture and embedChart: the width in points in Word, or left,top,width,height in points on a slide"},"title":{"type":"string","maxLength":300,"description":"for createSlide and chart: the title. For link in Excel: the text the cell shows"},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |. A leading > makes a bullet a sub-bullet, >> a sub-sub-bullet"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle. For embedChart: the handle of the open workbook the chart is in, e.g. excel:plan.xlsx:workbook"},"selector":{"type":"string","maxLength":200,"description":"what the verb acts on. insert and delete: rows data!5:7, columns data!C:E, cells data!B2:C4, a Word paragraph p3 or p3:p5 or a whole Word table t2, a slide s3. sort, filter, dedupe, validate: a range, header row first for sort, filter and dedupe. find and replace: in Excel a sheet or range (data, or data!A1:H100); Word and PowerPoint search the whole document. sheet: the sheet's name. comment and link: a cell (data!B2) or a paragraph (p3). pageSetup: the sheet in Excel. moveSlide, duplicateSlide, textBox, and insertTable or picture on a slide: the slide, s3. picture on a sheet: the range it fills"},"action":{"type":"string","enum":["invoke","click","toggle","select","expand","collapse","focus","write","run","read","list","rename","delete","copy","hide","show"],"description":"for invoke: what to do to the control. For macro: write, run, read or list. For sheet: rename, delete, copy, hide or show"},"source":{"type":"string","maxLength":200,"description":"for pivot, chart and copy: the source range, e.g. data!A1:H500. For embedChart: the chart, as its sheet and its number on that sheet, e.g. Dashboard!2 for the second chart on Dashboard"},"cols":{"type":"string","maxLength":200,"description":"for pivot: the header name to run across the columns, or empty for none"},"values":{"type":"string","maxLength":200,"description":"for pivot: the header name to total"},"at":{"type":"string","maxLength":200,"description":"for pivot and chart: where to put it, e.g. Dashboard!A1. For a chart give a range and the chart fills exactly those cells, e.g. Dashboard!A1:H16 — lay several out in ranges that do not overlap. For copy: the top-left cell it goes to. For insertParagraph, insertTable and embedChart in Word: the paragraph to insert before, e.g. p3, which the new one becomes; empty appends at the end. For moveSlide: where the slide goes, s1 for first"},"kind":{"type":"string","enum":["line","bar","column","pie","scatter","area","doughnut","stackedColumn","stackedBar","lineMarkers","radar"],"description":"for chart: which chart to draw"},"rule":{"type":"string","maxLength":200,"description":"for conditional: dataBar, colorScale, iconSet, top10, greaterThan=N or lessThan=N. For sort: asc or desc. For filter: what to keep, e.g. North, >100, <>0; empty clears the filter. For validate: list=Yes,No,Maybe, whole=1..10 or decimal=0..1"},"style":{"type":"string","maxLength":300,"description":"k=v pairs joined by ;. For chart: legend=0, gridlines=0, xTitle=Month, yTitle=Revenue, dataLabels=1. For pageSetup: orientation=landscape, paper=A4 or Letter, margin=0.75 (inches), and in Excel fitWide=1, fitTall=0; on a deck size=16:9, 4:3, 16:10, A4 or Letter and orientation. For textBox: size=24, bold=1, italic=1, font=..., color=#1F4E79, align=center. For embedChart: link=0 embeds a copy that no longer follows the workbook; by default the chart stays linked to it"},"code":{"type":"string","maxLength":16000,"description":"for macro action=write: the VBA source of the whole module, which replaces whatever the module held before"}},"required":["handle","verb"],"additionalProperties":false}"#,
+        description: "Structural change to a document. The verbs, by app -- Excel: addSheet, sheet (rename, delete, copy, hide or show a sheet), insert and delete (rows data!5:7, columns data!C:E, or a block of cells), sort, filter, dedupe, copy, validate (drop-down lists and number limits), table, name, conditional, pivot, slicer, chart, picture, comment, link, header (a sheet's header or footer text), macro. Word: insertParagraph and insertTable (at the end, or before paragraph `at`), delete (p3, p3:p5, or a whole table t2), header (header or footer text), pageBreak, contents, picture, embedChart (a real chart from an open workbook, linked to it: from is the workbook's handle, source Sheet!1 the chart), comment, link. PowerPoint: createSlide, duplicateSlide, moveSlide, delete (s3), textBox, insertTable, picture, theme. Every app: find (where a text appears), replace (every occurrence of `text` becomes `with`), pageSetup (paper, margins, orientation; a deck's slide size), pageNumbers, save (writes the document to its own file in its own format, nothing else: never a Save As; refused for a document never saved or opened read-only, where `export` writes a copy) and close (closes a document Syn opened, once it is saved; refused with unsaved changes -- save first -- and for anything the user had open; never quits the application). A verb the app does not have is refused with the list of the ones it does. `pivot` summarises a range into a new table: rows/cols are column HEADER NAMES from the source, values is the header to aggregate. It groups by a column's values exactly as they are and cannot group dates into months, so for a monthly view either total with SUMIFS or pivot on a column that already holds the month. Its destination sheet must exist: addSheet first. `chart` draws over a range and anchors it on a sheet. `table` turns a range into a real Excel Table that sorts and filters, with a finished design (header shading, banded rows) in the same call: style picks the design, e.g. TableStyleMedium9 -- the way to make data look like a table, rather than formatting it cell by cell. `name` names a range. `conditional` shades a range by its values. `slicer` adds a filter control wired to a pivot, so build the pivot first. `macro` writes, runs or reads VBA inside the document: action=write with `name` (the module) and `code`, action=run with `title` (the macro to call), action=read with `name`, action=list. Reach for it when the job is more naturally a short program than a long series of calls -- one macro can do what fifty writes would -- and work on it the way you would work on any code: write it, run it, read the error it hands back, fix it, run it again. It is refused unless the human has switched VBA on for this session, and it is the only verb here that executes code, so say what it does before asking for it. `transfer` moves typed data between handles with provenance recorded. `invoke` presses a control. Everything except insertParagraph, insertTable, addSheet, createSlide and transfer needs a LIVE handle and does nothing on a document model. `undo` takes back any of these but `macro`; after a `delete` or a sheet delete, formulas elsewhere that pointed into what was deleted keep their #REF!, so be sure. Unknown verbs are rejected. Example: struct{\"verb\":\"chart\",\"kind\":\"column\",\"source\":\"Summary!A1:B12\",\"at\":\"Dashboard!A1:H16\",\"title\":\"Revenue by region\"} -- anchored to a RANGE, so it fills exactly those cells instead of landing at the default size on top of its neighbour. Example: struct{\"verb\":\"insertParagraph\",\"name\":\"Heading 1\",\"text\":\"Executive summary\"}. Example: struct{\"verb\":\"sort\",\"selector\":\"data!A1:H500\",\"name\":\"Units\",\"rule\":\"desc\"}.",
+        params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"verb":{"type":"string","enum":["insertParagraph","insertTable","addSheet","createSlide","transfer","invoke","pivot","chart","table","name","conditional","slicer","macro","pageBreak","contents","pageNumbers","picture","find","replace","delete","insert","sort","filter","dedupe","copy","validate","sheet","comment","link","pageSetup","header","textBox","duplicateSlide","moveSlide","theme","embedChart","save","close"],"description":"Excel: addSheet, sheet, insert, delete, sort, filter, dedupe, copy, validate, table, name, conditional, pivot, slicer, chart, picture, comment, link, header, macro. Word: insertParagraph, insertTable, delete, header, pageBreak, contents, picture, embedChart, comment, link. PowerPoint: createSlide, duplicateSlide, moveSlide, delete, textBox, insertTable, picture, theme. Every app: find, replace, pageSetup, pageNumbers, save, close"},"text":{"type":"string","maxLength":8000,"description":"for insertParagraph: the prose. For find and replace: the text to look for. For comment, header and textBox: what it says. For link: the address, https://... or a file path. For picture and theme: the file path. For pageNumbers: text to sit beside the number in the footer"},"with":{"type":"string","maxLength":4000,"description":"for replace: what each occurrence of `text` becomes"},"rows":{"type":"string","maxLength":8000,"description":"for insertTable: cells by | rows by ; — for pivot: the header name to run down the rows"},"name":{"type":"string","maxLength":200,"description":"for addSheet/table/name/slicer: what to call it. For insertParagraph and insertTable: the Word style, e.g. Heading 1, Title, Quote, List Bullet, List Number. For sort and filter: the column's HEADER NAME. For dedupe: header names that must all match, joined by | (every column when empty). For sheet with rename or copy: the new sheet name. For header: header or footer (in Excel, `selector` names the sheet; every sheet when empty). For textBox: its box in points, left,top,width,height. For pageBreak: page or section. For createSlide: the layout, one of title, titleContent, sectionHeader, twoContent, comparison, titleOnly, blank. For picture and embedChart: the width in points in Word, or left,top,width,height in points on a slide"},"title":{"type":"string","maxLength":300,"description":"for createSlide and chart: the title. For link in Excel: the text the cell shows"},"bullets":{"type":"string","maxLength":4000,"description":"for createSlide: bullets joined by |. A leading > makes a bullet a sub-bullet, >> a sub-sub-bullet"},"from":{"type":"string","maxLength":200,"description":"for transfer: the source handle. For embedChart: the handle of the open workbook the chart is in, e.g. excel:plan.xlsx:workbook"},"selector":{"type":"string","maxLength":200,"description":"what the verb acts on. insert and delete: rows data!5:7, columns data!C:E, cells data!B2:C4, a Word paragraph p3 or p3:p5 or a whole Word table t2, a slide s3. sort, filter, dedupe, validate: a range, header row first for sort, filter and dedupe. find and replace: in Excel a sheet or range (data, or data!A1:H100); Word and PowerPoint search the whole document. sheet: the sheet's name. comment and link: a cell (data!B2) or a paragraph (p3). pageSetup: the sheet in Excel. moveSlide, duplicateSlide, textBox, and insertTable or picture on a slide: the slide, s3. picture on a sheet: the range it fills"},"action":{"type":"string","enum":["invoke","click","toggle","select","expand","collapse","focus","write","run","read","list","rename","delete","copy","hide","show"],"description":"for invoke: what to do to the control. For macro: write, run, read or list. For sheet: rename, delete, copy, hide or show"},"source":{"type":"string","maxLength":200,"description":"for pivot, chart and copy: the source range, e.g. data!A1:H500. For embedChart: the chart, as its sheet and its number on that sheet, e.g. Dashboard!2 for the second chart on Dashboard"},"cols":{"type":"string","maxLength":200,"description":"for pivot: the header name to run across the columns, or empty for none"},"values":{"type":"string","maxLength":200,"description":"for pivot: the header name to total"},"at":{"type":"string","maxLength":200,"description":"for pivot and chart: where to put it, e.g. Dashboard!A1. For a chart give a range and the chart fills exactly those cells, e.g. Dashboard!A1:H16 — lay several out in ranges that do not overlap. For copy: the top-left cell it goes to. For insertParagraph, insertTable and embedChart in Word: the paragraph to insert before, e.g. p3, which the new one becomes; empty appends at the end. For moveSlide: where the slide goes, s1 for first"},"kind":{"type":"string","enum":["line","bar","column","pie","scatter","area","doughnut","stackedColumn","stackedBar","lineMarkers","radar"],"description":"for chart: which chart to draw"},"rule":{"type":"string","maxLength":200,"description":"for conditional: dataBar, colorScale, iconSet, top10, greaterThan=N or lessThan=N. For sort: asc or desc. For filter: what to keep, e.g. North, >100, <>0; empty clears the filter. For validate: list=Yes,No,Maybe, whole=1..10 or decimal=0..1"},"style":{"type":"string","maxLength":300,"description":"k=v pairs joined by ;. For chart: legend=0, gridlines=0, xTitle=Month, yTitle=Revenue, dataLabels=1. For pageSetup: orientation=landscape, paper=A4 or Letter, margin=0.75 (inches), and in Excel fitWide=1, fitTall=0; on a deck size=16:9, 4:3, 16:10, A4 or Letter and orientation. For textBox: size=24, bold=1, italic=1, font=..., color=#1F4E79, align=center. For embedChart: link=0 embeds a copy that no longer follows the workbook; by default the chart stays linked to it. For table: not k=v but the table design, e.g. TableStyleMedium2 (the default: shaded header, banded rows), TableStyleLight9, TableStyleDark2, or none"},"code":{"type":"string","maxLength":16000,"description":"for macro action=write: the VBA source of the whole module, which replaces whatever the module held before"}},"required":["handle","verb"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "export",
-        description: "Write a COPY of a handle to a file, or return a summary of it. The open document stays where it is, unsaved changes and all; the copy includes them. Excel: xlsx, csv (one sheet: `sheet`, the first when empty), pdf, png (every chart in the workbook, one file each). Word: docx, pdf. PowerPoint: pptx, pdf, png (every slide, one file each). summary (no path) lists the sheets, the headings or the slides. Example: export{\"handle\":\"excel:plan.xlsx:Sheet1\",\"format\":\"png\",\"path\":\"C:\\out\\fig.png\"} writes every chart in the workbook to disk, which is how a chart gets into a document or onto a slide.",
+        description: "Write a COPY of a handle to a file, or return a summary of it. The open document stays where it is, unsaved changes and all; the copy includes them. Excel: xlsx, csv (one sheet: `sheet`, the first when empty), pdf, png (every chart in the workbook, one file each). Word: docx, pdf. PowerPoint: pptx, pdf, png (every slide, one file each). summary (no path) lists the sheets, the headings or the slides. Example: export{\"handle\":\"excel:plan.xlsx:Sheet1\",\"format\":\"png\",\"path\":\"C:\\out\\fig.png\"} writes every chart in the workbook to disk, which is how a chart gets into a document or onto a slide. A .csv opened in Excel becomes a workbook with ONE export to xlsx: never copy its rows through read and write.",
         params: r#"{"type":"object","properties":{"handle":{"type":"string","maxLength":200},"format":{"type":"string","enum":["summary","preview","xlsx","csv","docx","pptx","pdf","png"]},"path":{"type":"string","maxLength":500,"description":"where the copy goes; not for summary"},"sheet":{"type":"string","maxLength":200,"description":"for csv: which sheet"}},"required":["handle","format"],"additionalProperties":false}"#,
     },
     ToolSpec {
@@ -82,7 +82,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "search",
-        description: "Search this computer for files by NAME: the Desktop, Documents, Downloads and OneDrive folders and the folder Syn runs in, or one folder you name. Use it when the user names a document but not where it is, then `open` the one you mean. `name` is words that must all appear in the file name, in any order; a word with * or ? matches the whole name, so invoice *.xlsx means a workbook with invoice in its name. Answers newest first, with size and date, and the `open` call to copy for the newest file an app here opens. Looks at names only: never opens, reads or changes a file. Example: search{\"name\":\"budget 2026 xlsx\"}.",
+        description: "Search this computer for files by NAME: the Desktop, Documents, Downloads and OneDrive folders and the folder Syn runs in, or one folder you name. Use it when the user names a document but not where it is, then `open` the one they mean; when several could be it, ask which. Search only for names the user gave. `name` is words that must all appear in the file name, in any order; a word with * or ? matches the whole name, so invoice *.xlsx means a workbook with invoice in its name. Answers newest first, with size and date, and the `open` call to copy for the newest file an app here opens. Looks at names only: never opens, reads or changes a file. Example: search{\"name\":\"budget 2026 xlsx\"}.",
         params: r#"{"type":"object","properties":{"name":{"type":"string","maxLength":200,"description":"words in the file name, e.g. sales deck, or a pattern such as q3*.pptx"},"folder":{"type":"string","maxLength":1000,"description":"optional: search only under this folder, e.g. D:\\Projects"}},"required":["name"],"additionalProperties":false}"#,
     },
     ToolSpec {
@@ -627,6 +627,54 @@ pub fn canonical_name(raw: &str) -> String {
     best.unwrap_or(raw).to_string()
 }
 
+/// The first argument a tool's schema does not declare, as a refusal that
+/// names the ones it does. None when all are known, or when the arguments
+/// are not an object at all (that has its own refusal further on).
+fn unknown_field(tool: &str, args: &str) -> Option<String> {
+    let schema = crate::json::parse(spec(tool)?.params).ok()?;
+    let known: Vec<&str> = match schema.get("properties")? {
+        crate::json::Value::Obj(kv) => kv.iter().map(|(k, _)| k.as_str()).collect(),
+        _ => return None,
+    };
+    let crate::json::Value::Obj(given) = crate::json::parse(args).ok()? else { return None };
+    let (bad, _) = given.iter().find(|(k, _)| !known.contains(&k.as_str()))?;
+    Some(format!("{tool}: unknown field {bad:?}; {tool} takes {}", known.join(", ")))
+}
+
+/// An Excel table design by the name Excel gives it, from what a model
+/// writes: `TableStyleMedium9`, `Medium 9`, `medium9` and `Table Style
+/// Medium 9` are all the same design. `none` is a plain table with no
+/// shading. Anything else is refused with the ranges that exist, rather
+/// than sent on for Excel to reject with a bare COM error.
+pub fn table_style(raw: &str) -> Result<String, String> {
+    let squeezed: String = raw.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect();
+    if squeezed.is_empty() {
+        return Ok(String::new());
+    }
+    let lower = squeezed.to_ascii_lowercase();
+    if lower == "none" {
+        return Ok("none".into());
+    }
+    let bare = lower.strip_prefix("tablestyle").unwrap_or(&lower);
+    let refuse = || {
+        format!(
+            "table: style {raw:?} is not an Excel table design; name one as TableStyleLight1-21, TableStyleMedium1-28 or TableStyleDark1-11 (TableStyleMedium2 is Excel's default), or none"
+        )
+    };
+    let (family, top) = [("light", 21), ("medium", 28), ("dark", 11)]
+        .into_iter()
+        .find(|(f, _)| bare.starts_with(f))
+        .ok_or_else(refuse)?;
+    let n: u32 = bare[family.len()..].parse().map_err(|_| refuse())?;
+    if n == 0 || n > top {
+        return Err(refuse());
+    }
+    let mut name = String::from("TableStyle");
+    name.push_str(&family[..1].to_ascii_uppercase());
+    name.push_str(&family[1..]);
+    Ok(format!("{name}{n}"))
+}
+
 /// Split the grid encoding: cells by `|`, rows by `;`, backslash escapes.
 ///
 /// The separator was a comma until a capability run showed what that costs.
@@ -720,6 +768,25 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
             .and_then(|v| capped(k, v))
     };
 
+    // Unknown keys are refused, never ignored -- the rule the schemas state
+    // with additionalProperties:false and MCP already enforced. Here a
+    // misspelt `styel` or a `sheet` on `write` vanished without a word, and
+    // the call ran as if the model had asked for less than it did.
+    //
+    // Except one: a `search` shaped like struct `find` -- a handle and a
+    // text -- wants words inside a document, not a file on disk, and is
+    // told the call that does that rather than which keys search takes.
+    if tc.name == "search" && field(a, "name").is_none() && (field(a, "handle").is_some() || field(a, "text").is_some()) {
+        return Err(
+            "search looks on disk for files by name. To find text inside an open document, call struct{\"handle\":\"...\",\"verb\":\"find\",\"text\":\"...\"}"
+                .into(),
+        );
+    }
+    let schema_of = if STRUCT_VERBS.contains(&tc.name.as_str()) { "struct" } else { tc.name.as_str() };
+    if let Some(why) = unknown_field(schema_of, a) {
+        return Err(why);
+    }
+
     if tc.name == "shell" {
         return Ok(Action::Shell(ShellRequest {
             program: need("program")?,
@@ -737,15 +804,8 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
         return Ok(Action::Open { app, target: need("path")? });
     }
     if tc.name == "search" {
-        // A call shaped like struct `find` -- a handle and a text -- wants
-        // words inside a document, not a file on disk: say the call that
-        // does that rather than "missing required field name".
-        if field(a, "name").is_none() && (field(a, "handle").is_some() || field(a, "text").is_some()) {
-            return Err(
-                "search looks on disk for files by name. To find text inside an open document, call struct{\"handle\":\"...\",\"verb\":\"find\",\"text\":\"...\"}"
-                    .into(),
-            );
-        }
+        // A call shaped like struct `find` was answered above, before the
+        // unknown-key check could say something less useful about it.
         return Ok(Action::Search { name: need("name")?, folder: opt("folder")?.filter(|f| !f.trim().is_empty()) });
     }
 
@@ -823,7 +883,11 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
                     values: need("values")?,
                     at: need("at")?,
                 },
-                "table" => StructArgs::Table { source: need("source")?, name: need("name")? },
+                "table" => StructArgs::Table {
+                    source: need("source")?,
+                    name: need("name")?,
+                    style: table_style(&opt("style")?.unwrap_or_default())?,
+                },
                 "name" => StructArgs::Name { name: need("name")?, at: need("at")? },
                 "conditional" => StructArgs::Conditional { selector: need("selector")?, rule: need("rule")? },
                 "macro" => StructArgs::Macro {
@@ -908,6 +972,43 @@ mod tests {
         match to_action(&tc)? {
             Action::Doc { call: Call::Struct(StructArgs::Office { verb, args, payload }), .. } => Ok((verb, args, payload)),
             other => panic!("not an office verb: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused_with_the_keys_that_exist() {
+        let call = |name: &str, args: &str| to_action(&ToolCall { id: "c".into(), name: name.into(), arguments: args.into() });
+        let why = call("write", r#"{"handle":"excel:b.xlsx:data","selector":"data!A1","values":"1","sheet":"data"}"#).unwrap_err();
+        assert!(why.contains("unknown field \"sheet\"") && why.contains("selector"), "{why}");
+        let why = call("format", r#"{"handle":"h","selector":"A1","styel":"bold=1"}"#).unwrap_err();
+        assert!(why.contains("\"styel\""), "{why}");
+        // Every key a schema declares still goes through, including a verb
+        // called by its own name and a struct field named `values`.
+        assert!(call("insertParagraph", r#"{"handle":"word:m.docx:body","text":"x","name":"Heading 1"}"#).is_ok());
+        assert!(call("struct", r#"{"handle":"excel:b.xlsx:d","verb":"pivot","source":"d!A1:C9","rows":"a","values":"b","at":"P!A1"}"#).is_ok());
+    }
+
+    #[test]
+    fn an_excel_table_takes_its_design_in_the_same_call() {
+        // Asked to make data look like a table, models formatted it a cell
+        // at a time. The design rides on the call that makes the table.
+        let tc = ToolCall {
+            id: "c".into(),
+            name: "struct".into(),
+            arguments: r#"{"handle":"excel:b.xlsx:data","verb":"table","source":"data!A1:C9","name":"Sales","style":"Medium 9"}"#.into(),
+        };
+        match to_action(&tc).unwrap() {
+            Action::Doc { call: Call::Struct(StructArgs::Table { style, .. }), .. } => assert_eq!(style, "TableStyleMedium9"),
+            other => panic!("{other:?}"),
+        }
+        for (said, meant) in [("TableStyleLight9", "TableStyleLight9"), ("table style dark 2", "TableStyleDark2"), ("none", "none"), ("", "")] {
+            assert_eq!(table_style(said).unwrap(), meant, "{said}");
+        }
+        // Word's names are not Excel's, and a design Excel does not have is
+        // refused with the ones it does rather than sent on to fail.
+        for bad in ["Grid Table 4 - Accent 1", "Medium 29", "TableStyleDark0", "fancy"] {
+            let why = table_style(bad).unwrap_err();
+            assert!(why.contains("TableStyleMedium1-28"), "{bad}: {why}");
         }
     }
 

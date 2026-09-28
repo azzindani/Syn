@@ -341,6 +341,8 @@ fn fit_door(runner: &mut Runner) {
 
 fn main() {
     core::live::begin();
+    // Started by the console: go when it goes, taking helpers and curl too.
+    core::tether::watch_parent();
     // Deployment config before anything else: .env seeds the process env,
     // a real shell export always wins. Key names only are printed.
     if let Some(l) = config::load_env(&std::env::current_dir().unwrap_or_default()) {
@@ -678,11 +680,22 @@ fn main() {
             }
             "table" => {
                 let a: Vec<&str> = rest.split_whitespace().collect();
-                let [h, src, name] = a.as_slice() else {
-                    pr!("ERROR usage: table <handle> <source> <name>");
-                    continue;
+                let (h, src, name, style) = match a.as_slice() {
+                    [h, src, name] => (h, src, name, ""),
+                    [h, src, name, style] => (h, src, name, *style),
+                    _ => {
+                        pr!("ERROR usage: table <handle> <source> <name> [style]");
+                        continue;
+                    }
                 };
-                let call = Call::Struct(StructArgs::Table { source: (*src).into(), name: (*name).into() });
+                let style = match core::tools::table_style(style) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        pr!("ERROR {e}");
+                        continue;
+                    }
+                };
+                let call = Call::Struct(StructArgs::Table { source: (*src).into(), name: (*name).into(), style });
                 run_op(&mut runner, &mut relay, h, "table", call);
             }
             "name" => {

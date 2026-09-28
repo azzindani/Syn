@@ -140,6 +140,10 @@ You drive real applications that a human has open on their own computer. \
 Every tool call changes, or reads from, a document they are looking at right now.
 
 Rules:
+- Do what the human asked, all of it, and nothing they did not ask for. \
+Asked to open a file, open it and stop: do not read, profile, summarise, \
+format or save it unless that was asked. A small request is a few calls; \
+the step budget is a ceiling, never a target.
 - Ask for several tools at once when they do not depend on each other. Four reads of four different ranges belong in ONE turn, not four. They are run in the order you give, one at a time, so a later call in the same turn CANNOT see an earlier one's result: never batch a call whose arguments depend on what another call returns. Never guess a result.
 - Only use handles that the registry lists. To work on a document that is \
 not listed, call `open` with its full path; if you do not know the path, \
@@ -154,27 +158,43 @@ the turn.
 about to do next: if there is more work, call the next tool instead of \
 describing it.
 - To compute over a large sheet, write a formula and read its one-cell \
-result. Never page through the rows adding them up yourself.";
+result. Never page through the rows adding them up yourself.
+- Style a whole range, row, column or table in ONE call, never a cell at a \
+time: an Excel `table` or a Word `tableStyle` is a finished table design in \
+one call. Formatting calls that do not depend on each other go in ONE turn.
+- Search only for what the human named. Never search for, open or reuse a \
+file from an earlier task, an example or a sample unless they asked for it.";
 
 /// The line that turns the manual from a tool nobody calls into the first
 /// thing a run does. Appended only when the manual is on the surface, so
 /// the control arm of the A/B is not told to call a tool it cannot see.
+///
+/// It used to say "before your first write", every time. Reported from use:
+/// asked only to open files, a run went on to profile them, and a plain
+/// CSV-to-workbook request ran on as if it were a project. Every request
+/// paid for the manual whether it built anything or not. The manual is for
+/// building, not for every request.
 const MANUAL_RULE: &str = "
-- Before your first write into an application, call `manual` for it: it says \
-what the verbs do to a live document and which idiom is one call instead of \
-a thousand. It does not say what to build. Start with topic \"index\".";
+- Before building something in an application (tables, charts, formatting, \
+many rows), call `manual` for it once: it says what the verbs do to a live \
+document and which idiom is one call instead of a thousand. It does not say \
+what to build. Skip it for opening, reading, saving or a one-cell edit.";
 
 /// The plan rule, added only when the plan tool is on the surface.
 ///
 /// Deliberately says nothing about what a good plan looks like. The point
 /// of the tool is that the model decides the work; a prompt that described
 /// the phases would be the recipe again, wearing a different hat.
+///
+/// Scoped to jobs with several deliverables. Told to plan before every
+/// request, and shown "99 left" on every turn, a model reads the budget as
+/// a target: the same reports of simple requests running on and on.
 const PLAN_RULE: &str = "
-- Decide your own approach and record it with `plan` before you start, then \
-mark steps done as you finish them. Every turn you are shown your plan and \
-how much of the step budget is left. Pace the work against it: when the \
-budget runs out the run stops wherever it is, and a deliverable never \
-started is worth nothing.";
+- When the job has several deliverables, decide your own approach and record \
+it with `plan` before you start, then mark steps done as you finish them; \
+a request that takes a few calls needs no plan. Once you have a plan you are \
+shown it every turn with what is left of the step budget. Pace the work \
+against it: when the budget runs out the run stops wherever it is.";
 
 /// What the model is told when the last step of the budget arrives.
 ///
@@ -274,6 +294,39 @@ fn system() -> String {
     }
     s.push_str(&environment());
     s
+}
+
+/// Whether a reply is a promise of work rather than an answer: "I'll start
+/// by exploring the data", "Now I will build the workbook", "Let me open
+/// it". A reply that asks the human anything is never one, whatever else
+/// it says: "Which file? I'll open it once you say" is waiting on them.
+fn announces_work(text: &str) -> bool {
+    // A curly apostrophe is still an "I'll".
+    let t = text.trim().to_lowercase().replace('\u{2019}', "'");
+    if t.contains('?') {
+        return false;
+    }
+    const PROMISES: &[&str] = &[
+        "i'll ", "i will ", "i'm going to", "i am going to", "let me ", "let's ", "next, i", "next i ",
+        "first, i", "first i ", "now i ", "i'm about to", "i am about to", "i'll now", "i will now", "i shall ",
+    ];
+    PROMISES.iter().any(|p| t.contains(p))
+}
+
+/// The step budget as the status note says it.
+///
+/// Rounded to tens until the last ten steps. The note is the second message
+/// of every request, so anything in it that changes on every step changes
+/// the prefix a provider caches, and the whole transcript behind it is
+/// processed again from scratch each turn: slow, and on a long run the
+/// slowest part of it. A count that moves every ten steps costs a cache miss
+/// every ten steps, and the last ten, when pacing matters, are exact.
+fn budget_line(steps: u32, max: u32, left: u32) -> String {
+    if left <= 10 {
+        format!("\nStep {steps} of {max}, {left} left.\n")
+    } else {
+        format!("\nStep ~{} of {max}, about {} left.\n", steps / 10 * 10, left / 10 * 10)
+    }
 }
 
 /// One step of the model's own plan.
@@ -514,7 +567,13 @@ impl Agent {
         let mut text = self.workspace_note.clone();
         text.push_str(&self.registry_note);
 
-        if !self.touched.is_empty() || !self.registry_note.is_empty() {
+        // Only for a job the model has planned. Shown on every turn, "nothing
+        // written yet to" each open document reads as an order to write to
+        // all of them (reported from use: runs asked only to open files went
+        // on to work on them). It was put here for the runs with three
+        // deliverables that spent their budget on the first, which are the
+        // runs that plan.
+        if !self.plan.is_empty() && (!self.touched.is_empty() || !self.registry_note.is_empty()) {
             let untouched: Vec<&str> = self
                 .registry_note
                 .lines()
@@ -546,10 +605,13 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
 
         if crate::looptools::plan_enabled() {
             let left = self.max_steps.saturating_sub(self.steps);
-            text.push_str(&format!("\nStep {} of {}, {left} left.\n", self.steps, self.max_steps));
-            if self.plan.is_empty() {
-                text.push_str("No plan recorded yet. Call `plan` with the steps you intend to take.\n");
-            } else {
+            // The budget is shown once there is a plan to pace, or once half
+            // of it is gone. "Step 1 of 100, 99 left" in front of a request
+            // for one thing read as a hundred steps to use.
+            if !self.plan.is_empty() || self.steps * 2 >= self.max_steps {
+                text.push_str(&budget_line(self.steps, self.max_steps, left));
+            }
+            if !self.plan.is_empty() {
                 let done = self.plan.iter().filter(|p| p.done).count();
                 text.push_str(&format!("Your plan, {done} of {} done:\n", self.plan.len()));
                 for (i, st) in self.plan.iter().enumerate() {
@@ -896,7 +958,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
     }
 
     fn observe(&mut self, call_id: &str, text: &str) {
-        self.msgs.push(Msg::Tool { id: call_id.into(), content: security::truncate_output(text) });
+        self.msgs.push(Msg::Tool { id: call_id.into(), content: security::truncate_result(text) });
     }
 
     /// Wrap a result as untrusted data, flagging injection shapes.
@@ -1017,7 +1079,12 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             // Only when nothing has run at all. A model that has done the
             // work and is reporting it must be believed the first time, and
             // one that genuinely has nothing to do must be able to say so.
-            if !self.did_work && self.idle_answers < IDLE_ANSWER_NUDGES {
+            //
+            // And only when the prose announces work. After any prose at
+            // all, a model answering a question, or asking one back ("which
+            // of these two files?"), was told to "call the tool instead",
+            // and the nearest tool to call was one nobody had asked for.
+            if !self.did_work && self.idle_answers < IDLE_ANSWER_NUDGES && announces_work(&text) {
                 self.idle_answers += 1;
                 self.msgs.push(Msg::Assistant(text));
                 self.msgs.push(Msg::User(
@@ -1237,8 +1304,15 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                     // summary is what the document said about itself (sheet
                     // names, its first paragraph), and a sheet can be named
                     // anything.
+                    //
+                    // The read is offered, not prescribed. "Next: read..."
+                    // after every open was taken as the next step of the
+                    // job, and a run asked only to open files went on to
+                    // page through them. MCP keeps its plain "Next:": a small
+                    // model there copies it, and that server has no goal of
+                    // its own to overrun.
                     let text = format!(
-                        "Opened in {}.\nHandle: {}\n{}\nNext: {}",
+                        "Opened in {}.\nHandle: {}\n{}\nIf the request needs what is inside: {}\nIf opening it was the request, it is done: say so and stop.",
                         crate::desk::app_name(&doc.app),
                         doc.handle,
                         Self::fenced(&doc.summary),
@@ -1622,7 +1696,9 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let (_, body) = answers(&a).pop().unwrap();
-        assert!(body.contains("Handle: excel:budget.xlsx:workbook") && body.contains("Next: read{"), "{body}");
+        assert!(body.contains("Handle: excel:budget.xlsx:workbook") && body.contains("needs what is inside: read{"), "{body}");
+        // Offered, not prescribed: opening was the whole request here.
+        assert!(!body.contains("Next:") && body.contains("say so and stop"), "{body}");
         // The sheet names came out of the file: fenced. The handle and the
         // next call are ours: not.
         let fence = body.find("sheets: data").expect(&body);
@@ -1884,6 +1960,61 @@ mod tests {
         assert!(sent.contains("[x] 1. survey the data"), "the plan is not shown back");
         assert!(sent.contains("[ ] 2. build the summary"));
         assert!(sent.contains(&format!("of {}, ", a.max_steps)), "the budget is not shown: {}", &sent[..400.min(sent.len())]);
+    }
+
+    #[test]
+    fn a_small_request_is_not_shown_a_budget_to_spend_or_documents_to_fill() {
+        // Reported from use: runs asked only to open files went on to work
+        // on them, and a 100-step budget was spent on simple requests. The
+        // note used to open every run with "Step 1 of 100, 99 left", "No
+        // plan recorded yet. Call `plan`", and "Nothing written yet to" each
+        // open document -- three standing invitations to do more.
+        let mut a = agent("open the budget");
+        a.show_registry(&[("excel:budget.xlsx:workbook".into(), true)]);
+        a.refresh_status();
+        let note = match &a.transcript()[1] {
+            Msg::System(s) => s.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(note.contains("excel:budget.xlsx:workbook"), "{note}");
+        for nag in ["Nothing written yet", "No plan recorded", " left."] {
+            assert!(!note.contains(nag), "{nag:?} is still in front of a one-line request: {note}");
+        }
+        // A planned job is paced, and does see what it has not touched.
+        a.update_plan(Some("fill the budget|chart it".into()), None, None);
+        a.refresh_status();
+        let Msg::System(note) = &a.transcript()[1] else { panic!() };
+        assert!(note.contains("Nothing written yet to: excel:budget.xlsx:workbook"), "{note}");
+        assert!(note.contains(&format!("of {}, ", a.max_steps)), "{note}");
+    }
+
+    #[test]
+    fn the_budget_moves_in_tens_so_the_cached_prefix_survives() {
+        // The note is the second message of every request; a number in it
+        // that changes every step invalidates the provider's cache for the
+        // whole transcript behind it on every step.
+        assert_eq!(budget_line(3, 100, 97), budget_line(9, 100, 91));
+        assert_ne!(budget_line(9, 100, 91), budget_line(10, 100, 90));
+        assert!(budget_line(95, 100, 5).contains("Step 95 of 100, 5 left."), "the last ten are exact");
+    }
+
+    #[test]
+    fn only_a_promise_of_work_counts_as_narration() {
+        for promise in [
+            "I'll start by exploring the dataset, then build the workbook.",
+            "Now I will build the workbook.",
+            "Let me open the file first.",
+            "I\u{2019}ll read the sheet next.",
+        ] {
+            assert!(announces_work(promise), "{promise}");
+        }
+        for answer in [
+            "The sheet is 2 by 2.",
+            "Opened budget.xlsx in Excel.",
+            "Which file do you mean: sales.xlsx or sales-old.xlsx? I'll open it once you say.",
+        ] {
+            assert!(!announces_work(answer), "{answer}");
+        }
     }
 
     #[test]
@@ -2292,20 +2423,22 @@ mod tests {
     #[test]
     fn prose_ends_the_turn() {
         let (mut relay, mut runner, _s, _h) = world();
-        // Prose is still how a turn ends. What changed is that a run which
-        // has not done anything yet gets asked once whether it meant to
-        // start, because answering before beginning is how a capability run
-        // finished after a single read.
-        let mut brain = FakeBrain::new(&[prose_reply("the sheet is 2 by 2"), prose_reply("the sheet is 2 by 2")]);
+        // Prose is how a turn ends, the first time, unless it is a promise
+        // of work not started ("I'll start by...", which has its own test).
+        // Nudging after every answer sent a model that had asked the human
+        // a question off to do something instead of waiting for the reply.
+        let mut brain = FakeBrain::new(&[prose_reply("the sheet is 2 by 2")]);
         let mut a = agent("how big");
-        assert!(matches!(
-            a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()),
-            Step::Refused(_)
-        ));
         match a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()) {
             Step::Answered(t) => assert_eq!(t, "the sheet is 2 by 2"),
             other => panic!("{other:?}"),
         }
+        let mut brain = FakeBrain::new(&[prose_reply("Which of the two workbooks do you mean? I'll wait for your answer.\nsales.xlsx or sales-old.xlsx?")]);
+        let mut a = agent("open the sales workbook");
+        assert!(
+            matches!(a.step(&mut brain, &mut relay, &mut runner, &ShellPolicy::default()), Step::Answered(_)),
+            "a question back to the human ends the turn"
+        );
     }
 
     #[test]

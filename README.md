@@ -46,12 +46,19 @@ default, and any MCP client can use the same tools.
 
 ## Quick start (Windows)
 
-Requirements: Windows 10/11, Microsoft Office desktop, Rust, .NET 8 SDK.
+**The installer**, needing only Windows 10/11 and desktop Office: download
+`Syn-<version>-setup.exe` from Releases and run it (no administrator
+rights needed), start Syn from the Start menu, and add an API key with the
+key icon in the sidebar. A zip of the same files is there too, for anyone
+who would rather not install. To build both yourself:
+`powershell -File scripts\package.ps1` (with NSIS for the installer).
+
+**From source**, needing Rust and the .NET 8 SDK as well:
 
 ```
 cd core && cargo build --release && cargo build --bins && cd ..
 dotnet build -c Release sidecar-csharp\Host
-copy .env.example .env        # then set the AGENT_PIPE_* lines (and AGENT_API_KEY, or add a key in Settings)
+copy .env.example .env        # then set AGENT_API_KEY, or add a key in Settings
 ```
 
 Then either point an MCP client at `core\target\release\mcpgate.exe`, or

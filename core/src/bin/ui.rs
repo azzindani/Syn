@@ -290,6 +290,17 @@ fn main() {
     }
     println!("the agent console: {url}");
     println!("(loopback only; ctrl-c to stop)");
+    // `--open`: a double-clicked copy has no script around it to open the
+    // page, and a console window holding an address is not an app.
+    if args.iter().any(|a| a == "--open") {
+        let _ = if cfg!(windows) {
+            Command::new("cmd").args(["/C", "start", "", &url]).spawn()
+        } else if cfg!(target_os = "macos") {
+            Command::new("open").arg(&url).spawn()
+        } else {
+            Command::new("xdg-open").arg(&url).spawn()
+        };
+    }
 
     // One thread per connection. The child still has one stdin, so /cmd
     // serialises on the mutex exactly as before -- but a turn that takes

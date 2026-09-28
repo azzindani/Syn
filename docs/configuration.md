@@ -73,8 +73,8 @@ wrong would connect to something else, so there is no built-in default.
 
 | Variable | Example | Meaning |
 |---|---|---|
-| `AGENT_PIPE_EXCEL`, `AGENT_PIPE_WORD`, `AGENT_PIPE_PPT` | `hand-excel` | The named pipe (Unix socket off Windows) each Office helper listens on. |
-| `AGENT_PIPE_UIA` | `hand-uia` | The UI Automation helper, for any native Windows window. |
+| `AGENT_PIPE_EXCEL`, `AGENT_PIPE_WORD`, `AGENT_PIPE_PPT` | `hand-excel`, `hand-word`, `hand-powerpoint` | The named pipe (Unix socket off Windows) each Office helper listens on. `off` stops offering that application. |
+| `AGENT_PIPE_UIA` | none: not offered | The UI Automation helper, for any native Windows window. `.env.example` sets `hand-uia`. |
 | `AGENT_CDP` | `127.0.0.1:9222` | A Chromium browser or Electron app started with `--remote-debugging-port`. That port is unauthenticated: keep it on 127.0.0.1 and use a separate `--user-data-dir`. |
 | `AGENT_OFFICE_HOST` | — | Path to `office-host.exe` (or `sidecar-lo/lo_host.py` off Windows), when not in this repository's Release build output. |
 | `AGENT_UIA_HOST` | — | Path to `uia-host.exe`, likewise. |

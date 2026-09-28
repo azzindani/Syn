@@ -684,8 +684,16 @@ impl EnvConnector {
             "ui" if cfg!(windows) => ("AGENT_UIA_HOST", "sidecar-csharp/Uia/bin/Release/net8.0-windows/uia-host.exe"),
             _ => return None,
         };
+        // Beside the running program first: a packaged copy is one folder
+        // of executables, where the repository's build paths do not exist
+        // and the helper was never found.
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join(Path::new(rel).file_name().unwrap_or_default())))
+            .filter(|p| p.is_file());
         let found = match std::env::var(var) {
             Ok(p) if !p.trim().is_empty() => Some(PathBuf::from(p.trim())).filter(|p| p.is_file()),
+            _ if beside.is_some() => beside,
             _ => {
                 let mut starts = vec![];
                 if let Ok(c) = std::env::current_dir() {

@@ -216,11 +216,34 @@ pub fn pipe_env_key(app: &str) -> String {
     format!("AGENT_PIPE_{}", app.to_ascii_uppercase())
 }
 
-/// The pipe a sidecar listens on, or None when the deployment has not named
-/// one. No compiled-in default: a wrong pipe name fails by connecting to
-/// something else, so it is better to have nothing to click.
+/// The pipe a sidecar listens on, or None when the application is not
+/// offered.
+///
+/// Excel, Word and PowerPoint have a default, the names `.env.example` and
+/// docs/configuration.md have always given, because a packaged copy has no
+/// `.env`: with no compiled-in name, Syn downloaded and started as it comes
+/// could not reach Office at all ("not wired: set AGENT_PIPE_EXCEL"). The
+/// names are Syn's own helpers', which Syn starts on them. `off` (or `none`)
+/// takes an application away. The window and browser hands stay opt-in:
+/// they reach far more than documents, and a person turns them on.
 pub fn pipe_for(app: &str) -> Option<String> {
-    std::env::var(pipe_env_key(app)).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    match std::env::var(pipe_env_key(app)) {
+        Ok(v) => {
+            let v = v.trim();
+            (!v.is_empty() && !v.eq_ignore_ascii_case("off") && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
+        }
+        Err(_) => default_pipe(app).map(str::to_string),
+    }
+}
+
+/// The pipe an Office helper listens on when nothing names one.
+pub fn default_pipe(app: &str) -> Option<&'static str> {
+    match app {
+        "excel" => Some("hand-excel"),
+        "word" => Some("hand-word"),
+        "ppt" => Some("hand-powerpoint"),
+        _ => None,
+    }
 }
 
 /// Where a Chromium is listening with --remote-debugging-port.
@@ -328,6 +351,22 @@ mod tests {
         std::fs::write(root.join(".env"), "AGENT_MODEL_CODING=v/x\n").unwrap();
         assert_eq!(find_env_from(&deep), None);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn office_is_reachable_with_no_env_file_and_can_be_switched_off() {
+        // A packaged copy has no .env. With no compiled-in pipe names it
+        // could not reach Office at all. Variables no other test touches.
+        // SAFETY: nothing else in this binary reads these variables.
+        unsafe {
+            std::env::remove_var("AGENT_PIPE_WORD");
+            std::env::set_var("AGENT_PIPE_PPT", "off");
+        }
+        assert_eq!(pipe_for("word").as_deref(), Some("hand-word"));
+        assert_eq!(pipe_for("ppt"), None, "off takes an application away");
+        assert_eq!(default_pipe("uia"), None, "native windows stay opt-in");
+        unsafe { std::env::remove_var("AGENT_PIPE_PPT") };
+        assert_eq!(pipe_for("ppt").as_deref(), Some("hand-powerpoint"));
     }
 
     #[test]

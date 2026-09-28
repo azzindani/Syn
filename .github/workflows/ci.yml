@@ -65,6 +65,34 @@ jobs:
       - name: build the UIA host
         run: dotnet build sidecar-csharp/Uia/Uia.csproj -c Release --nologo
 
+  # The Windows package a person downloads: console, CLI, MCP server and a
+  # self-contained Office helper in one zip (scripts/package.ps1). Built on
+  # every push, so any run's artifact is a build to try on a machine with
+  # Office and no toolchain; published as a release on a v* tag.
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: build the package
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syn-windows
+          path: dist/*.zip
+      - name: publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME (Get-Item dist/*.zip).FullName --title "Syn $env:GITHUB_REF_NAME" --generate-notes
+
   # The fixture, the scorers and the smoke scripts are PowerShell, and a
   # parse error in one of them is silent: the shell reports it and carries
   # on with the next command, so a setup step can simply not happen. That

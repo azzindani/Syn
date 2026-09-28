@@ -3,7 +3,22 @@
 Syn drives Word, Excel and PowerPoint through COM, which needs Windows and a
 desktop install of Microsoft Office.
 
-## Requirements
+## From the package
+
+The quickest way, and the only one that needs no toolchain: download
+`Syn-<version>-win-x64.zip` from the repository's Releases (or, for an
+unreleased build, the `syn-windows` artifact of any CI run), unzip it into a
+folder you own, and double-click `Syn.cmd`. `START HERE.txt` inside says
+the rest. The package is Office only: the console, the CLI, the MCP server
+and a self-contained Office helper, which carries its own .NET. It needs
+Windows 10 or 11 and desktop Office, nothing else.
+
+To build that package yourself: `powershell -File scripts\package.ps1`
+(needs Rust and the .NET 8 SDK), which writes `dist\Syn-<version>-win-x64.zip`.
+
+## From source
+
+### Requirements
 
 - Windows 10 or 11
 - Microsoft Office desktop apps (Microsoft 365 or a perpetual version)
@@ -14,7 +29,7 @@ desktop install of Microsoft Office.
 - For the model-driven agent: an API key for an OpenAI-compatible provider
   (OpenRouter by default). Not needed to use Syn from an MCP client.
 
-## Build
+### Build
 
 From the repository root:
 
@@ -27,7 +42,7 @@ dotnet build -c Release sidecar-csharp\Host   # office-host.exe (Office)
 dotnet build -c Release sidecar-csharp\Uia    # uia-host.exe (any window)
 ```
 
-## Configure
+### Configure
 
 ```
 copy .env.example .env
@@ -37,11 +52,11 @@ Then edit `.env`:
 
 ```
 AGENT_API_KEY=sk-or-v1-...          # for the console and the CLI's agent
-AGENT_PIPE_EXCEL=hand-excel
-AGENT_PIPE_WORD=hand-word
-AGENT_PIPE_PPT=hand-powerpoint
-AGENT_PIPE_UIA=hand-uia
+AGENT_PIPE_UIA=hand-uia             # only to drive native windows too
 ```
+
+The Office pipes default to `hand-excel`, `hand-word` and `hand-powerpoint`;
+set one to `off` to stop offering that application.
 
 Everything else has a working default; see [configuration.md](configuration.md).
 The key can instead be pasted into the console's Settings (the menu on the

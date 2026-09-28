@@ -50,6 +50,8 @@ pub struct Fold {
     /// Lines that were not a stream, verbatim: a plain JSON reply or an
     /// error body.
     other: String,
+    /// `data: [DONE]` has arrived: the reply is whole.
+    ended: bool,
 }
 
 impl Fold {
@@ -62,13 +64,24 @@ impl Fold {
         self.saw_sse
     }
 
+    /// Whether the stream has said it is finished. Nothing after this is
+    /// part of the reply, and a reader should stop rather than wait for the
+    /// connection to close.
+    pub fn ended(&self) -> bool {
+        self.ended
+    }
+
     /// Take one line of the response.
     pub fn line(&mut self, line: &str, on: &mut dyn FnMut(Kind, &str)) {
         let t = line.trim_end_matches(['\r', '\n']);
         if let Some(p) = t.strip_prefix("data:") {
             self.saw_sse = true;
             let p = p.trim();
-            if p.is_empty() || p == "[DONE]" {
+            if p == "[DONE]" {
+                self.ended = true;
+                return;
+            }
+            if p.is_empty() {
                 return;
             }
             // A chunk that does not parse is skipped, not fatal: one bad
@@ -295,6 +308,15 @@ mod tests {
             f.line(l, &mut |k, t| seen.push((k, t.to_string())));
         }
         (f.finish(), seen)
+    }
+
+    #[test]
+    fn done_says_the_reply_is_whole() {
+        let mut f = Fold::new();
+        f.line(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#, &mut |_, _| {});
+        assert!(!f.ended());
+        f.line("data: [DONE]", &mut |_, _| {});
+        assert!(f.ended());
     }
 
     #[test]

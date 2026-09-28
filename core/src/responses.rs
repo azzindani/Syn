@@ -208,6 +208,11 @@ impl StreamFold {
         }
     }
 
+    /// Whether the final event has arrived; see `sse::Fold::ended`.
+    pub fn ended(&self) -> bool {
+        self.done.is_some()
+    }
+
     pub fn finish(self) -> String {
         if let Some(r) = self.done {
             return from_response(&r).to_json();

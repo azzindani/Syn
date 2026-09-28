@@ -4,9 +4,10 @@ import { readState } from "./console.mjs";
 
 const { url } = readState();
 
-// What the console calls a finished turn: the send button comes back.
+// What the console calls a finished turn: Stop turns back into Send. (It is
+// disabled then, with nothing in the box, so enabled is not the signal.)
 async function turnSettled(page) {
-  await expect(page.locator("#send")).toBeEnabled({ timeout: 150_000 });
+  await expect(page.locator("#send:not(.stop)")).toBeVisible({ timeout: 150_000 });
 }
 
 test.beforeEach(async ({ page }) => {

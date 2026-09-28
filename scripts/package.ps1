@@ -1,7 +1,12 @@
 # package.ps1 - build Syn for Windows as one folder you can unzip and run.
 #
-#   powershell -File scripts\package.ps1              # dist\Syn-<version>-win-x64.zip
+#   powershell -File scripts\package.ps1              # dist\Syn-<version>-setup.exe and -win-x64.zip
 #   powershell -File scripts\package.ps1 -Out D:\out
+#
+# The installer (setup.exe) is what a person downloads: one file, a Start
+# menu and desktop shortcut, an entry in Settings > Apps. It needs NSIS on
+# the building machine (makensis; GitHub's Windows runners have it); without
+# NSIS only the zip is made. scripts/installer.nsi is the installer.
 #
 # Needs Rust and the .NET 8 SDK on the machine that builds it. The machine
 # that runs it needs neither: office-host is published self-contained, so
@@ -41,11 +46,13 @@ foreach ($bin in 'ui', 'cli', 'mcpgate') {
 # --- the Office helper, self-contained ----------------------------------------
 # One file, carrying its own .NET, so the person running Syn installs nothing.
 # Not trimmed: every Office call is late-bound `dynamic`, which trimming
-# cannot see and would strip the binder out from under.
+# cannot see and would strip the binder out from under. Compressed instead:
+# 35 MB rather than 67, for a moment's unpacking when a helper starts.
 $pub = Join-Path $Out 'office-host-publish'
 if (Test-Path $pub) { Remove-Item -Recurse -Force $pub }
 dotnet publish (Join-Path $repo 'sidecar-csharp\Host\Host.csproj') -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+    -p:PublishTrimmed=false `
     -p:Version=$version --nologo -o $pub
 if ($LASTEXITCODE) { throw "dotnet publish failed" }
 Copy-Item (Join-Path $pub 'office-host.exe') $stage
@@ -82,9 +89,11 @@ ui.exe --open
 Syn $version for Windows -- Excel, Word and PowerPoint, driven by a model.
 
 START
-  1. Unzip this folder somewhere you own (Documents is fine; not Program
-     Files, which Syn cannot write its chats into).
-  2. Double-click Syn.cmd. A window opens and your browser shows the console.
+  1. From the installer: start Syn from the Start menu or the desktop.
+     From the zip: unzip it somewhere you own (Documents is fine; not
+     Program Files, which Syn cannot write its chats into) and
+     double-click Syn.cmd.
+  2. A small Syn window opens, and your browser shows the console.
   3. Add an API key: the key icon at the bottom of the sidebar.
   4. Ask for something: "open C:\...\budget.xlsx and total column C".
   Closing the Syn window stops Syn and anything it started. Your Office
@@ -106,11 +115,13 @@ FILES
   mcpgate.exe      the MCP server
   office-host.exe  the Office helper: started by the others when needed
   .env             settings; chats and saved keys go in .agent\ beside it
+  Syn.cmd          what the Start menu shortcut runs
 
 More: https://github.com/azzindani/Syn (docs\setup-windows.md, docs\mcp.md)
 "@ | Set-Content -Encoding ascii (Join-Path $stage 'START HERE.txt')
 
 Copy-Item (Join-Path $repo 'LICENSE') $stage
+Copy-Item (Join-Path $repo 'scripts\assets\syn.ico') $stage
 
 # --- zip, and say what was made ----------------------------------------------
 $zip = Join-Path $Out "$name.zip"
@@ -120,4 +131,17 @@ $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
 Write-Host ""
 Write-Host "made   $zip"
 Write-Host "sha256 $hash"
+
+# --- the installer --------------------------------------------------------------
+$nsis = Get-Command makensis -ErrorAction SilentlyContinue
+$makensis = if ($nsis) { $nsis.Source } else { Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe' }
+if (Test-Path $makensis) {
+    $setup = Join-Path $Out "Syn-$version-setup.exe"
+    & $makensis "-DVERSION=$version" "-DSRC=$stage" "-DOUT=$setup" (Join-Path $repo 'scripts\installer.nsi')
+    if ($LASTEXITCODE) { throw "makensis failed" }
+    Write-Host "made   $setup"
+    Write-Host ("sha256 " + (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower())
+} else {
+    Write-Host "no NSIS (makensis): made the zip only. Install NSIS for the setup.exe."
+}
 Get-ChildItem $stage | ForEach-Object { Write-Host ("       {0,-18} {1,10:N0} bytes" -f $_.Name, $_.Length) }

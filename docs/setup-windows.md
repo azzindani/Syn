@@ -6,15 +6,21 @@ desktop install of Microsoft Office.
 ## From the package
 
 The quickest way, and the only one that needs no toolchain: download
-`Syn-<version>-win-x64.zip` from the repository's Releases (or, for an
-unreleased build, the `syn-windows` artifact of any CI run), unzip it into a
-folder you own, and double-click `Syn.cmd`. `START HERE.txt` inside says
-the rest. The package is Office only: the console, the CLI, the MCP server
+`Syn-<version>-setup.exe` from the repository's Releases (or, for an
+unreleased build, the `syn-windows` artifact of any CI run) and run it. It
+installs for the current user into `%LOCALAPPDATA%\Programs\Syn` with no
+administrator prompt, adds Syn to the Start menu and the desktop, and
+appears in Settings > Apps to uninstall; uninstalling asks before it
+deletes your chats and saved keys. The same files come as
+`Syn-<version>-win-x64.zip` for anyone who would rather unzip and
+double-click `Syn.cmd`. The installer is not code-signed yet, so Windows
+SmartScreen warns the first time: More info, then Run anyway. The package is Office only: the console, the CLI, the MCP server
 and a self-contained Office helper, which carries its own .NET. It needs
 Windows 10 or 11 and desktop Office, nothing else.
 
-To build that package yourself: `powershell -File scripts\package.ps1`
-(needs Rust and the .NET 8 SDK), which writes `dist\Syn-<version>-win-x64.zip`.
+To build them yourself: `powershell -File scripts\package.ps1` (needs Rust,
+the .NET 8 SDK, and [NSIS](https://nsis.sourceforge.io) for the installer),
+which writes both to `dist\`. `scripts\installer.nsi` is the installer.
 
 ## From source
 

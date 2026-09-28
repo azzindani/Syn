@@ -9,16 +9,17 @@ real Office, a real window and a real double-click can show.
 Work on the throwaway documents in `testbed\`, never on your own. Tick each
 box; a failure is a bug to fix before the tag, not a note.
 
-## 1. The package, as a new user gets it
+## 1. The installer, as a new user gets it
 
 Download the `syn-windows` artifact of the latest green CI run (Actions →
 the run → Artifacts), or build it: `powershell -File scripts\package.ps1`.
 
-- [ ] Unzip into `Documents\Syn-test` on a machine (or user account) with
-      **no Rust, no .NET SDK and no `.env`** from the repository.
-- [ ] Double-click `Syn.cmd`: a window opens and the browser shows the
-      console. Windows SmartScreen may warn about an unsigned program the
-      first time; note whether it did.
+- [ ] Run `Syn-<version>-setup.exe` on a machine (or user account) with
+      **no Rust, no .NET SDK and no `.env`** from the repository. No
+      administrator prompt; SmartScreen warns about an unsigned program
+      (More info → Run anyway) -- note that it did.
+- [ ] "Start Syn now" on the last page: a minimised Syn window and the
+      console in the browser. Next time, the Start menu or desktop "Syn".
 - [ ] The key icon in the sidebar opens Settings; paste a key; the "Add an
       API key" notice goes away.
 - [ ] Ask: `open <full path>\testbed\docs\plan.xlsx`. Excel opens it (or
@@ -29,8 +30,14 @@ the run → Artifacts), or build it: `powershell -File scripts\package.ps1`.
 - [ ] Close the Syn window. In Task Manager: no `ui.exe`, `cli.exe`,
       `office-host.exe` or `curl.exe` left. Excel is still open with the
       document.
-- [ ] `.agent\` appeared beside `.env` in the package folder (chats, the
-      saved key), not somewhere else.
+- [ ] `.agent\` appeared beside `.env` in `%LOCALAPPDATA%\Programs\Syn`
+      (chats, the saved key), not somewhere else.
+- [ ] Run the installer again over it: the chats and the key survive.
+- [ ] Uninstall from Settings > Apps, answering No to deleting chats: the
+      programs and shortcuts go, `.agent\` and `.env` stay. Uninstall again
+      after reinstalling, answering Yes: the folder is gone.
+- [ ] The zip: unzip into `Documents\Syn-test`, double-click `Syn.cmd`,
+      and it works the same.
 
 ## 2. Every Office verb, through the real helper
 

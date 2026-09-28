@@ -46,10 +46,12 @@ default, and any MCP client can use the same tools.
 
 ## Quick start (Windows)
 
-**The package**, needing only Windows 10/11 and desktop Office: download
-`Syn-<version>-win-x64.zip` from Releases, unzip it into a folder you own,
-double-click `Syn.cmd`, and add an API key with the key icon in the sidebar.
-To build the package yourself: `powershell -File scripts\package.ps1`.
+**The installer**, needing only Windows 10/11 and desktop Office: download
+`Syn-<version>-setup.exe` from Releases and run it (no administrator
+rights needed), start Syn from the Start menu, and add an API key with the
+key icon in the sidebar. A zip of the same files is there too, for anyone
+who would rather not install. To build both yourself:
+`powershell -File scripts\package.ps1` (with NSIS for the installer).
 
 **From source**, needing Rust and the .NET 8 SDK as well:
 

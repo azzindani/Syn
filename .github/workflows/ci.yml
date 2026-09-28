@@ -91,13 +91,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: syn-windows
-          path: dist/*.zip
+          path: |
+            dist/*-setup.exe
+            dist/*.zip
       - name: publish the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME (Get-Item dist/*.zip).FullName --title "Syn $env:GITHUB_REF_NAME" --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME (Get-Item dist/*-setup.exe).FullName (Get-Item dist/*.zip).FullName --title "Syn $env:GITHUB_REF_NAME" --generate-notes
 
   # The fixture, the scorers and the smoke scripts are PowerShell, and a
   # parse error in one of them is silent: the shell reports it and carries

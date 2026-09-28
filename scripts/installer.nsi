@@ -23,6 +23,15 @@ Unicode true
   !define OUT "Syn-${VERSION}-setup.exe"
 !endif
 
+; File looks paths up the host's way: the Windows makensis found nothing at
+; "D:\...\Syn-0.1.0-win-x64/ui.exe" (CI run #49), and the Linux one wants
+; "/". NSIS_WIN32_MAKENSIS is defined only by the Windows build.
+!ifdef NSIS_WIN32_MAKENSIS
+  !define P "${SRC}\"
+!else
+  !define P "${SRC}/"
+!endif
+
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Syn"
 
 Name "Syn ${VERSION}"
@@ -40,8 +49,8 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "FileDescription" "Syn setup: Excel, Word and PowerPoint, driven by a model"
 VIAddVersionKey "LegalCopyright" "See LICENSE"
 
-!define MUI_ICON "${SRC}/syn.ico"
-!define MUI_UNICON "${SRC}/syn.ico"
+!define MUI_ICON "${P}syn.ico"
+!define MUI_UNICON "${P}syn.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "Syn lets a language model work in the Excel, Word and PowerPoint you already have open, while you watch.$\r$\n$\r$\nIt needs Windows 10 or 11 and desktop Microsoft Office. Nothing else is installed with it.$\r$\n$\r$\nClose Syn if it is running, then continue."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Syn.cmd"
@@ -51,7 +60,7 @@ VIAddVersionKey "LegalCopyright" "See LICENSE"
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${SRC}/LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${P}LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -63,17 +72,17 @@ Section "Syn" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   ; A running Syn holds these open; NSIS then offers Retry once it is closed.
-  File "${SRC}/ui.exe"
-  File "${SRC}/cli.exe"
-  File "${SRC}/mcpgate.exe"
-  File "${SRC}/office-host.exe"
-  File "${SRC}/Syn.cmd"
-  File "${SRC}/syn.ico"
-  File "${SRC}/LICENSE"
-  File "${SRC}/START HERE.txt"
+  File "${P}ui.exe"
+  File "${P}cli.exe"
+  File "${P}mcpgate.exe"
+  File "${P}office-host.exe"
+  File "${P}Syn.cmd"
+  File "${P}syn.ico"
+  File "${P}LICENSE"
+  File "${P}START HERE.txt"
   ; The settings are the user's once written: an upgrade keeps them.
   SetOverwrite off
-  File "${SRC}/.env"
+  File "${P}.env"
   SetOverwrite on
 
   WriteUninstaller "$INSTDIR\uninstall.exe"

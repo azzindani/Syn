@@ -2431,6 +2431,15 @@ async function tail() {
     if (tailSrc === null) {
       tailSrc = d.source;
       tailAt = d.n;
+      // Except a run still going. Its turn is not in the saved transcript
+      // until it ends, so skipping its lines left a page opened mid-run
+      // showing nothing of it at all. Draw it from its own first line.
+      if (d.running) {
+        const lines = d.lines || [];
+        let from = -1;
+        for (let i = lines.length - 1; i >= 0 && from < 0; i--) if (/^RECEIPT say /.test(lines[i])) from = i;
+        if (from >= 0) for (const line of lines.slice(from)) liveStep(line);
+      }
       liveState(d.running);
       return;
     }

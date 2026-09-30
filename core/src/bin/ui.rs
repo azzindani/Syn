@@ -42,6 +42,61 @@ const PAGE: &str = include_str!("../../../widget/index.html");
 #[derive(Default)]
 struct Live {
     busy: AtomicBool,
+    /// A turn holds the child: one of `TURNS` is running. Not the lock
+    /// itself -- any quick command holds that for a moment, and a picker's
+    /// `slots` answered from the copy because a `hands` happened to be in
+    /// flight showed the model from before the one just chosen.
+    turn: AtomicBool,
+}
+
+/// The commands that run the agent, and so hold the child for minutes.
+const TURNS: &[&str] = &["say", "do", "approve", "deny", "replay"];
+
+fn is_turn(line: &str) -> bool {
+    TURNS.contains(&line.split_whitespace().next().unwrap_or(""))
+}
+
+/// What a page asks in order to draw itself, and nothing that changes
+/// anything. The child reads one line at a time, so during a turn every
+/// command queues behind it -- and a page opened or reloaded mid-run sent
+/// `slots` first, waited the whole turn for the answer, and stayed blank:
+/// no sidebar, no thread, no live view, for as long as the run took.
+const READS: &[&str] = &["slots", "keys", "workspace", "hands", "chat list", "chat msgs"];
+
+/// The last answer the child gave to each of `READS`. Taken fresh as a turn
+/// starts, since the state it starts from is what a page opened during it
+/// should see.
+#[derive(Default)]
+struct Seen(Mutex<std::collections::HashMap<String, String>>);
+
+impl Seen {
+    fn get(&self, line: &str) -> Option<String> {
+        self.0.lock().ok()?.get(line).cloned()
+    }
+    fn put(&self, line: &str, out: &str) {
+        if let Ok(mut m) = self.0.lock() {
+            m.insert(line.to_string(), out.to_string());
+        }
+    }
+    /// Ask the child every read again. Called holding its lock.
+    fn take(&self, c: &mut Cli) {
+        for r in READS {
+            if let Ok(out) = c.exec(r) {
+                self.put(r, &out);
+            }
+        }
+    }
+}
+
+/// A read's answer while a turn holds the child, from what it said as the
+/// turn began. None when no turn is running (ask the child: anything else
+/// in its way is over in moments) or it was never asked (queue, as before:
+/// there is nothing honest to answer with).
+fn busy_read(live: &Live, seen: &Seen, line: &str) -> Option<String> {
+    if !READS.contains(&line) || !live.turn.load(Ordering::SeqCst) {
+        return None;
+    }
+    seen.get(line)
 }
 
 /// The CLI, running, with a pipe to its mouth and one to its ear.
@@ -249,6 +304,7 @@ fn main() {
         }
     };
     let live = Arc::new(Live::default());
+    let seen = Arc::new(Seen::default());
     // The log this console's own child writes, which the view follows
     // while a turn the person started here is running.
     let own_log_cell = Arc::new(Mutex::new(cli.lock().ok().map(|c| core::live::log_of(c.child.id()))));
@@ -310,6 +366,7 @@ fn main() {
         let Ok(s) = conn else { continue };
         let cli = Arc::clone(&cli);
         let live = Arc::clone(&live);
+        let seen = Arc::clone(&seen);
         let catalog = Arc::clone(&catalog);
         let pinned = pinned.clone();
         let own_log_cell = Arc::clone(&own_log_cell);
@@ -380,12 +437,34 @@ fn main() {
                     let _ = respond(&mut s, "200 OK", "application/json", "{\"out\":\"(use ctrl-c in the console window to stop)\"}");
                     return;
                 }
+                let key = line.trim();
+                if let Some(out) = busy_read(&live, &seen, key) {
+                    let body = format!("{{\"out\":\"{}\"}}", json_escape(&out));
+                    let _ = respond(&mut s, "200 OK", "application/json", &body);
+                    return;
+                }
                 live.busy.store(true, Ordering::SeqCst);
                 let out = match cli.lock() {
-                    Ok(mut c) => match c.exec(&line) {
-                        Ok(o) => o,
-                        Err(e) => format!("ERROR {e}"),
-                    },
+                    Ok(mut c) => {
+                        let turn = is_turn(key);
+                        if turn {
+                            seen.take(&mut c);
+                            live.turn.store(true, Ordering::SeqCst);
+                        }
+                        let out = match c.exec(&line) {
+                            Ok(o) => {
+                                if READS.contains(&key) {
+                                    seen.put(key, &o);
+                                }
+                                o
+                            }
+                            Err(e) => format!("ERROR {e}"),
+                        };
+                        if turn {
+                            live.turn.store(false, Ordering::SeqCst);
+                        }
+                        out
+                    }
                     Err(_) => "ERROR the console lock is poisoned; restart the server".to_string(),
                 };
                 live.busy.store(false, Ordering::SeqCst);
@@ -737,6 +816,30 @@ mod tests {
             Some(o) => ours.iter().any(|a| a == o),
             None => false,
         }
+    }
+
+    #[test]
+    fn only_a_running_turn_lets_a_read_skip_the_queue() {
+        assert!(is_turn("say open the workbook"));
+        assert!(is_turn("do tidy the sheet"));
+        assert!(is_turn("approve"));
+        assert!(is_turn("deny not now"));
+        // Commands that start with a turn's name are not turns.
+        assert!(!is_turn("sayings"));
+        assert!(!is_turn("slots"));
+        assert!(!is_turn("model opencode-go muse-spark-1.3"));
+
+        let live = Live::default();
+        let seen = Seen::default();
+        seen.put("slots", "RECEIPT slots pick=auto");
+        // No turn: every read goes to the child, never to the copy. A quick
+        // command in flight is no reason to answer from what it said before.
+        assert_eq!(busy_read(&live, &seen, "slots"), None);
+        live.turn.store(true, Ordering::SeqCst);
+        assert_eq!(busy_read(&live, &seen, "slots").as_deref(), Some("RECEIPT slots pick=auto"));
+        // Only reads, and only what was actually asked before.
+        assert_eq!(busy_read(&live, &seen, "model auto"), None);
+        assert_eq!(busy_read(&live, &seen, "keys"), None);
     }
 
     #[test]

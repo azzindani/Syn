@@ -1916,6 +1916,15 @@ namespace Syn.Sidecar
                             try { book.Close(false); } catch { }
                             app0.DisplayAlerts = alerts0;
                         }
+                        // Everything in it is in a file now: the workbook just
+                        // written. Asked to save as xlsx and go on there, a run
+                        // closed the CSV as told and was refused for unsaved
+                        // changes -- a scratch sheet from an earlier answer --
+                        // and the person saw two workbooks for one request.
+                        // Only a CSV this helper opened: one the person opened
+                        // is theirs to decide about. A change after this makes
+                        // it unsaved again, and close refuses as before.
+                        if (OpenedHere.Contains((string)wb.Name)) wb.Saved = true;
                         return Ok($"exported {full} ({(int)wb.Sheets.Count} sheet(s))");
                     }
                     // SaveCopyAs keeps the workbook's own format (xlsm, xls),

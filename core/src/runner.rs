@@ -639,8 +639,9 @@ impl Runner {
 /// does. Nothing said so, and a model that then opened the workbook to work
 /// in it left both open side by side: found in a live run, where the person
 /// watching saw two files appear for one request. Closing the CSV is allowed
-/// -- Syn opened it and it has no changes -- so the two calls that finish the
-/// job are given ready to copy. None for anything but a `.csv` document.
+/// -- Syn opened it, and office-host marks it saved once its every sheet is
+/// in the workbook -- so the two calls that finish the job are given ready to
+/// copy. None for anything but a `.csv` document.
 fn csv_saved_as_book(handle: &str, written: &str) -> Option<String> {
     let mut parts = handle.splitn(3, ':');
     let (app, doc) = (parts.next()?, parts.next()?);
@@ -651,7 +652,7 @@ fn csv_saved_as_book(handle: &str, written: &str) -> Option<String> {
     let close = crate::json::obj(vec![("handle", s(handle)), ("verb", s("close"))]).to_json();
     let open = crate::json::obj(vec![("app", s(app)), ("path", s(written))]).to_json();
     Some(format!(
-        "\n{doc} is still open beside it, unchanged. To go on in the workbook alone, close the CSV and open the workbook: struct{close} then open{open}"
+        "\n{doc} is still open beside it, and everything in it is in the workbook now. To go on in the workbook alone, close the CSV and open the workbook: struct{close} then open{open}"
     ))
 }
 

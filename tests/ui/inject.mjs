@@ -5,10 +5,16 @@
 //   node inject.mjs "your prompt"
 //   node inject.mjs "your prompt" --headed --shot ../../testbed/inject.png
 //   node inject.mjs "..." --setup "hand synuia uia" --setup "live uia:poem::doc"
+//   node inject.mjs "..." --model "Provider tab|model-id" --workspace D:\data
 //
 // --setup runs a console command through the page before the prompt, which
 // is the only way to reach the CLI child the console owns: a second cli.exe
 // has its own Runner and its own registry.
+//
+// --model and --workspace go through the pickers beside the box, by click,
+// as a person would. A `--setup "model ..."` does not stick: send() types
+// `model auto` before every message unless the picker holds a choice, so a
+// whole run once went to the .env slot while the setup line said otherwise.
 //
 // The URL comes from the file console.ps1 writes, so the token is never
 // guessed and never pasted.
@@ -57,15 +63,49 @@ try {
     }
   }
 
+  const model = flag("--model");
+  if (model) {
+    const [tab, id] = String(model).split("|");
+    await page.locator("#mpick").click();
+    await page.locator("#mtabs .mchip", { hasText: tab }).first().click();
+    await page.locator("#msearch").fill(id);
+    // Exact id, not a search hit: an id such as "model-1.3" is also a prefix of
+    // "model-1.3-preview".
+    await page.locator("#mlist .mrow").filter({ has: page.locator(".mi", { hasText: new RegExp(`^${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }) }).first().click();
+    console.log(`model: ${(await page.locator("#mname").innerText()).trim()} (${tab})`);
+  }
+  const ws = flag("--workspace");
+  if (ws) {
+    await page.locator("#wpick").click();
+    await page.locator("#wpath").fill(String(ws));
+    await page.locator("#wgo").click();
+    await page.waitForFunction((w) => document.querySelector("#wname")?.textContent?.trim() !== "Everywhere", ws, { timeout: 10_000 });
+    console.log(`workspace: ${(await page.locator("#wname").innerText()).trim()}`);
+  }
+
   const box = page.locator("#box");
   await box.fill(prompt);
   await box.press("Enter");
 
-  // Settled means the send button came back, which is how the page itself
-  // decides a turn is over.
+  // --keep: a person is watching this window. Send, then leave the page to
+  // the run and do nothing else to it; this process ends when the window is
+  // closed by hand.
+  if (flag("--keep")) {
+    console.log("sent; the window stays open until you close it");
+    await new Promise((r) => browser.on("disconnected", r));
+    process.exit(0);
+  }
+
+  // Settled means the page no longer counts a run as live: `busy` is the
+  // turn it sent, `running` any run the feed reports. The send button is
+  // not the signal any more -- during a run it becomes Stop, enabled, and
+  // waiting on it returned the moment the prompt went out.
   // A real analyst task runs for minutes, not seconds.
   const waitMs = Number(flag("--wait") ?? 900_000);
-  await page.locator("#send:not([disabled])").waitFor({ timeout: waitMs });
+  const live = () => document.body.classList.contains("busy") || document.body.classList.contains("running");
+  const idle = () => !document.body.classList.contains("busy") && !document.body.classList.contains("running");
+  await page.waitForFunction(live, null, { timeout: 30_000 }).catch(() => {});
+  await page.waitForFunction(idle, null, { timeout: waitMs, polling: 2_000 });
 
   const turn = await page.evaluate(() => ({
     acts: [...document.querySelectorAll("#tl .act")].map((a) => ({

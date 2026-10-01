@@ -474,6 +474,52 @@ Four fixes followed, all before experiment 4 and all with tests:
 The last of those raises arm A's score on its own, so experiment 4 is not
 comparable with the table above. It is pre-registered separately.
 
+## Experiment 4: missing from this file
+
+Experiment 4 ran. The design notes say how its arm A ended: the
+repeated-call gate stopped it at step 87, after it read a closed document
+three times (`docs/design/DIGEST-06-opencode-loop.md`, `DIGEST-07`). Its
+pre-registration and its scores were never written here. That gap is noted
+here instead of being filled in from memory: a number reconstructed after
+the fact is not a record, and anyone who still has the transcripts should
+add them next to this note, not in place of it.
+
+## Experiment 5 (pre-registered 2026-09-30, before the run)
+
+**What it is.** A measurement, not a comparison. One arm on the harness as
+it ships after the v0.1.0 round: the turn stops at the end of its stream,
+no processes are left behind, the transcript is compacted, the backoff is in
+place, and tool names are recovered. It answers one question: where does a
+model-driven run of this brief land on this engine today?
+
+**The arm.**
+
+    default   manual pages + the model's own plan, AGENT_MAX_STEPS=300
+
+`task deep`, run by whatever `AGENT_MODEL_REASONING` names in `.env` at the
+time; the result records the model that actually answered, read from the
+transcript. The fixture comes clean from `setup.ps1`, in a freshly started
+Office: the control run on this date found an Excel instance three days old
+with no window on any workbook, and window-level operations (freeze panes)
+failed on it. The brief is `run-v3.txt` verbatim.
+
+**The scorer.** `score-v3.ps1` as of commit `a6bdae2`, with its known
+defects left alone: X3 still takes the widest numeric sheet as the
+scorecard, and P5 still pays a run that narrates and stops. Both are in the
+v4 list above, and repairing either one now would be changing the grader
+right before a run.
+
+**Void if** the transcript shows the run falling back to another slot's
+model for more than a blip (experiment 3's defect), or an upstream error
+body reaching the loop as a completion. A void run stays in this file,
+marked void.
+
+**What it cannot conclude.** n=1, one model, one arm. It has nothing to
+compare with: every earlier model-driven number is either void or was taken
+on a harness since changed. A score in the 85-100 band would be the first
+evidence for v0.1.0. A score anywhere below that says where this model
+stops, not whether a different model would.
+
 ## What the engine cannot do yet
 
 The gap between v1 and this, and therefore the build order. Struck rows are
@@ -537,6 +583,7 @@ the boolean form fails the cast rather than the call.
 | 2026-09-19, same model, repeat | **10/100** | Same brief, same fixture, repaired scorer, empty-turn nudge in place. Got nine calls in: the Table, and derived headers written one cell at a time. The nudge fired and it did carry on, then ended the same way. Word: 5 words. Deck: 0 slides. |
 | 2026-09-19, `ling-3.0-flash-vl:free` | **9/100** | Asked for `qwen3.8-27b`, which was rate-limited on the first call, so the fallback chain ran it on ling instead. One successful operation, a read. Reached for `echo` and `python3`, both refused. Then answered "I'll start by exploring the dataset... in parallel" and the turn ended. |
 | 2026-09-19, `deepseek-v4-flash-0731:free` | **8/100** | Both early-exit paths patched before this run. One successful operation, a read, then an empty completion. Nudged, and returned a second empty completion. |
+| 2026-09-30, control again, after the v0.1.0 round (`a6bdae2`) | **90/90** artifacts and judgement | Same script, same fixture, 72s. The two `freeze=1` ops were refused with `DISP_E_BADINDEX`: the Excel they ran in had been up three days and held no window on any workbook. Neither is a scored check. |
 | provider run | not yet run | |
 
 The control is run with `score-v3.ps1 -Control` and is deliberately scored

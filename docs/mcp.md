@@ -50,7 +50,7 @@ echo {"jsonrpc":"2.0","id":1,"method":"tools/list"} | mcpgate.exe
 | Tool | Does |
 |---|---|
 | `status` | What is open, the exact handle for each and its selector format, what can be opened, and the next step. The first call also carries the working rules. |
-| `open` | Opens a file in Excel, Word or PowerPoint, starting the helper and the application if they are not running, or finds it if it is already open. Also registers a window or a web page. Returns the handle and what is inside (a workbook's sheet names). |
+| `open` | Opens a file in Excel, Word or PowerPoint, starting the helper and the application if they are not running, or finds it if it is already open. Also registers a window or a web page. Returns the handle and what is inside (a workbook's sheet names). With `create: true` it makes a new, empty Word document or PowerPoint deck first, at a path that must not exist yet. |
 | `read`, `write`, `format`, `struct`, `export`, `undo` | The six document operations, identical to the ones Syn's own loop uses. See [tools.md](tools.md). |
 | `manual` | Reference pages: `excel`, `word`, `powerpoint`, `windows`, `browser`. |
 
@@ -58,7 +58,8 @@ Not offered over MCP: `shell` (it always needs a human's approval, which lives
 in Syn's console) and the loop's own `plan`.
 
 `open` never closes or saves anything, and opening a document that is already
-open returns it as it is, so the human's unsaved work is never touched.
+open returns it as it is, so the human's unsaved work is never touched. With
+`create`, it never replaces a file: a name that exists is refused.
 
 ## Built for small models
 

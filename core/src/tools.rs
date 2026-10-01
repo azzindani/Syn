@@ -77,8 +77,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "open",
-        description: "Open a file in Excel, Word or PowerPoint on this computer, or take up one the user already has open, and get the handle every other tool needs. The application, and the helper that connects to it, start by themselves if they are not running. Give the file's FULL path; if you do not know it, call `search` first rather than guessing one. A document already open can be named by its file name alone. For the browser, give part of a page's title or address (no https://); for any other window, part of its title. Never closes or saves anything, and opening a file twice is harmless. Returns the handle and what is inside, for a workbook its sheet names. Example: open{\"app\":\"excel\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\sales.xlsx\"}.",
-        params: r#"{"type":"object","properties":{"app":{"type":"string","enum":["excel","word","powerpoint","browser","window"],"description":"which application"},"path":{"type":"string","maxLength":1000,"description":"the file's full path, e.g. C:\\Users\\me\\Documents\\sales.xlsx; or the file name of a document already open; or part of a browser page's title or address; or part of a window's title"}},"required":["app","path"],"additionalProperties":false}"#,
+        description: "Open a file in Excel, Word or PowerPoint on this computer, or take up one the user already has open, and get the handle every other tool needs. The application, and the helper that connects to it, start by themselves if they are not running. Give the file's FULL path; if you do not know it, call `search` first rather than guessing one. A document already open can be named by its file name alone. For the browser, give part of a page's title or address (no https://); for any other window, part of its title. Never closes or saves anything, and opening a file twice is harmless. Returns the handle and what is inside, for a workbook its sheet names. Example: open{\"app\":\"excel\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\sales.xlsx\"}. To start a NEW Word document or PowerPoint deck, add create:true with a name that does not exist yet; it is made empty and opened, and never replaces a file: open{\"app\":\"word\",\"path\":\"Report.docx\",\"create\":true}.",
+        params: r#"{"type":"object","properties":{"app":{"type":"string","enum":["excel","word","powerpoint","browser","window"],"description":"which application"},"path":{"type":"string","maxLength":1000,"description":"the file's full path, e.g. C:\\Users\\me\\Documents\\sales.xlsx; or the file name of a document already open; or part of a browser page's title or address; or part of a window's title"},"create":{"type":"boolean","description":"true: make a new, empty Word document (.docx) or PowerPoint deck (.pptx) at path, which must not exist yet, and open it"}},"required":["app","path"],"additionalProperties":false}"#,
     },
     ToolSpec {
         name: "search",
@@ -720,7 +720,8 @@ pub enum Action {
     Doc { handle: String, call: Call },
     Shell(ShellRequest),
     /// Bring a document into the registry, bound live: `runner::Door`.
-    Open { app: String, target: String },
+    /// `create`: make it new and empty first (Word and PowerPoint only).
+    Open { app: String, target: String, create: bool },
     /// Look for files by name: `search`.
     Search { name: String, folder: Option<String> },
 }
@@ -801,7 +802,18 @@ pub fn to_action(tc: &ToolCall) -> Result<Action, String> {
         if !OPEN_APPS.contains(&app.as_str()) {
             return Err(format!("open: app {app:?} is not one of {}", OPEN_APPS.join(", ")));
         }
-        return Ok(Action::Open { app, target: need("path")? });
+        // A boolean, read with the real parser: `field` takes strings only.
+        // "true" in quotes is how models often send one, and means the same.
+        let create = match crate::json::parse(a).ok().as_ref().and_then(|v| v.get("create")) {
+            None | Some(crate::json::Value::Bool(false)) => false,
+            Some(crate::json::Value::Bool(true)) => true,
+            Some(crate::json::Value::Str(s)) if s == "true" => true,
+            Some(crate::json::Value::Str(s)) if s == "false" => false,
+            Some(other) => {
+                return Err(format!("open: create is true or false, not {}", other.to_json()));
+            }
+        };
+        return Ok(Action::Open { app, target: need("path")?, create });
     }
     if tc.name == "search" {
         // A call shaped like struct `find` was answered above, before the
@@ -1133,7 +1145,9 @@ mod tests {
     #[test]
     fn open_takes_an_app_from_its_list_and_a_path_and_no_handle() {
         match to_action(&call("open", r#"{"app":"excel","path":"C:\\b\\plan.xlsx"}"#)).unwrap() {
-            Action::Open { app, target } => assert_eq!((app.as_str(), target.as_str()), ("excel", r"C:\b\plan.xlsx")),
+            Action::Open { app, target, create } => {
+                assert_eq!((app.as_str(), target.as_str(), create), ("excel", r"C:\b\plan.xlsx", false))
+            }
             other => panic!("{other:?}"),
         }
         // Outside the enum is refused with the list, never mapped.
@@ -1143,6 +1157,23 @@ mod tests {
         // Over the cap is refused, not truncated.
         let long = format!(r#"{{"app":"word","path":"{}"}}"#, "a".repeat(1001));
         assert!(to_action(&call("open", &long)).unwrap_err().contains("over the 1000"));
+    }
+
+    #[test]
+    fn open_with_create_asks_for_a_new_document_and_takes_true_however_it_is_sent() {
+        for args in [r#"{"app":"word","path":"Report.docx","create":true}"#, r#"{"app":"word","path":"Report.docx","create":"true"}"#] {
+            match to_action(&call("open", args)).unwrap() {
+                Action::Open { create, .. } => assert!(create, "{args}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        match to_action(&call("open", r#"{"app":"word","path":"Report.docx","create":false}"#)).unwrap() {
+            Action::Open { create, .. } => assert!(!create),
+            other => panic!("{other:?}"),
+        }
+        // Anything else is refused with what it takes, never guessed at.
+        let err = to_action(&call("open", r#"{"app":"word","path":"Report.docx","create":"yes"}"#)).unwrap_err();
+        assert!(err.contains("true or false"), "{err}");
     }
 
     #[test]

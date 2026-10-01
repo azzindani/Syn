@@ -91,6 +91,11 @@ running with the user's full privileges. It is **off by default**:
   workspace, and with a workspace or `AGENT_MCP_ROOTS` set it cannot write
   outside those folders.
 - **`open` is idempotent** and never discards unsaved work.
+- **A new document never replaces a file.** `open` with `create` makes an
+  empty Word document or PowerPoint deck only at a name that does not exist,
+  only inside the workspace or `AGENT_MCP_ROOTS`, and checks again in the
+  helper in case the file appeared in between. Syn made it, so Syn may later
+  close it.
 - **`AGENT_MCP_ROOTS`** confines which folders an MCP client may open files
   from and export into. In the console the chat's **workspace** does the same: once set,
   `open` refuses a file outside it and `search` looks nowhere else. The

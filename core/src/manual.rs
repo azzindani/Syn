@@ -214,6 +214,13 @@ computer's list separator -- then `export` format "xlsx" with the new path:
 The rows never pass through you. Reading a CSV to write it back cell by
 cell is the slowest way there is to do this, and it is capped anyway.
 
+The export writes the workbook; the .csv stays open. To go on working in
+the workbook, close the CSV and open the workbook, or the person sees both
+open side by side:
+
+  struct {handle:"excel:sales.csv:workbook", verb:"close"}
+  open   {app:"excel", path:"C:\\data\\sales.xlsx"}
+
 SHEETS MUST EXIST FIRST
 
 `addSheet` before anything whose destination is on a new sheet. A pivot or a
@@ -371,6 +378,15 @@ printed or exported to pdf."#,
         summary: "paragraphs and styles, inserting and deleting, find and replace, headers, comments, links, tables, page setup",
         body: r#"WORD VERBS
 
+A NEW DOCUMENT
+
+`open` with create:true makes a new, empty document with Word's own styles
+and opens it. The name must not exist yet; nothing is ever replaced.
+
+  open {app:"word", path:"Report.docx", create:true}
+
+A bare name goes in the workspace. It starts as one empty paragraph, p0.
+
 READING
 
 `read` with selector "body" is the text, a paragraph per p-number, p0 first,
@@ -511,6 +527,11 @@ is one call. Budget for that before promising a page count."#,
 
 A deck may start with no slides at all. Every slide you want has to be
 created.
+
+A new deck: `open` with create:true makes an empty one and opens it. The
+name must not exist yet; nothing is ever replaced.
+
+  open {app:"powerpoint", path:"Deck.pptx", create:true}
 
   struct {verb:"createSlide", name:"titleContent", title:"...",
           bullets:"first|second|>a sub-bullet of second|third"}

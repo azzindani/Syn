@@ -1298,7 +1298,11 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                 self.pending = Some(p.clone());
                 Step::NeedsApproval(p)
             }
-            Action::Open { app, target } => match runner.open_doc(relay, &app, &target) {
+            Action::Open { app, target, create } => match if create {
+                runner.create_doc(relay, &app, &target)
+            } else {
+                runner.open_doc(relay, &app, &target)
+            } {
                 Ok(doc) => {
                     // Ours outside the fence, the file's inside it: the
                     // summary is what the document said about itself (sheet
@@ -1312,7 +1316,8 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
                     // model there copies it, and that server has no goal of
                     // its own to overrun.
                     let text = format!(
-                        "Opened in {}.\nHandle: {}\n{}\nIf the request needs what is inside: {}\nIf opening it was the request, it is done: say so and stop.",
+                        "{} in {}.\nHandle: {}\n{}\nIf the request needs what is inside: {}\nIf opening it was the request, it is done: say so and stop.",
+                        if create { "Created, empty, and opened" } else { "Opened" },
                         crate::desk::app_name(&doc.app),
                         doc.handle,
                         Self::fenced(&doc.summary),

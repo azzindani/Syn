@@ -244,10 +244,25 @@ Step 'export summary' 'export' @{ handle = $w; format = 'summary' } -Expect 'par
 Step 'export docx' 'export' @{ handle = $w; format = 'docx'; path = (Join-Path $out 'peak.docx') } | Out-Null
 Step '  the open document is still report.docx' 'read' @{ handle = $w; selector = 'p0' } -Expect 'para 0' | Out-Null
 Step 'export pdf' 'export' @{ handle = $w; format = 'pdf'; path = (Join-Path $out 'peak-report.pdf') } | Out-Null
+# A document that did not exist: `open` with create. Closed at the end, so
+# the next run (which clears peak*) can make it again.
+$wn = 'word:peak-new.docx:body'
+Step 'create a new document' 'open' @{ app = 'word'; path = (Join-Path $out 'peak-new.docx'); create = $true } -Expect '^Created in Word' | Out-Null
+Step '  a heading in it, in Word''s own style' 'struct' @{ handle = $wn; verb = 'insertParagraph'; name = 'Heading 1'; text = 'New report' } | Out-Null
+Step '  it reads back' 'read' @{ handle = $wn; selector = 'body' } -Expect '\[Heading 1\]: New report' | Out-Null
+Step '  making it again is refused' 'open' @{ app = 'word'; path = (Join-Path $out 'peak-new.docx'); create = $true } -Fails -Expect 'already exists' | Out-Null
+Step '  save it' 'struct' @{ handle = $wn; verb = 'save' } | Out-Null
+Step '  close it (Syn made it)' 'struct' @{ handle = $wn; verb = 'close' } -Expect 'closed' | Out-Null
 
 # ========================================================= PowerPoint
 Write-Host "`n-- PowerPoint --" -ForegroundColor Cyan
 Step 'open deck.pptx' 'open' @{ app = 'powerpoint'; path = (Join-Path $docs 'deck.pptx') } | Out-Null
+$pn = 'ppt:peak-new.pptx:deck'
+Step 'create a new deck' 'open' @{ app = 'powerpoint'; path = (Join-Path $out 'peak-new.pptx'); create = $true } -Expect '^Created in PowerPoint' | Out-Null
+Step '  a title slide in it' 'struct' @{ handle = $pn; verb = 'createSlide'; name = 'title'; title = 'New deck' } | Out-Null
+Step '  it reads back' 'read' @{ handle = $pn; selector = 'deck' } -Expect 's1: New deck' | Out-Null
+Step '  save it' 'struct' @{ handle = $pn; verb = 'save' } | Out-Null
+Step '  close it (Syn made it)' 'struct' @{ handle = $pn; verb = 'close' } -Expect 'closed' | Out-Null
 Step 'a slide with bullets' 'struct' @{ handle = $p; verb = 'createSlide'; title = 'Body'; bullets = 'one|two|>two a'; name = 'titleContent' } | Out-Null
 Step 'rewrite its body' 'write' @{ handle = $p; selector = 's2.body'; values = 'alpha|beta|>beta one' } -Expect '3 bullet' | Out-Null
 Step 'format the body' 'format' @{ handle = $p; selector = 's2.body'; style = 'size=20;align=left' } -Expect 'body' | Out-Null

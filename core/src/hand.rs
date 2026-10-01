@@ -101,6 +101,14 @@ pub fn open_envelope(app: &str, path: &str) -> String {
     envelope("open", &format!("{app}::open"), &format!(r#"{{"path":"{esc}"}}"#), None)
 }
 
+/// Ask a hand to make a new, empty document at `path` and open it. The same
+/// `open` method, with `create` set: a string, because office-host's field
+/// reader takes strings and objects only.
+pub fn create_envelope(app: &str, path: &str) -> String {
+    let esc = path.replace('\\', "\\\\").replace('"', "\\\"");
+    envelope("open", &format!("{app}::open"), &format!(r#"{{"path":"{esc}","create":"1"}}"#), None)
+}
+
 pub fn envelope(method: &str, handle: &str, args_json: &str, payload: Option<&str>) -> String {
     let mut s = format!(
         "{{\"jsonrpc\":\"office-rpc/1\",\"method\":\"{}\",\"handle\":\"{}\",\"args\":{}",

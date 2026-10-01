@@ -126,12 +126,12 @@ fn title(name: &str) -> &'static str {
 
 const STATUS_DESC: &str = "START HERE. Lists the documents that are open with the exact handle to use for each, which apps can be opened, and the next step to take. Call it first, and again whenever you are unsure what is open. Changes nothing. Example: status{}.";
 
-const OPEN_DESC: &str = "Open a file in Excel, Word or PowerPoint on this computer and get the handle every other tool needs. The application, and the helper that connects to it, start by themselves if they are not running. Give the file's FULL path. A document the user already has open can be named by its file name alone. For the browser, give part of a page's title or address (no https://); for any other window, part of its title. Never closes or saves anything, and opening a file twice is harmless. Returns the handle and what is inside, for a workbook its sheet names. Example: open{\"app\":\"excel\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\sales.xlsx\"}.";
+const OPEN_DESC: &str = "Open a file in Excel, Word or PowerPoint on this computer and get the handle every other tool needs. The application, and the helper that connects to it, start by themselves if they are not running. Give the file's FULL path. A document the user already has open can be named by its file name alone. For the browser, give part of a page's title or address (no https://); for any other window, part of its title. Never closes or saves anything, and opening a file twice is harmless. Returns the handle and what is inside, for a workbook its sheet names. Example: open{\"app\":\"excel\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\sales.xlsx\"}. To start a NEW Word document or PowerPoint deck, add create:true with a full path that does not exist yet: open{\"app\":\"word\",\"path\":\"C:\\\\Users\\\\me\\\\Documents\\\\Report.docx\",\"create\":true}.";
 
 const MANUAL_DESC: &str = "How the tools behave in one application, including the idioms that turn a hundred calls into one: filling a whole column with one formula, anchoring a chart to a range, writing speaker notes. Call it once for an application before your first change in it. Changes nothing. Example: manual{\"topic\":\"excel\"}.";
 
 const STATUS_SCHEMA: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const OPEN_SCHEMA: &str = r#"{"type":"object","properties":{"app":{"type":"string","enum":["excel","word","powerpoint","browser","window"],"description":"which application"},"path":{"type":"string","description":"the file's full path, e.g. C:\\Users\\me\\Documents\\sales.xlsx; or the file name of a document already open; or part of a browser page's title or address; or part of a window's title"}},"required":["app","path"],"additionalProperties":false}"#;
+const OPEN_SCHEMA: &str = r#"{"type":"object","properties":{"app":{"type":"string","enum":["excel","word","powerpoint","browser","window"],"description":"which application"},"path":{"type":"string","description":"the file's full path, e.g. C:\\Users\\me\\Documents\\sales.xlsx; or the file name of a document already open; or part of a browser page's title or address; or part of a window's title"},"create":{"type":"boolean","description":"true: make a new, empty Word document (.docx) or PowerPoint deck (.pptx) at path, which must not exist yet, and open it"}},"required":["app","path"],"additionalProperties":false}"#;
 const MANUAL_SCHEMA: &str = r#"{"type":"object","properties":{"topic":{"type":"string","enum":["excel","word","powerpoint"]}},"required":["topic"],"additionalProperties":false}"#;
 
 /// One tool as MCP lists it.
@@ -418,7 +418,14 @@ impl Server {
                 Ok(text_result(&text, false))
             }
             "manual" => Ok(manual(get("topic").as_deref().unwrap_or(""))),
-            "open" => Ok(self.open(get("app").unwrap_or_default(), get("path").unwrap_or_default())),
+            "open" => {
+                let create = match get("create").as_deref() {
+                    None | Some("false") => false,
+                    Some("true") => true,
+                    Some(other) => return Ok(self.refuse(def, None, &format!("open: create is true or false, not {other:?}"))),
+                };
+                Ok(self.open(get("app").unwrap_or_default(), get("path").unwrap_or_default(), create))
+            }
             _ => Ok(self.document_op(def, flat)),
         }
     }
@@ -428,19 +435,21 @@ impl Server {
         text_result(&format!("Not run: {why}{ex}"), true)
     }
 
-    fn open(&mut self, app: String, path: String) -> Value {
+    fn open(&mut self, app: String, path: String, create: bool) -> Value {
         self.begin_turn();
         let args = obj(vec![("app", s(app.clone())), ("path", s(path.clone()))]).to_json();
         let key = app_key(&app).unwrap_or("");
-        match self.desk.open(&app, &path) {
+        let got = if create { self.desk.create(&app, &path) } else { self.desk.open(&app, &path) };
+        match got {
             Ok(doc) => {
-                self.report("open", &format!("Opened {}", doc.handle), key, Status::Done, &doc.summary);
+                let did = if create { "Created" } else { "Opened" };
+                self.report("open", &format!("{did} {}", doc.handle), key, Status::Done, &doc.summary);
                 // The summary is what the file says about itself -- its sheet
                 // names, its first paragraph -- and a sheet can be named
                 // anything: fenced, as the loop fences it. The handle and the
                 // next call are ours.
                 let text = format!(
-                    "Opened in {}.\nHandle: {}\n{}\nNext: {}",
+                    "{did} in {}.\nHandle: {}\n{}\nNext: {}",
                     app_name(&doc.app),
                     doc.handle,
                     fenced(&doc.summary),

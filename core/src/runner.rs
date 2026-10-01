@@ -71,6 +71,11 @@ pub trait Door: std::fmt::Debug {
     /// its handle and next step are ours, and the caller fences one and
     /// not the other.
     fn open(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> std::result::Result<crate::desk::Doc, String>;
+    /// Make a new, empty document at `target` and open it, as `open` does.
+    /// A door that cannot make documents says so.
+    fn create(&mut self, _relay: &mut Relay, _runner: &mut Runner, app: &str, _target: &str) -> std::result::Result<crate::desk::Doc, String> {
+        Err(format!("this session cannot make a new {app} document"))
+    }
     /// Files whose names match `query`, under `folder` or the usual places.
     fn find(&self, query: &str, folder: Option<&str>) -> std::result::Result<String, String>;
     /// Attach every wired helper that is already running, starting none.
@@ -236,6 +241,15 @@ impl Runner {
         self.through_door(relay, |d, relay, runner| d.open(relay, runner, app, target))
     }
 
+    /// Make a new, empty document through the door, then open it. The
+    /// same gates as `open_doc`, before anything is started.
+    pub fn create_doc(&mut self, relay: &mut Relay, app: &str, target: &str) -> std::result::Result<crate::desk::Doc, String> {
+        if let Some(key) = crate::desk::app_key(app) {
+            self.permits(key).map_err(|e| e.to_string())?;
+        }
+        self.through_door(relay, |d, relay, runner| d.create(relay, runner, app, target))
+    }
+
     pub fn find_files(&mut self, query: &str, folder: Option<&str>) -> std::result::Result<String, String> {
         match &self.door {
             Some(d) => d.find(query, folder),
@@ -320,10 +334,19 @@ impl Runner {
     /// what a human had already opened by hand, which is why the capability
     /// fixture needed a PowerShell script and somebody at the keyboard.
     pub fn open_file(&mut self, app: &str, path: &str) -> Result<String> {
+        self.send_open(app, crate::hand::open_envelope(app, path))
+    }
+
+    /// Ask the hand that claims this app to make a new, empty document at
+    /// `path`. Checked by the desk first: in the workspace, not over a file.
+    pub fn create_file(&mut self, app: &str, path: &str) -> Result<String> {
+        self.send_open(app, crate::hand::create_envelope(app, path))
+    }
+
+    fn send_open(&mut self, app: &str, line: String) -> Result<String> {
         let Some(name) = self.route(app).map(str::to_string) else {
             return Err(Error::NoHand(app.to_string()));
         };
-        let line = crate::hand::open_envelope(app, path);
         let Some(a) = self.hands.iter_mut().find(|a| a.name == name) else {
             return Err(Error::NoHand(app.to_string()));
         };
@@ -498,12 +521,20 @@ impl Runner {
             *path = target.to_string_lossy().into_owned();
             writes = Some(target);
         }
-        let out = if self.is_live(&job.handle) {
-            self.pump_live(relay, job).map(Some)
-        } else {
-            self.pump_model(relay, job)
+        let live = self.is_live(&job.handle);
+        let from_csv = match &job.call {
+            Call::Export(crate::ops::ExportArgs { format, .. }) => live && matches!(format.as_str(), "xlsx" | "xlsm" | "xlsb"),
+            _ => false,
         };
+        let handle = job.handle.clone();
+        let mut out = if live { self.pump_live(relay, job).map(Some) } else { self.pump_model(relay, job) };
         if let (Ok(_), Some(t)) = (&out, writes) {
+            if from_csv
+                && let Some(next) = csv_saved_as_book(&handle, &t.to_string_lossy())
+                && let Ok(Some(OpOut::Text { detail })) = &mut out
+            {
+                detail.push_str(&next);
+            }
             self.written.insert(t);
         }
         out
@@ -602,10 +633,51 @@ impl Runner {
     }
 }
 
+/// What finishes turning a CSV into a workbook, said after the export.
+///
+/// The export writes the workbook and leaves the CSV open, as an export
+/// does. Nothing said so, and a model that then opened the workbook to work
+/// in it left both open side by side: found in a live run, where the person
+/// watching saw two files appear for one request. Closing the CSV is allowed
+/// -- Syn opened it and it has no changes -- so the two calls that finish the
+/// job are given ready to copy. None for anything but a `.csv` document.
+fn csv_saved_as_book(handle: &str, written: &str) -> Option<String> {
+    let mut parts = handle.splitn(3, ':');
+    let (app, doc) = (parts.next()?, parts.next()?);
+    if !doc.to_ascii_lowercase().ends_with(".csv") {
+        return None;
+    }
+    let s = crate::json::s;
+    let close = crate::json::obj(vec![("handle", s(handle)), ("verb", s("close"))]).to_json();
+    let open = crate::json::obj(vec![("app", s(app)), ("path", s(written))]).to_json();
+    Some(format!(
+        "\n{doc} is still open beside it, unchanged. To go on in the workbook alone, close the CSV and open the workbook: struct{close} then open{open}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bus::{FileContent, FileKind, OpenFile};
+
+    #[test]
+    fn a_csv_saved_as_a_workbook_says_how_to_close_it_and_open_the_book() {
+        let next = csv_saved_as_book("excel:sales.csv:workbook", r"C:\data\sales.xlsx").unwrap();
+        // Both calls are ones the tool parser takes as they stand.
+        let call = |name: &str, tail: &str| {
+            let json = &tail[..tail.find('}').unwrap() + 1];
+            crate::tools::to_action(&crate::tools::ToolCall { id: "1".into(), name: name.into(), arguments: json.into() })
+        };
+        let after_struct = next.split("struct").nth(1).unwrap();
+        let after_open = next.split(" then open").nth(1).unwrap();
+        assert!(call("struct", after_struct).is_ok(), "{next}");
+        assert!(call("open", after_open).is_ok(), "{next}");
+        assert!(after_struct.starts_with(r#"{"handle":"excel:sales.csv:workbook","verb":"close"}"#), "{next}");
+        assert!(after_open.starts_with(r#"{"app":"excel","path":"C:\\data\\sales.xlsx"}"#), "{next}");
+        // Anything that is not a CSV gets nothing: there is nothing to finish.
+        assert_eq!(csv_saved_as_book("excel:sales.xlsx:workbook", r"C:\data\copy.xlsx"), None);
+        assert!(csv_saved_as_book("excel:SALES.CSV:workbook", r"C:\d\s.xlsx").is_some(), "the extension in any case");
+    }
     use crate::ops::ReadArgs;
     use std::collections::HashMap;
 

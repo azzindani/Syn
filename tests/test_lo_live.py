@@ -206,6 +206,25 @@ class LiveAgainstLibreOffice(unittest.TestCase):
         self.assertIn("East leads", z.read("ppt/slides/slide1.xml").decode())
         self.assertTrue(any("Lead with East" in z.read(n).decode() for n in z.namelist() if n.startswith("ppt/notesSlides/")))
 
+    def test_a_new_document_and_deck_are_made_empty_and_never_over_a_file(self):
+        # `open` with create. Asked for "a report in Word", a run used to have
+        # nowhere to write one: open took only files that were already there.
+        doc = os.path.join(self.out, "new-report-%d.docx" % os.getpid())
+        self.assertIn("Created in Word", self.ok("open", app="word", path=doc, create=True))
+        w = "word:%s:body" % os.path.basename(doc)
+        self.ok("struct", handle=w, verb="insertParagraph", name="Heading 1", text="New report")
+        self.assertIn("New report", self.ok("read", handle=w, selector="body"))
+        err, text = self.call("open", app="word", path=doc, create=True)
+        self.assertTrue(err, text)
+        self.assertIn("already exists", text)
+        self.assertGreater(os.path.getsize(doc), 0, "a real file, saved where it was asked for")
+
+        deck = os.path.join(self.out, "new-deck-%d.pptx" % os.getpid())
+        self.assertIn("Created in PowerPoint", self.ok("open", app="powerpoint", path=deck, create=True))
+        p = "ppt:%s:deck" % os.path.basename(deck)
+        self.ok("struct", handle=p, verb="createSlide", title="New deck")
+        self.assertIn("New deck", self.ok("read", handle=p, selector="deck"))
+
     def test_mistakes_come_back_with_the_way_to_fix_them(self):
         self.ok("open", app="excel", path=os.path.join(self.docs, "sales.xlsx"))
         h = "excel:sales.xlsx:workbook"

@@ -118,11 +118,28 @@ pub const RULES: &[Rule] = &[
         advice: "That presentation is not open in PowerPoint any more: the user closed it, or it is open under another name. Ask them to open it again; do not guess another name.",
         mcp: Some("That presentation is not open in PowerPoint any more: the user closed it, or it is open under another name. Call `open` with its full path."),
     },
+    // A new Word document or deck is one call away; say which, as a call.
+    // "Nothing here creates a file" was true until `create`, and a run
+    // asked for "a report in Word" stopped here with nowhere to write it.
     Rule {
         needle: "no such file",
         from: HOST,
-        apps: &["excel", "word", "ppt"],
-        advice: "No file exists at that path. Check the spelling and the extension, and give the full path, like C:\\Users\\name\\Documents\\report.xlsx. Nothing here creates a file by opening it.",
+        apps: &["word"],
+        advice: "No file exists at that path. If a new document was meant, make it: the same call with create:true, e.g. open{\"app\":\"word\",\"path\":\"Report.docx\",\"create\":true}. If an existing one was meant, check the spelling and give the full path.",
+        mcp: None,
+    },
+    Rule {
+        needle: "no such file",
+        from: HOST,
+        apps: &["ppt"],
+        advice: "No file exists at that path. If a new deck was meant, make it: the same call with create:true, e.g. open{\"app\":\"powerpoint\",\"path\":\"Deck.pptx\",\"create\":true}. If an existing one was meant, check the spelling and give the full path.",
+        mcp: None,
+    },
+    Rule {
+        needle: "no such file",
+        from: HOST,
+        apps: &["excel"],
+        advice: "No file exists at that path. Check the spelling and the extension, and give the full path, like C:\\Users\\name\\Documents\\report.xlsx. A new workbook is made by exporting one from a workbook that is open, not by opening a name that is not there.",
         mcp: None,
     },
     // ---- the document will not let us ------------------------------------

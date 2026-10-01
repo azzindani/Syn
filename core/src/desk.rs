@@ -183,6 +183,11 @@ impl Desk {
         self.doors.open(&mut self.relay, &mut self.runner, app, target)
     }
 
+    /// Make a new, empty document and open it. See `Doors::create`.
+    pub fn create(&mut self, app: &str, target: &str) -> Result<Doc, String> {
+        self.doors.create(&mut self.relay, &mut self.runner, app, target)
+    }
+
     /// The whole desk, in words, with what to do next.
     pub fn status(&self) -> String {
         self.doors.status(&self.relay, &self.runner)
@@ -414,6 +419,91 @@ impl Doors {
         }
     }
 
+    /// Make a new, empty Word document or PowerPoint deck at `target`, and
+    /// open it.
+    ///
+    /// `open` only ever took a file that was already there, so asked for "a
+    /// report in Word" a run had nowhere to write one: it was refused with
+    /// "no such file" and could only stop. The document is made by the
+    /// application itself, so it has the real styles a report needs
+    /// (headings, a contents field) rather than a bare file assembled here.
+    ///
+    /// Never over a file that exists, never outside the workspace. A new
+    /// workbook is not made this way: `export` writes one from what is open.
+    pub fn create(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
+        let Some(app) = app_key(app) else {
+            return Err(format!("unknown app {app:?}: a new document can be made in word or powerpoint"));
+        };
+        let (want, kind) = match app {
+            "word" => ("docx", "Word document"),
+            "ppt" => ("pptx", "PowerPoint deck"),
+            _ => {
+                return Err(format!(
+                    "a new document can be made in Word or PowerPoint, not {}. For a new workbook, export one from a workbook that is open: export{{\"handle\":\"...\",\"format\":\"xlsx\",\"path\":\"...\"}}",
+                    app_name(app)
+                ));
+            }
+        };
+        let target = target.trim().trim_matches('"').trim();
+        let file = target.rsplit(['/', '\\']).next().unwrap_or(target).to_string();
+        let ext = file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        if ext != want {
+            return Err(format!("a new {kind} is a .{want} file: give a name ending in .{want}, e.g. Report.{want}"));
+        }
+        if file.contains(':') {
+            return Err(format!("{file:?} contains ':', which separates the parts of a handle; choose another name"));
+        }
+        // Where it goes: a full path as given, a bare or relative name under
+        // the workspace, and without a workspace a full path is required --
+        // "Report.docx" alone would land wherever Syn happened to start.
+        let as_path = Path::new(target);
+        let full = if as_path.is_absolute() || target.contains(':') {
+            as_path.to_path_buf()
+        } else {
+            match self.roots.first() {
+                Some(r) => PathBuf::from(crate::find::display(r)).join(target),
+                None => {
+                    return Err(format!(
+                        "give the new file's full path, e.g. C:\\Users\\you\\Documents\\{file}: there is no workspace to put it in"
+                    ));
+                }
+            }
+        };
+        // Outside the workspace is said first: told only that a folder is
+        // missing, a model may set about making it.
+        self.confined(&full)?;
+        if let Some(dir) = full.parent().filter(|d| !d.as_os_str().is_empty())
+            && !dir.is_dir()
+        {
+            return Err(format!("the folder {} does not exist", dir.display()));
+        }
+        if full.exists() {
+            return Err(format!(
+                "{} already exists. Open it instead, or make the new one under another name; an existing file is never replaced",
+                full.display()
+            ));
+        }
+        runner.permits(app).map_err(|e| e.to_string())?;
+
+        let mut notes = Vec::new();
+        notes.extend(self.ensure_hand(relay, runner, app)?);
+        let path = full.to_string_lossy().to_string();
+        let said = match runner.create_file(app, &path) {
+            Err(Error::Transport(_)) => {
+                notes.extend(self.reconnect(relay, runner, app)?);
+                runner.create_file(app, &path)
+            }
+            other => other,
+        };
+        notes.push(said.map_err(|e| explain(app, e))?);
+        // From here it is an open like any other: the same registration,
+        // binding and first look, and the same gates on everything after.
+        let mut doc = self.open(relay, runner, app, &path)?;
+        doc.summary = join_notes(notes, &doc.summary);
+        self.remember(doc.clone());
+        Ok(doc)
+    }
+
     /// Register a browser page or a window by what its title (or address)
     /// contains. Nothing is opened: these are things the human has open.
     fn open_view(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
@@ -470,6 +560,24 @@ impl Doors {
                     }
                     std::path::Component::CurDir => {}
                     other => clean.push(other),
+                }
+            }
+            // Then resolve the nearest folder that does exist and put the
+            // rest back on. Left unresolved, `C:\ws\new.docx` does not start
+            // with the resolved root `\\?\C:\ws`, and every file not there
+            // yet read as outside the workspace: a missing file was refused
+            // as "outside" instead of "no such file", which hid the advice
+            // that goes with that, and nothing new could be made at all.
+            let mut base = clean.clone();
+            let mut rest = Vec::new();
+            while let Some(name) = base.file_name().map(|n| n.to_os_string()) {
+                base.pop();
+                rest.push(name);
+                if let Ok(mut real) = std::fs::canonicalize(&base) {
+                    for n in rest.iter().rev() {
+                        real.push(n);
+                    }
+                    return real;
                 }
             }
             clean
@@ -595,6 +703,10 @@ impl Doors {
 impl crate::runner::Door for Doors {
     fn open(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
         Doors::open(self, relay, runner, app, target)
+    }
+
+    fn create(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
+        Doors::create(self, relay, runner, app, target)
     }
 
     fn find(&self, query: &str, folder: Option<&str>) -> Result<String, String> {
@@ -992,6 +1104,16 @@ pub mod testing {
             self.log.borrow_mut().envelopes.push(line.into());
             let path = crate::json::parse(line).ok().and_then(|v| v.at(&["args", "path"]).and_then(|p| p.as_str().map(str::to_string)));
             let name = path.as_deref().map(|p| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string()).unwrap_or_default();
+            // As office-host does: `create` leaves a real file behind, which
+            // the open that follows it then finds.
+            let create = crate::json::parse(line).ok().and_then(|v| v.at(&["args", "create"]).and_then(|c| c.as_str().map(str::to_string)));
+            if create.as_deref() == Some("1")
+                && let Some(p) = &path
+            {
+                std::fs::write(p, b"")?;
+                self.open.push(name.clone());
+                return Ok(ok(&format!("created {name}, empty, and opened it")));
+            }
             self.open.push(name.clone());
             Ok(ok(&format!("opened {name}")))
         }
@@ -1229,6 +1351,55 @@ mod tests {
         let e = d.open("word", "other.docx").unwrap_err();
         assert!(e.contains("not open in Word") && e.contains("full path"), "{e}");
         assert!(!d.registry().iter().any(|h| h.contains("other")), "no handle to nothing is left behind");
+    }
+
+    #[test]
+    fn a_file_not_there_yet_inside_the_workspace_is_not_called_outside_it() {
+        // Found live: opening a missing Missing.docx in the workspace was
+        // refused as "outside the folders", because a path that cannot be
+        // resolved was compared, unresolved, with the resolved root.
+        let base = std::env::temp_dir().join(format!("syn-confine-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let (mut d, _) = desk();
+        d.confine_to(vec![std::fs::canonicalize(&base).unwrap()]);
+        assert!(d.doors.confined(&base.join("Missing.docx")).is_ok());
+        assert!(d.doors.confined(&base.join("not-yet").join("Missing.docx")).is_ok(), "nor in a folder not there yet");
+        assert!(d.doors.confined(&base.join("..").join("Missing.docx")).is_err(), "and `..` still does not lead out");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_new_document_is_made_in_the_workspace_and_never_over_a_file() {
+        // Asked for "a report in Word", a run had nowhere to write one:
+        // `open` took only files that were already there.
+        let base = std::env::temp_dir().join(format!("syn-create-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("taken.docx"), b"the person's own").unwrap();
+        let (mut d, log) = desk();
+        d.confine_to(vec![std::fs::canonicalize(&base).unwrap()]);
+
+        // A bare name goes in the workspace, and the helper is asked to make it.
+        let doc = d.create("word", "Report.docx").unwrap();
+        assert_eq!(doc.handle, "word:Report.docx:body");
+        assert!(
+            log.borrow().envelopes.iter().any(|e| e.contains(r#""create":"1""#) && e.contains("Report.docx")),
+            "{:?}",
+            log.borrow().envelopes
+        );
+        assert!(d.create("powerpoint", "Deck.pptx").is_ok(), "a deck too");
+
+        // Each refusal before anything is sent.
+        let sent = log.borrow().envelopes.len();
+        let no = |d: &mut Desk, app: &str, path: &str| d.create(app, path).unwrap_err();
+        assert!(no(&mut d, "word", "taken.docx").contains("already exists"));
+        assert!(no(&mut d, "word", "notes.txt").contains(".docx"));
+        assert!(no(&mut d, "powerpoint", "Deck.docx").contains(".pptx"));
+        assert!(no(&mut d, "excel", "Book.xlsx").contains("export"), "a workbook is exported, not made empty");
+        assert!(no(&mut d, "word", r"C:\elsewhere\Report.docx").contains("outside the folders"));
+        assert!(no(&mut d, "word", "missing-folder/Report.docx").contains("does not exist"));
+        assert_eq!(log.borrow().envelopes.len(), sent, "nothing sent for a refusal");
+        assert_eq!(std::fs::read(base.join("taken.docx")).unwrap(), b"the person's own");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

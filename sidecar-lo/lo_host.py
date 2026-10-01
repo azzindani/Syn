@@ -292,6 +292,31 @@ class Office:
         noun = {"excel": "workbook(s)", "word": "document(s)", "powerpoint": "presentation(s)"}[self.app]
         return "opened %s, %d %s" % (name, len(self.docs()), noun)
 
+    # A new, empty document, worded as office-host's CreateDocument: made by
+    # the application from its own blank, saved once to the file it is made
+    # for, and never over a file that is there. Impress cannot hold a deck of
+    # no slides, so a new one here starts with one empty slide where
+    # PowerPoint's has none, and the reply says so.
+    FACTORY = {"word": ("private:factory/swriter", "MS Word 2007 XML"),
+               "powerpoint": ("private:factory/simpress", "Impress MS PowerPoint 2007 XML")}
+
+    def create(self, path):
+        if not path or not path.strip():
+            raise Refused("open needs a path")
+        full = os.path.abspath(path)
+        if os.path.exists(full):
+            raise Refused("not created: %s already exists, and an existing file is never replaced" % full)
+        if self.app not in self.FACTORY:
+            raise Refused("not created: a new document can be made in Word or PowerPoint, not %s" % self.app)
+        url, filt = self.FACTORY[self.app]
+        doc = self.desktop.loadComponentFromURL(url, "_blank", 0, (prop("Hidden", not self.visible),))
+        doc.storeAsURL(uno.systemPathToFileUrl(full), (prop("FilterName", filt),))
+        name = os.path.basename(full)
+        self.opened.add(name)
+        if self.app == "powerpoint":
+            return "created %s, empty (one blank slide), and opened it" % name
+        return "created %s, empty, and opened it" % name
+
     # save and close, worded as office-host words them (SaveClose.cs): Save
     # to the document's own file and format, never a Save As; close only
     # what this helper opened, only once saved, and never the office itself.
@@ -1353,6 +1378,8 @@ def handle_line(office, line):
     app = office.app
     try:
         if method == "open":
+            if args.get("create") == "1":
+                return reply_ok(office.create(args.get("path", "")))
             return reply_ok(office.open(args.get("path", "")))
         doc = office.find(handle)
         if doc is None:

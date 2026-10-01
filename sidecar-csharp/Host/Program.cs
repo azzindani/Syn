@@ -364,7 +364,10 @@ namespace Syn.Sidecar
                 // depend on someone sitting at the machine.
                 if (method == "open")
                 {
-                    return OpenDocument(app, JsonField(JsonField(line, "args"), "path"));
+                    var openArgs = JsonField(line, "args");
+                    return JsonField(openArgs, "create") == "1"
+                        ? CreateDocument(app, JsonField(openArgs, "path"))
+                        : OpenDocument(app, JsonField(openArgs, "path"));
                 }
                 // Undo answers from this helper's own record of what it
                 // changed (Undo.cs); every other call that changes a
@@ -492,6 +495,51 @@ namespace Syn.Sidecar
         /// rule is that it does not touch what it did not start, and an
         /// `open` that could clobber the human's unsaved work would break
         /// that in the worst possible way.
+        /// Make a new, empty Word document or PowerPoint deck at `path`, and
+        /// leave it open.
+        ///
+        /// The application makes it, so it has its real styles (headings for
+        /// a contents field, a theme for slides). It is saved once, to give it
+        /// the file it is created for: SaveAs on a document this helper has
+        /// just made moves nothing of the person's, which is what the rule
+        /// against SaveAs is about (SaveClose.cs). Word's export path has done
+        /// the same with Documents.Add and SaveAs2 since it was written.
+        ///
+        /// Never over a file: the desk checks, and this checks again, because
+        /// the file can appear between the two.
+        private static string CreateDocument(dynamic app, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return Fail("open needs a path");
+            var full = Path.GetFullPath(path);
+            if (File.Exists(full)) return Fail($"not created: {full} already exists, and an existing file is never replaced");
+            var name = Path.GetFileName(full);
+            return Guarded(() =>
+            {
+                switch (_app)
+                {
+                    case "word":
+                    {
+                        app.Visible = true;
+                        dynamic doc = app.Documents.Add();
+                        doc.SaveAs2(full, 16); // wdFormatDocumentDefault (.docx)
+                        OpenedHere.Add(name);
+                        return Ok($"created {name}, empty, and opened it");
+                    }
+                    case "powerpoint":
+                    {
+                        // MsoTriState: -1 is true.
+                        app.Visible = -1;
+                        dynamic pres = app.Presentations.Add(-1);
+                        pres.SaveAs(full, 24); // ppSaveAsOpenXMLPresentation (.pptx)
+                        OpenedHere.Add(name);
+                        return Ok($"created {name}, empty (no slides yet), and opened it");
+                    }
+                    default:
+                        return Fail($"not created: a new document can be made in Word or PowerPoint, not {_app}");
+                }
+            });
+        }
+
         private static string OpenDocument(dynamic app, string path)
         {
             if (string.IsNullOrWhiteSpace(path)) return Fail("open needs a path");

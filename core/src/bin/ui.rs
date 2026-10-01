@@ -34,6 +34,19 @@ use std::time::{Duration, Instant};
 
 const PAGE: &str = include_str!("../../../widget/index.html");
 
+/// Which page this console serves, so a tab left open across a restart
+/// onto a newer build loads it rather than running the old one against the
+/// new console. A hash of the page itself (FNV-1a): it changes exactly when
+/// the page does.
+fn page_version() -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in PAGE.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 /// Whether this console's own child is mid-turn. Progress itself comes
 /// from `core::live`, which every CLI writes to disk: a run started from a
 /// terminal, a pipe or a second window used to be invisible here, because
@@ -47,6 +60,17 @@ struct Live {
     /// `slots` answered from the copy because a `hands` happened to be in
     /// flight showed the model from before the one just chosen.
     turn: AtomicBool,
+}
+
+/// Whether the run behind a log is going. For this console's own child it
+/// is known exactly: a turn holds it or not. The log's age was used for
+/// every log, and the page's own queries keep the child's log fresh, so a
+/// console doing nothing read as working for as long as a page was open --
+/// found live, a page showing "Working" for good after the console under it
+/// was restarted mid-run. Age stays the answer for other processes' logs (a
+/// terminal, an MCP client), where it is the only one there is.
+fn running_in(src: &std::path::Path, own: Option<&std::path::Path>, live: &Live) -> bool {
+    if own == Some(src) { live.turn.load(Ordering::SeqCst) } else { core::live::active(src) }
 }
 
 /// The commands that run the agent, and so hold the child for minutes.
@@ -543,12 +567,22 @@ fn main() {
                 // Name the run, so a page on a different one resets. Naming
                 // it is not the same as rewinding to the start of it.
                 let at = tail.as_ref().map(core::live::Tail::n).unwrap_or(0);
-                let ev = format!("event: source\ndata: {{\"source\":\"{}\",\"since\":{at}}}\n\n", json_escape(&source));
+                // `console` says which console this is, so a page that lost
+                // the stream can tell a blip (same console: carry on from
+                // its cursor) from a restart (a new one: start over).
+                let ev = format!(
+                    "event: source\ndata: {{\"source\":\"{}\",\"since\":{at},\"console\":{},\"page\":\"{}\"}}\n\n",
+                    json_escape(&source),
+                    std::process::id(),
+                    page_version()
+                );
                 if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
                     return;
                 }
                 let mut beat = Instant::now();
                 let mut looked = Instant::now();
+                // The last state this stream told the page.
+                let mut said: Option<(bool, bool)> = None;
                 loop {
                     // Which run to show is a directory scan; twice a second
                     // is plenty for a hand-over that happens once a run.
@@ -588,8 +622,13 @@ fn main() {
                         }
                     }
                     let busy = live.busy.load(Ordering::SeqCst);
-                    let running = src.as_deref().map(core::live::active).unwrap_or(false);
-                    if !lines.is_empty() {
+                    let running = src.as_deref().map(|p| running_in(p, own_log.as_deref(), &live)).unwrap_or(false);
+                    // Also when it changes with nothing printed: a turn that
+                    // ends without a last line -- killed, or its CLI gone --
+                    // used to leave the page on "Working" for good.
+                    let changed = said != Some((busy, running));
+                    if !lines.is_empty() || changed {
+                        said = Some((busy, running));
                         let ev =
                             format!("event: state\ndata: {{\"busy\":{busy},\"running\":{running}}}\n\n");
                         if s.write_all(ev.as_bytes()).is_err() || s.flush().is_err() {
@@ -719,15 +758,17 @@ fn main() {
                     Some(p) => {
                         let (n, lines) = core::live::read_from(p, since);
                         let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                        (n, lines, core::live::active(p), name)
+                        (n, lines, running_in(p, own_log.as_deref(), &live), name)
                     }
                     None => (0, Vec::new(), false, String::new()),
                 };
                 let body = format!(
-                    "{{\"n\":{},\"busy\":{},\"running\":{},\"source\":\"{}\",\"lines\":[{}]}}",
+                    "{{\"n\":{},\"busy\":{},\"running\":{},\"console\":{},\"page\":\"{}\",\"source\":\"{}\",\"lines\":[{}]}}",
                     n,
                     live.busy.load(Ordering::SeqCst),
                     running,
+                    std::process::id(),
+                    page_version(),
                     json_escape(&name),
                     lines
                         .iter()

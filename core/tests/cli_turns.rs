@@ -54,9 +54,17 @@ fn provider(script: Vec<String>) -> Provider {
                 }
                 continue;
             }
+            // `status 429 <body>`: the provider turning the request away.
+            let (status, reply) = match reply.strip_prefix("status ") {
+                Some(rest) => {
+                    let (code, body) = rest.split_once(' ').unwrap_or((rest, ""));
+                    (format!("{code} Refused"), body.to_string())
+                }
+                None => ("200 OK".to_string(), reply),
+            };
             let _ = write!(
                 s,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                 reply.len()
             );
         }
@@ -163,6 +171,37 @@ fn a_repeated_call_ends_the_turn_but_not_the_conversation() {
     assert!(sent[3].contains("read it") && sent[3].contains("try a wider range"), "{}", sent[3]);
     assert!(!turn2.contains("queue is not running"), "the second message found the run still paused:\n{out}");
     assert!(turn2.contains("ANSWER done"), "the second turn did not finish:\n{out}");
+}
+
+#[test]
+fn a_rate_limit_the_next_attempt_gets_past_is_not_shown_as_a_stop() {
+    // The model is turned away once mid-turn, and answers when asked again.
+    // The stop used to be printed before the retry was decided: the console
+    // drew a red failure and the turn's summary, then the answer below them,
+    // outside the turn, and a page opened mid-run thought the turn was over.
+    let limited = r#"status 429 {"error":{"message":"Rate limit exceeded. Please retry after a brief wait."}}"#;
+    let p = provider(vec![call("c1", "read", READ), limited.to_string(), answer("done")]);
+    let out = cli(&p, &["attach excel plan.xlsx Sheet1", "say read it"]);
+    let turn = &out[out.find("RECEIPT say model=").expect(&out)..];
+    assert!(turn.contains("RECEIPT waiting "), "the limit was not waited out:\n{out}");
+    assert!(turn.contains("ANSWER done"), "the turn did not finish:\n{out}");
+    assert!(!turn.contains("STOPPED"), "a stop the retry got past was printed:\n{out}");
+    assert_eq!(turn.matches("RECEIPT did ").count(), 1, "the turn's summary was printed more than once:\n{out}");
+}
+
+#[test]
+fn a_turn_that_does_end_on_a_refusal_says_so_once() {
+    // Held back while a retry might follow, the stop must still be printed
+    // when nothing follows. A bad key is not waited out, so this is quick;
+    // a rate limit that never lifts takes the same path after five waits.
+    let refused = r#"status 401 {"error":{"message":"Invalid API key."}}"#;
+    let p = provider(vec![call("c1", "read", READ), refused.to_string()]);
+    let out = cli(&p, &["attach excel plan.xlsx Sheet1", "say read it"]);
+    let turn = &out[out.find("RECEIPT say model=").expect(&out)..];
+    assert_eq!(turn.matches("\nSTOPPED ").count(), 1, "one stop, the one that ended the turn:\n{out}");
+    assert!(!turn.contains("RECEIPT waiting "), "a bad key was waited out:\n{out}");
+    let stop = turn.find("\nSTOPPED ").unwrap();
+    assert!(turn[stop..].contains("RECEIPT did "), "the turn's summary should follow its stop:\n{out}");
 }
 
 #[test]

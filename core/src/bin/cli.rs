@@ -149,7 +149,7 @@ fn choose(task: TaskKind, pick: &Option<(core::catalog::Provider, String)>, thin
 ///
 /// A chat that is only written on a clean exit loses the run that crashed,
 /// which is the one the human most wants to look at afterwards.
-fn save_chat(id: &str, a: &Agent, workspace: &Option<std::path::PathBuf>) {
+fn save_chat(id: &str, a: &Agent, workspace: &Option<std::path::PathBuf>, took: &[(String, u64)]) {
     let msgs = a.transcript().to_vec();
     let chat = chats::Chat {
         meta: chats::ChatMeta {
@@ -160,9 +160,21 @@ fn save_chat(id: &str, a: &Agent, workspace: &Option<std::path::PathBuf>) {
             workspace: workspace.as_deref().map(core::workspace::shown).unwrap_or_default(),
         },
         msgs,
+        took: took.to_vec(),
     };
     if let Err(e) = chats::save(&chat) {
         pr!("ERROR chat save {e}");
+    }
+}
+
+/// Add a stretch of work to the turn that answers `asked`. Added, not set:
+/// a turn that stopped for an approval and was resumed is still one turn,
+/// and its time is both halves.
+fn time_turn(took: &mut Vec<(String, u64)>, asked: &str, secs: u64) {
+    let k = chats::turn_key(asked);
+    match took.iter_mut().find(|(key, _)| *key == k) {
+        Some((_, s)) => *s += secs,
+        None => took.push((k, secs)),
     }
 }
 
@@ -181,12 +193,19 @@ fn report(a: &Agent) {
 }
 
 /// caller can decide whether the failure is worth another model.
+///
+/// `held`: the caller will wait and ask again, so a stop is returned without
+/// being printed, and the caller prints the one that ends the turn. Printed
+/// here, a rate limit that the next attempt got past read as the end of the
+/// turn: the console drew a red failure and "Opened 1 document" twice, then
+/// the answer under them, outside the turn's card.
 fn drive(
     a: &mut Agent,
     brain: &mut dyn Brain,
     relay: &mut core::Relay,
     runner: &mut Runner,
     sp: &ShellPolicy,
+    held: bool,
 ) -> Option<String> {
     loop {
         // Between steps is where a stop is honoured cleanly: nothing is
@@ -243,8 +262,10 @@ fn drive(
                 return None;
             }
             Step::Stopped(why) => {
-                pr!("STOPPED {why}");
-                report(a);
+                if !held {
+                    pr!("STOPPED {why}");
+                    report(a);
+                }
                 return Some(why);
             }
             Step::NeedsApproval(p) => {
@@ -313,7 +334,7 @@ fn wait_and_retry(
         pr!("RECEIPT waiting {ms}ms (attempt {attempt}/{}) then asking {model} again", provider::RETRY_MAX_RETRIES);
         // A stop wakes the wait; `drive` then sees it and ends the turn.
         core::stop::sleep(std::time::Duration::from_millis(ms));
-        stopped = drive(a, brain, relay, runner, sp);
+        stopped = drive(a, brain, relay, runner, sp, true);
     }
     stopped
 }
@@ -364,6 +385,8 @@ fn main() {
     // open` switches it; saved after every turn so history survives a crash
     // rather than only a clean exit.
     let mut chat_id: String = chats::new_id();
+    // How long each of this chat's turns took (`chats::Chat::took`).
+    let mut took: Vec<(String, u64)> = Vec::new();
     let mut shell_policy = ShellPolicy::default();
     // Which router slot `do` runs on. Switchable because free-tier models
     // rate-limit independently: a 429 on one slot is not a reason to stop.
@@ -941,7 +964,7 @@ fn main() {
                 a.fit_context(core::catalog::context_of(&model));
                 a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
                 pr!("RECEIPT do model={model} max_steps={}", a.max_steps);
-                drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                drive(&mut a, &mut brain, &mut relay, &mut runner, &shell_policy, false);
                 agent = Some(a);
             }
             "say" => {
@@ -1006,7 +1029,21 @@ fn main() {
                 a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
                 // The chat is named so a console can light the right thread in its
                 // sidebar, whichever process the run is in.
-                pr!("RECEIPT say model={model} open={} chat={chat_id}", open.len());
+                // `at`: when the turn began, in Unix milliseconds, so a page
+                // that opens part-way through shows the clock from here and
+                // not from the moment it happened to look.
+                let began = std::time::Instant::now();
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                pr!("RECEIPT say model={model} open={} chat={chat_id} at={at}", open.len());
+                // What the turn is answering. A console that did not send it
+                // -- the message came from a terminal, a script, another
+                // window -- drew the work and the answer under nobody's
+                // question, and a person watching could not tell what the
+                // run was for. The page that sent it has drawn it already.
+                pr!("RECEIPT asked {}", core::json::obj(vec![("text", core::json::s(text))]).to_json());
                 // The slot's own endpoint and key, not the global pair: a
                 // fallback chain whose links all point at one provider
                 // shares that provider's bad minute, and is one link.
@@ -1014,8 +1051,8 @@ fn main() {
                 let mut brain = watched(&on);
                 // Saved before the turn runs, so the message survives a turn
                 // that has to be cut off (Stop, when the CLI is restarted).
-                save_chat(&chat_id, a, &workspace);
-                let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                save_chat(&chat_id, a, &workspace, &took);
+                let mut stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy, true);
 
                 // Wait and ask the SAME model again before giving up on
                 // it. A free-tier limit is per minute far more often than
@@ -1035,13 +1072,16 @@ fn main() {
                 // .env slots behind it sent "muse-spark" turns to a rate-
                 // limited qwen, and the notice named a model they never
                 // chose. Automatic is what may walk; a pick stops and says so.
+                // The stop that ends the turn is printed once, below; the
+                // attempts before it were held back (`drive`).
+                let mut why_shown = None;
                 if let (Some((p, id)), Some(why)) = (&pick, stopped.as_deref())
                     && provider::worth_another_model(why)
                 {
-                    pr!(
-                        "STOPPED the model you picked ({id} on {}) is not answering right now: {why}. Pick another model, or Automatic to let Syn choose",
+                    why_shown = Some(format!(
+                        "the model you picked ({id} on {}) is not answering right now: {why}. Pick another model, or Automatic to let Syn choose",
                         p.label
-                    );
+                    ));
                 }
                 let walk = if pick.is_some() { Vec::new() } else { fallbacks(&model) };
                 for (m, id) in walk {
@@ -1063,7 +1103,7 @@ fn main() {
                     // another provider.
                     on = config::endpoint(m);
                     brain = watched(&on);
-                    stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                    stopped = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy, true);
                     // The new slot gets the same patience as the first.
                     stopped = wait_and_retry(&id, stopped, a, &mut brain, &mut relay, &mut runner, &shell_policy);
                 }
@@ -1071,14 +1111,17 @@ fn main() {
                     && let Some(why) = &stopped
                     && provider::worth_another_model(why)
                 {
-                    pr!("STOPPED every model slot is rate limited right now: wait a moment and send again");
+                    why_shown = Some("every model slot is rate limited right now: wait a moment and send again".into());
                 }
-                // Into the transcript before saving, or the conversation
-                // records the attempt and not why it ended.
                 if let Some(why) = &stopped {
+                    pr!("STOPPED {}", why_shown.as_deref().unwrap_or(why));
+                    report(a);
+                    // Into the transcript before saving, or the conversation
+                    // records the attempt and not why it ended.
                     a.note_stop(why);
                 }
-                save_chat(&chat_id, a, &workspace);
+                time_turn(&mut took, text, began.elapsed().as_secs());
+                save_chat(&chat_id, a, &workspace, &took);
             }
             // API keys, for Settings: where each provider's key comes from,
             // and its last four characters. Never the key. Both commands
@@ -1154,7 +1197,7 @@ fn main() {
                     runner.confine(workspace.iter().cloned().collect());
                     if let Some(a) = agent.as_mut() {
                         a.set_workspace(workspace.as_deref().map(core::workspace::note).as_ref());
-                        save_chat(&chat_id, a, &workspace);
+                        save_chat(&chat_id, a, &workspace, &took);
                     }
                 }
                 pr!("RECEIPT workspace {{\"path\":{:?}}}", workspace.as_deref().map(core::workspace::shown).unwrap_or_default());
@@ -1176,6 +1219,7 @@ fn main() {
                     "new" => {
                         chat_id = chats::new_id();
                         agent = None;
+                        took.clear();
                         pr!("RECEIPT chat={chat_id}");
                     }
                     "list" => {
@@ -1194,6 +1238,7 @@ fn main() {
                                 let r = route(task);
                                 agent = Some(Agent::resume(&session, c.msgs, &config::model_id(r.model), r));
                                 chat_id = c.meta.id;
+                                took = c.took;
                                 pr!("RECEIPT chat={chat_id} title={:?}", c.meta.title);
                                 // Each chat has its own workspace. One whose
                                 // folder has gone (moved, a drive unplugged)
@@ -1224,6 +1269,7 @@ fn main() {
                                 if id == chat_id {
                                     chat_id = chats::new_id();
                                     agent = None;
+                                    took.clear();
                                 }
                                 pr!("RECEIPT deleted={id}");
                             }
@@ -1237,6 +1283,12 @@ fn main() {
                         if let Some(ag) = agent.as_ref() {
                             for m in ag.transcript() {
                                 pr!("MSG {}", chats::msg_json(m));
+                            }
+                            // How long each turn took, by its place among the
+                            // user messages, so a finished card still says so
+                            // after the page redraws the chat.
+                            for (turn, secs) in chats::turn_times(ag.transcript(), &took) {
+                                pr!("TOOK {{\"turn\":{turn},\"secs\":{secs}}}");
                             }
                             // One English sentence per call, built by the
                             // same table the feed and the CLI use. The page
@@ -1271,6 +1323,7 @@ fn main() {
                     pr!("ERROR {cmd}: no run in progress");
                     continue;
                 };
+                let began = std::time::Instant::now();
                 let outcome = if cmd == "approve" {
                     a.approve(&mut relay, &shell_policy)
                 } else {
@@ -1285,9 +1338,19 @@ fn main() {
                     // The route the run is actually on, which a fallback
                     // may have changed since the REPL's task slot was set.
                     let mut brain = watched(&on);
-                    let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy);
+                    let _ = drive(a, &mut brain, &mut relay, &mut runner, &shell_policy, false);
                 }
-                save_chat(&chat_id, a, &workspace);
+                // The resumed half of the turn the last message started: the
+                // latest one already being timed, since the loop's own
+                // nudges ("That turn was empty...") are user messages too.
+                let asked = a.transcript().iter().rev().find_map(|m| match m {
+                    core::provider::Msg::User(t) if took.iter().any(|(k, _)| *k == chats::turn_key(t)) => Some(t.clone()),
+                    _ => None,
+                });
+                if let Some(asked) = asked {
+                    time_turn(&mut took, &asked, began.elapsed().as_secs());
+                }
+                save_chat(&chat_id, a, &workspace, &took);
             }
             "open" => {
                 // `open <app> <path>`: the harness setting up its own

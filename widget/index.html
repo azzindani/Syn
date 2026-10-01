@@ -1926,13 +1926,26 @@ function paintHead(card) {
     meta.appendChild(el("span", "timer", clock(card.dataset.started)));
   } else if (rows.length) {
     meta.appendChild(el("span", null, rows.length === 1 ? "1 step" : `${rows.length} steps`));
+    // How long it took stays once it is over. The clock used to vanish the
+    // moment a run finished, and a long run read the same as a quick one.
+    if (card.dataset.took) {
+      const t = el("span", "timer done", hms(Number(card.dataset.took)));
+      t.title = "How long this turn took";
+      meta.appendChild(t);
+    }
   }
 }
 
-// "0:07", "2:41": how long the run has been going, ticking in place.
+// "0:07", "2:41", "1:03:12": a stretch of seconds as a clock reads it.
+function hms(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+// How long the run has been going, ticking in place.
 function clock(started) {
-  const s = Math.max(0, Math.floor((Date.now() - Number(started || Date.now())) / 1000));
-  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  return hms((Date.now() - Number(started || Date.now())) / 1000);
 }
 setInterval(() => {
   for (const c of document.querySelectorAll('.acts[data-mode="live"]')) {
@@ -1944,6 +1957,9 @@ setInterval(() => {
 // A long finished run folds to its one sentence, so reading back a
 // conversation is reading the answers, not scrolling past the working.
 function settleCard(card) {
+  if (card.dataset.mode === "live" && card.dataset.started && !card.dataset.took) {
+    card.dataset.took = String(Math.round((Date.now() - Number(card.dataset.started)) / 1000));
+  }
   card.dataset.mode = "done";
   if (card.querySelectorAll(".act").length > COLLAPSE_OVER) {
     card.dataset.open = "0";
@@ -1985,8 +2001,11 @@ function emptyState() {
   return e;
 }
 
-function render(msgs, labels) {
+function render(msgs, labels, took) {
   labels = labels || {};
+  // Seconds per turn, by the turn's place among the user messages (`TOOK`).
+  took = took || {};
+  let asked = -1;
   // Repainting from the saved transcript detaches whatever the live view
   // had appended, so its handles have to go with it or the next step is
   // written into a node that is no longer on the page.
@@ -2009,7 +2028,11 @@ function render(msgs, labels) {
     if (m.role === "calls") {
       let calls = [];
       try { calls = JSON.parse(m.text); } catch {}
-      if (!acts) { acts = workCard("done"); assistantTurn().appendChild(acts); }
+      if (!acts) {
+        acts = workCard("done");
+        if (took[asked] !== undefined) acts.dataset.took = String(took[asked]);
+        assistantTurn().appendChild(acts);
+      }
       for (const c of calls) {
         const fn = c.function || {};
         const out = results[c.id] || "";
@@ -2028,6 +2051,7 @@ function render(msgs, labels) {
     if (acts) settleCard(acts);
     acts = null;
     if (m.role === "user") {
+      asked++;
       // The summariser's own question, which is a seam in the history
       // rather than something the human said.
       if (m.text === "What have we done so far?") {
@@ -2075,7 +2099,9 @@ let refresh = async function refresh() {
   // can hand each row the sentence that belongs to it.
   const labels = {};
   for (const l of tagged(out, "LABEL")) labels[l.id] = l;
-  render(msgs, labels);
+  const took = {};
+  for (const t of tagged(out, "TOOK")) took[t.turn] = t.secs;
+  render(msgs, labels, took);
   showAsk(tagged(out, "PENDING")[0] || null);
   const first = msgs.find(m => m.role === "user");
   $("title").textContent = first ? first.text.split("\n")[0].slice(0, 80) : "New chat";
@@ -2097,7 +2123,14 @@ let tailSrc = null, liveTurn = null, liveActs = null, liveNodes = [];
 function liveOpen(model) {
   liveClose();
   clearBlank();
-  liveTurn = assistantTurn();
+  // A run is a turn of its own, never the tail of the one before. The page
+  // that sent the message has put its bubble up first, so joining the last
+  // turn was harmless there; a message sent from anywhere else arrives
+  // after its run has begun, and joined the previous turn's card -- its
+  // bubble then went in above that card, and the second turn's work and
+  // answer sat inside the first.
+  liveTurn = el("div", "turn");
+  tl.appendChild(liveTurn);
   liveActs = workCard("live", model);
   liveTurn.appendChild(liveActs);
   liveNodes = [liveActs];
@@ -2139,6 +2172,8 @@ function liveClose() {
     if (!liveActs.querySelector(".act")) liveActs.remove();
     else settleCard(liveActs);
   }
+  // Nor a turn with nothing in it: every run opens one of its own now.
+  if (liveTurn && !liveTurn.children.length) liveTurn.remove();
   liveTurn = null;
   liveActs = null;
   liveNodes = [];
@@ -2208,6 +2243,8 @@ function liveStep(line) {
     if (!/^RECEIPT say /.test(line)) return;
     settledRun = false;
   }
+  // The model is answering again, or the turn is over: the wait is too.
+  if (banners.has("wait") && /^(RECEIPT (say|step|delta|retry) |ANSWER |STOPPED |ERROR |CONFIRM )/.test(line)) setBanner("wait", null);
   // RECEIPT delta {"kind","text"} -- the reply, as it is being written.
   let m0 = line.match(/^RECEIPT delta (\{[\s\S]*\})$/);
   if (m0) {
@@ -2218,16 +2255,65 @@ function liveStep(line) {
   // Anything else that says what happened replaces the preview of it.
   if (/^(RECEIPT (say|step|did|retry) |ANSWER |STOPPED |ERROR )/.test(line)) dropDraft();
 
+  // RECEIPT waiting <ms>ms (attempt n/max) then asking <model> again -- the
+  // provider turned the model away for now (a rate limit, an overload) and
+  // the console will ask again. Up to half a minute of a quiet turn with no
+  // word why read as a hung one.
+  let mw = line.match(/^RECEIPT waiting (\d+)ms \(attempt (\d+)\/(\d+)\)/);
+  if (mw) {
+    setBanner("wait", {
+      variant: "warning",
+      title: "The model is busy",
+      description: `Asking it again in ${Math.max(1, Math.round(Number(mw[1]) / 1000))}s (try ${mw[2]} of ${mw[3]}).`,
+    });
+    return;
+  }
+
   // RECEIPT say model=X open=N -- a turn is starting.
   let m = line.match(/^RECEIPT say model=(\S+)/);
   if (m) {
     setBanner("retry", null);
     setBanner("run", null);
+    // A run in another chat than the one on screen -- started from a
+    // terminal, a script, another window -- is shown in a thread of its
+    // own, not appended under a conversation it has nothing to do with.
+    // The page that sent it is already on its chat.
+    const chat = (line.match(/ chat=(\S+)/) || [])[1] || null;
+    if (chat && current && chat !== current && !busy) {
+      render([]);
+      current = chat;
+      history.replaceState(null, "", "#" + chat);
+      $("title").textContent = "New chat";
+    }
     // No "Working on <model>" banner: the work card names the model, and
     // the dots say it is working. A banner is kept for what needs reading.
     liveOpen(m[1]);
-    runningChat = (line.match(/ chat=(\S+)/) || [])[1] || null;
+    // The clock from when the turn began, not from when this page saw it:
+    // a page opened ten minutes into a run said "0:03".
+    const at = Number((line.match(/ at=(\d+)/) || [])[1]);
+    if (at && liveActs) { liveActs.dataset.started = String(at); paintHead(liveActs); }
+    runningChat = chat;
     markRunning();
+    return;
+  }
+
+  // RECEIPT asked {"text"} -- the message this turn answers. Drawn only for
+  // a turn this page did not send: send() has put that bubble up already.
+  // A message typed anywhere else ran as work and an answer under no
+  // question at all, and the person watching could not see what it was for.
+  m = line.match(/^RECEIPT asked (\{[\s\S]*\})$/);
+  if (m) {
+    if (busy) return;
+    let d = null;
+    try { d = JSON.parse(m[1]); } catch { return; }
+    if (!d || !d.text) return;
+    const you = el("div", "you", d.text);
+    if (liveTurn && liveTurn.parentNode === tl) tl.insertBefore(you, liveTurn);
+    else tl.appendChild(you);
+    liveNodes.push(you);
+    foldIfLong(you);
+    if ($("title").textContent === "New chat") $("title").textContent = d.text.split("\n")[0].slice(0, 80);
+    scrollEnd();
     return;
   }
 
@@ -2300,7 +2386,7 @@ function liveStep(line) {
 // A run that has stopped printing leaves its steps on screen but stops
 // claiming to be in progress.
 function liveState(running) {
-  if (!running) { setBanner("busy", null); dropDraft(); breathe(false); }
+  if (!running) { setBanner("busy", null); setBanner("wait", null); dropDraft(); breathe(false); }
   if (!running && liveActs) liveClose();
 }
 
@@ -2370,6 +2456,7 @@ function streamOpen() {
   es.addEventListener("source", (e) => {
     let d = null;
     try { d = JSON.parse(e.data); } catch { return; }
+    if (restarted(d.console, d.page)) return;
     // Only when it is genuinely a different run. The stream names its
     // source on connect as well as on a change, and wiping on the
     // connect threw away what the first poll had already drawn -- then
@@ -2411,6 +2498,45 @@ function streamClose() {
   sseOK = false;
 }
 
+// A console restarted under an open page is a new console: its own chat,
+// model and folder, and no run of the old one's is going any more. The page
+// starts again the way it started at load. Found live: a page left open
+// while the console under it was restarted kept the killed run's chat, its
+// title and "Working", and only a refresh put it right. Only on a restart,
+// not a blip: the same console coming back carries on from its cursor, with
+// whatever was drawn in the gap kept.
+let consoleId = null, pageVersion = null;
+function restarted(id, page) {
+  if (typeof id !== "number") return false;
+  if (consoleId === null) { consoleId = id; pageVersion = page || null; return false; }
+  if (id === consoleId) return false;
+  consoleId = id;
+  // A console on a newer build serves a newer page. Running this one
+  // against it left every fix since the last refresh out of the tab, and
+  // a person had to know to press F5; so load the new one instead.
+  if (page && pageVersion && page !== pageVersion) { location.reload(); return true; }
+  void resync();
+  return true;
+}
+async function resync() {
+  streamClose();
+  clearInterval(tailTimer);
+  tailTimer = null;
+  liveClose();
+  tailSrc = null;
+  tailAt = 0;
+  try {
+    await loadModels(); await loadChats();
+    paintSpace(await cli("workspace"));
+    await refresh();
+    await hands();
+    $("sidefoot").classList.remove("down");
+  } catch { /* still coming up: the next drop and reconnect tries again */ }
+  tailTimer = setInterval(tail, 2000);
+  await tail();
+  streamOpen();
+}
+
 async function tail() {
   // Whichever transport is live owns the timeline. Two of them writing to
   // it means every row twice.
@@ -2422,6 +2548,7 @@ async function tail() {
     // The stream came back while this poll was out; it owns the timeline
     // now, and this answer would draw what the stream is drawing.
     if (sseOK) return;
+    if (restarted(d.console, d.page)) return;
     // The first look at a log is a catch-up, not a replay. The saved
     // transcript already has everything that finished, and `refresh()`
     // has just drawn it; redrawing the same steps out of the progress
@@ -2431,14 +2558,18 @@ async function tail() {
     if (tailSrc === null) {
       tailSrc = d.source;
       tailAt = d.n;
-      // Except a run still going. Its turn is not in the saved transcript
-      // until it ends, so skipping its lines left a page opened mid-run
-      // showing nothing of it at all. Draw it from its own first line.
+      // Except a turn still going. It is not in the saved transcript until
+      // it ends, so skipping its lines left a page opened mid-run showing
+      // nothing of it at all. Draw it from its own first line. Not a turn
+      // that has ended: `running` is the log's age, true for minutes after
+      // the last line, and replaying a finished turn drew it twice, once
+      // from the transcript and once from here.
       if (d.running) {
         const lines = d.lines || [];
         let from = -1;
         for (let i = lines.length - 1; i >= 0 && from < 0; i--) if (/^RECEIPT say /.test(lines[i])) from = i;
-        if (from >= 0) for (const line of lines.slice(from)) liveStep(line);
+        const ended = from >= 0 && lines.slice(from).some(l => /^(ANSWER|STOPPED) /.test(l));
+        if (from >= 0 && !ended) for (const line of lines.slice(from)) liveStep(line);
       }
       liveState(d.running);
       return;

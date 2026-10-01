@@ -222,6 +222,73 @@ test("a reply is drawn as the model writes it, then replaced by the answer", asy
   expect(drafts).toBeNull();
 });
 
+test("a finished run keeps how long it took, counted from when it began", async ({ page }) => {
+  // The clock vanished the moment a run finished, and a twenty-minute run
+  // read the same as a quick one. And it counted from when the page saw the
+  // run, so a page opened part-way through said "0:03". `at` is when the
+  // turn really began: here, 95 seconds ago.
+  emit(`RECEIPT say model=test/m open=0 at=${Date.now() - 95_000}`);
+  emit(step({ label: "Read Took!A1", tool: "read", app: "excel", status: "done", detail: "ok" }));
+  const card = page.locator(".acts").last();
+  await expect(card.locator(".timer")).toHaveText(/^1:3[5-9]$/);
+  emit("ANSWER Done.");
+  await expect(card.locator(".timer.done")).toHaveText(/^1:3[5-9]$/);
+  await expect(card).toContainText("1 step");
+});
+
+test("a chat drawn again from its saved copy still says how long each turn took", async ({ page }) => {
+  // A finished card is redrawn from the transcript after every turn and on
+  // every reload, and the transcript had no times at all.
+  await page.evaluate(() => render(
+    [
+      { role: "user", text: "first" },
+      { role: "calls", text: JSON.stringify([{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }]) },
+      { role: "tool", id: "c1", text: "ok" },
+      { role: "assistant", text: "one" },
+      { role: "user", text: "second, never timed" },
+      { role: "calls", text: JSON.stringify([{ id: "c2", type: "function", function: { name: "read", arguments: "{}" } }]) },
+      { role: "tool", id: "c2", text: "ok" },
+    ],
+    {},
+    { 0: 3754 },
+  ));
+  const cards = page.locator(".acts");
+  await expect(cards.nth(0).locator(".timer.done")).toHaveText("1:02:34");
+  await expect(cards.nth(1).locator(".timer")).toHaveCount(0);
+});
+
+test("a tab left open across a restart onto a newer build loads the new page by itself", async ({ page }) => {
+  // Every fix to the page reached an open tab only after someone knew to
+  // press F5. The console names the page it serves; a restarted console
+  // serving a different one reloads the tab.
+  await page.evaluate(() => { window.__old = true; });
+  await page.route("**/stream*", (r) => r.abort());
+  await page.route("**/events*", async (r) => {
+    const res = await r.fetch();
+    const d = await res.json();
+    await r.fulfill({ response: res, json: { ...d, console: d.console + 1, page: "a-newer-build" } });
+  });
+  await page.evaluate(() => window.live.dropStream());
+  await page.waitForFunction(() => !window.__old, null, { timeout: 15_000 });
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+test("a restart onto the same build picks up where it is, without reloading", async ({ page }) => {
+  await page.evaluate(() => { window.__same = true; });
+  await page.route("**/stream*", (r) => r.abort());
+  let asked = 0;
+  await page.route("**/events*", async (r) => {
+    const res = await r.fetch();
+    const d = await res.json();
+    asked++;
+    await r.fulfill({ response: res, json: { ...d, console: d.console + 1 } });
+  });
+  await page.evaluate(() => window.live.dropStream());
+  await expect.poll(() => asked, { timeout: 15_000 }).toBeGreaterThan(1);
+  expect(await page.evaluate(() => window.__same)).toBe(true);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test("a stream that drops comes back by itself and misses nothing", async ({ page }) => {
   // The page used to close the stream for good on its first error and poll
   // for the rest of its life. Now it polls while it is down and reopens

@@ -410,6 +410,18 @@ namespace Syn.Sidecar
         /// too, and the decimal separator goes with it.
         private static string OpenCsv(dynamic app, string full)
         {
+            // Off while the sheet is opened, wiped and filled again: on
+            // screen, a 119,390-row file showed, went blank and came back,
+            // which looked like Excel opening and closing. Put back however
+            // this ends, or Excel stays frozen for the person using it.
+            bool painting = true;
+            try { painting = (bool)app.ScreenUpdating; app.ScreenUpdating = false; } catch { }
+            try { return OpenCsvQuietly(app, full); }
+            finally { try { app.ScreenUpdating = painting; } catch { } }
+        }
+
+        private static string OpenCsvQuietly(dynamic app, string full)
+        {
             var (delim, utf8) = SniffCsv(full);
             bool semi = delim == ';';
             dynamic wb = app.Workbooks.Open(full);

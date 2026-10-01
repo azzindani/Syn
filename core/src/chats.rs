@@ -28,6 +28,40 @@ pub struct ChatMeta {
 pub struct Chat {
     pub meta: ChatMeta,
     pub msgs: Vec<Msg>,
+    /// How long each turn took, in seconds, keyed by [`turn_key`] of the
+    /// message it answered. Kept in the header, not as messages: the
+    /// messages are exactly what the model is sent, and it has no use for a
+    /// stopwatch. Keyed by the text rather than a position because
+    /// summarising a long chat drops its early messages, and every position
+    /// after them would then name the wrong turn.
+    pub took: Vec<(String, u64)>,
+}
+
+/// The key a turn's time is kept under: a hash of the message it answered.
+pub fn turn_key(text: &str) -> String {
+    // FNV-1a, 64-bit: stable across builds, which `DefaultHasher` is not.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Each user message's turn time, by its place among the user messages the
+/// transcript holds now -- the order a page draws them in.
+pub fn turn_times(msgs: &[Msg], took: &[(String, u64)]) -> Vec<(usize, u64)> {
+    msgs.iter()
+        .filter_map(|m| match m {
+            Msg::User(t) => Some(t),
+            _ => None,
+        })
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let k = turn_key(t);
+            took.iter().find(|(key, _)| *key == k).map(|(_, s)| (i, *s))
+        })
+        .collect()
 }
 
 fn esc(s: &str) -> String {
@@ -207,12 +241,14 @@ pub fn save(chat: &Chat) -> std::io::Result<PathBuf> {
     let d = dir();
     std::fs::create_dir_all(&d)?;
     let path = d.join(format!("{}.jsonl", chat.meta.id));
+    let took: Vec<String> = chat.took.iter().map(|(k, s)| format!("\"{}\":{s}", esc(k))).collect();
     let mut out = format!(
-        "{{\"v\":1,\"id\":\"{}\",\"title\":\"{}\",\"updated\":{},\"workspace\":\"{}\"}}\n",
+        "{{\"v\":1,\"id\":\"{}\",\"title\":\"{}\",\"updated\":{},\"workspace\":\"{}\",\"took\":{{{}}}}}\n",
         esc(&chat.meta.id),
         esc(&chat.meta.title),
         chat.meta.updated,
-        esc(&chat.meta.workspace)
+        esc(&chat.meta.workspace),
+        took.join(",")
     );
     for m in &chat.msgs {
         out.push_str(&msg_json(m));
@@ -233,7 +269,19 @@ pub fn load(id: &str) -> std::io::Result<Chat> {
     let head = lines.next().unwrap_or("");
     let msgs: Vec<Msg> = lines.filter(|l| !l.trim().is_empty()).filter_map(msg_from_json).collect();
     let turns = msgs.iter().filter(|m| matches!(m, Msg::User(_))).count();
+    // Absent in a chat saved before turns were timed: no times, not an error.
+    let took = crate::json::parse(head)
+        .ok()
+        .and_then(|h| h.get("took").and_then(|t| t.as_obj()).map(|o| o.to_vec()))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(k, v)| match v {
+            crate::json::Value::Num(n) => n.parse::<u64>().ok().map(|s| (k, s)),
+            _ => None,
+        })
+        .collect();
     Ok(Chat {
+        took,
         meta: ChatMeta {
             id: field(head, "id").unwrap_or_else(|| id.to_string()),
             title: field(head, "title").unwrap_or_else(|| title_from(&msgs)),
@@ -376,6 +424,19 @@ mod tests {
     }
 
     #[test]
+    fn a_turns_time_stays_with_its_message_when_earlier_ones_are_dropped() {
+        let took = vec![(turn_key("first"), 30), (turn_key("second"), 812)];
+        let full = [Msg::User("first".into()), Msg::Assistant("a".into()), Msg::User("second".into())];
+        assert_eq!(turn_times(&full, &took), vec![(0, 30), (1, 812)]);
+        // Summarising dropped the first turn: the second is now the first
+        // user message, and its time goes with it rather than staying put.
+        let summarised = [Msg::User("second".into()), Msg::User("third, not timed yet".into())];
+        assert_eq!(turn_times(&summarised, &took), vec![(0, 812)]);
+        // A chat saved before turns were timed has none, and that is fine.
+        assert!(turn_times(&full, &[]).is_empty());
+    }
+
+    #[test]
     fn a_chat_id_cannot_walk_out_of_its_directory() {
         // The id arrives from a web page; it must name a file, not a path.
         for bad in ["../../.env", "a/b", r"a\b", "c:\\x", ".."] {
@@ -392,10 +453,12 @@ mod tests {
         let chat = Chat {
             meta: ChatMeta { id: new_id(), title: "Quarterly".into(), updated: now(), turns: 1, workspace: "D:\\Work\\Q3 \"final\"".into() },
             msgs: vec![Msg::System("rules".into()), Msg::User("hi".into()), Msg::Assistant("hello".into())],
+            took: vec![(turn_key("hi"), 754)],
         };
         save(&chat).unwrap();
         let back = load(&chat.meta.id).unwrap();
         assert_eq!(back.msgs, chat.msgs);
+        assert_eq!(back.took, chat.took, "how long each turn took comes back with it");
         assert_eq!(back.meta.title, "Quarterly");
         assert_eq!(back.meta.turns, 1);
         assert_eq!(back.meta.workspace, "D:\\Work\\Q3 \"final\"", "the workspace comes back as it was, backslashes and all");

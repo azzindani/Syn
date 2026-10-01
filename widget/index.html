@@ -2167,6 +2167,9 @@ function breathe(on) {
 function liveClose() {
   breathe(false);
   if (liveActs) {
+    // A call that never reported back -- the run was cut off under it -- is
+    // not still running. Only the reported rows are a record.
+    for (const r of liveActs.querySelectorAll('.act[data-status="running"]')) r.closest(".step").remove();
     // A turn that answered without touching anything leaves no card: an
     // empty "Worked" header is a claim about nothing.
     if (!liveActs.querySelector(".act")) liveActs.remove();
@@ -2244,7 +2247,7 @@ function liveStep(line) {
     settledRun = false;
   }
   // The model is answering again, or the turn is over: the wait is too.
-  if (banners.has("wait") && /^(RECEIPT (say|step|delta|retry) |ANSWER |STOPPED |ERROR |CONFIRM )/.test(line)) setBanner("wait", null);
+  if (banners.has("wait") && /^(RECEIPT (say|step|start|delta|retry) |ANSWER |STOPPED |ERROR |CONFIRM )/.test(line)) setBanner("wait", null);
   // RECEIPT delta {"kind","text"} -- the reply, as it is being written.
   let m0 = line.match(/^RECEIPT delta (\{[\s\S]*\})$/);
   if (m0) {
@@ -2253,7 +2256,7 @@ function liveStep(line) {
     return void onDelta(d);
   }
   // Anything else that says what happened replaces the preview of it.
-  if (/^(RECEIPT (say|step|did|retry) |ANSWER |STOPPED |ERROR )/.test(line)) dropDraft();
+  if (/^(RECEIPT (say|step|start|did|retry) |ANSWER |STOPPED |ERROR )/.test(line)) dropDraft();
 
   // RECEIPT waiting <ms>ms (attempt n/max) then asking <model> again -- the
   // provider turned the model away for now (a rate limit, an overload) and
@@ -2328,7 +2331,26 @@ function liveStep(line) {
     let d = null;
     try { d = JSON.parse(m[1]); } catch { return; }
     if (!liveActs) liveOpen(null);
-    addRow(liveActs, activity(d.label, d.status, d.detail || "(no output)", d.app, d.tool));
+    const row = activity(d.label, d.status, d.detail || "(no output)", d.app, d.tool);
+    // In place of the row that went up when this call started. A step's
+    // calls start in order and are reported in the same order, so the
+    // oldest one still running is this one.
+    const ran = liveActs.querySelector('.act[data-status="running"]');
+    if (ran) { ran.closest(".step").replaceWith(row); paintHead(liveActs); }
+    else addRow(liveActs, row);
+    scrollEnd();
+    return;
+  }
+  // RECEIPT start {"label","tool","app"} -- a call has begun. Its row goes
+  // up now, in the present tense, and its result replaces it. Without it a
+  // call that took a while -- opening a 16 MB CSV, thirteen seconds -- left
+  // the page sitting still, and the row appeared only once it was over.
+  m = line.match(/^RECEIPT start (\{[\s\S]*\})$/);
+  if (m) {
+    let d = null;
+    try { d = JSON.parse(m[1]); } catch { return; }
+    if (!liveActs) liveOpen(null);
+    addRow(liveActs, activity(d.label, "running", "(still running)", d.app, d.tool));
     scrollEnd();
     return;
   }

@@ -486,6 +486,12 @@ pub struct Agent {
     /// The model's own context window, in characters, when the provider's
     /// catalog says what it is. None: only the configured budget applies.
     window: Option<usize>,
+    /// Told of each call as it starts, with its present-tense sentence, the
+    /// tool and the app. The console prints it, so a call that takes a while
+    /// -- a 16 MB CSV took thirteen seconds to open -- is on screen while it
+    /// runs, instead of the page sitting still and the row appearing after.
+    /// None everywhere else: MCP's stdout carries protocol only.
+    pub on_start: Option<fn(&str, &str, &str)>,
 }
 
 impl Agent {
@@ -835,6 +841,7 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
             summarised: false,
             summarised_turns: 0,
             window: None,
+            on_start: None,
         }
     }
 
@@ -1250,6 +1257,10 @@ The earlier part of this conversation has been replaced by a summary of it. Anyt
         // document still counts as something the run tried to do.
         self.calls.push((tc.name.clone(), tc.arguments.clone()));
         self.narrate(relay, &tc, labels::Status::Running);
+        if let Some(started) = self.on_start {
+            let app = labels::app(&tc.arguments).unwrap_or_default();
+            started(&labels::sentence(&tc.name, &tc.arguments, labels::Status::Running), &tc.name, &app);
+        }
 
         // The loop's own services first. They reach no document, so they
         // never enter `to_action`, never look for a handle and never meet

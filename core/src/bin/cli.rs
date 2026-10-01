@@ -74,6 +74,16 @@ fn show_delta(kind: core::sse::Kind, text: &str) {
     pr!("RECEIPT delta {}", v.to_json());
 }
 
+/// A call starting, for whoever is watching: its row goes up as it begins,
+/// and the `RECEIPT step` for it, printed once the step is over, replaces
+/// it. A line of its own, not a `RECEIPT step` with another status, so
+/// whatever counts finished steps goes on counting only those.
+fn show_start(label: &str, tool: &str, app: &str) {
+    let s = core::json::s;
+    let v = core::json::obj(vec![("label", s(label)), ("tool", s(tool)), ("app", s(app))]);
+    pr!("RECEIPT start {}", v.to_json());
+}
+
 /// The model on this endpoint, streaming to the console as it writes.
 fn watched(on: &(String, String)) -> CurlBrain {
     CurlBrain { on_delta: Some(show_delta), ..CurlBrain::new(&on.0, &on.1) }
@@ -207,6 +217,7 @@ fn drive(
     sp: &ShellPolicy,
     held: bool,
 ) -> Option<String> {
+    a.on_start = Some(show_start);
     loop {
         // Between steps is where a stop is honoured cleanly: nothing is
         // half done, and the transcript says where the run was left.

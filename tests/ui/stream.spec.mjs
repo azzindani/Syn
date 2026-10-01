@@ -128,6 +128,28 @@ test("eight calls in one turn arrive as eight rows, not one clump", async ({ pag
   expect(distinct).toBeGreaterThanOrEqual(6);
 });
 
+test("a call shows while it runs, and its result takes its place", async ({ page }) => {
+  // Found live: opening a 16 MB CSV took thirteen seconds, and the page sat
+  // still for all of them, then the row appeared. A call's row goes up as it
+  // starts now; a step's calls start in order and report in the same order.
+  const start = (o) => "RECEIPT start " + JSON.stringify(o);
+  const before = await page.locator(".act").count();
+  emit(start({ label: "Opening big.csv", tool: "open", app: "excel" }));
+  const running = page.locator('.act[data-status="running"]');
+  await expect(running).toHaveCount(1, { timeout: 5000 });
+  await expect(running.locator(".nm")).toHaveText("Opening big.csv");
+  emit(start({ label: "Reading Sheet1!A1:B2", tool: "read", app: "excel" }));
+  await expect(running).toHaveCount(2, { timeout: 5000 });
+
+  emit(step({ label: "Opened big.csv", tool: "open", app: "excel", status: "done", detail: "opened" }));
+  emit(step({ label: "Read Sheet1!A1:B2", tool: "read", app: "excel", status: "done", detail: "ok" }));
+  await expect(running).toHaveCount(0, { timeout: 5000 });
+  // Replaced, not added to: two calls, two rows, in the order they ran.
+  await expect(page.locator(".act")).toHaveCount(before + 2);
+  await expect(page.locator(".act .nm").nth(before)).toHaveText("Opened big.csv");
+  await expect(page.locator(".act .nm").nth(before + 1)).toHaveText("Read Sheet1!A1:B2");
+});
+
 test("the stream survives a quiet minute", async ({ page }) => {
   // No traffic for longer than a browser's patience with an idle body.
   // The server's comment frame is what keeps it open; without it the page

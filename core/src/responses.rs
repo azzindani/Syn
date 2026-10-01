@@ -71,9 +71,17 @@ pub fn to_request(chat: &str) -> Result<String, String> {
         out.push(("tools", Value::Arr(flat)));
         out.push(("tool_choice", json::s("auto")));
     }
+    // The summary is asked for every time: without it the reasoning is sent
+    // only once it is over, encrypted, and the stream is silent while the
+    // model thinks. Measured on Muse Spark over OpenCode Go: twelve seconds
+    // with no event at all, then the whole reply in one second, which the
+    // person watching saw as a run that paused and then jumped. Asked for,
+    // a line of what it is thinking comes every three to six seconds.
+    let mut reasoning = vec![("summary", json::s("auto"))];
     if let Some(e) = v.at(&["reasoning", "effort"]).or_else(|| v.get("reasoning_effort")) {
-        out.push(("reasoning", json::obj(vec![("effort", e.clone())])));
+        reasoning.insert(0, ("effort", e.clone()));
     }
+    out.push(("reasoning", json::obj(reasoning)));
     if let Some(s) = v.get("stream") {
         out.push(("stream", s.clone()));
     }
@@ -260,7 +268,17 @@ mod tests {
         assert_eq!(r.get("store"), Some(&Value::Bool(false)), "nothing kept on the provider's side");
         // The flat spelling other providers get is read too.
         let flat = to_request(r#"{"model":"m","reasoning_effort":"high","messages":[]}"#).unwrap();
-        assert!(flat.contains(r#""reasoning":{"effort":"high"}"#), "{flat}");
+        assert!(flat.contains(r#""reasoning":{"effort":"high","summary":"auto"}"#), "{flat}");
+    }
+
+    #[test]
+    fn a_request_always_asks_to_hear_the_thinking_as_it_happens() {
+        // Without it the provider is silent for as long as the model thinks
+        // (twelve seconds, measured), and the reply then lands all at once.
+        for chat in [r#"{"model":"m","messages":[]}"#, r#"{"model":"m","reasoning":{"effort":"low"},"messages":[]}"#] {
+            let r = json::parse(&to_request(chat).unwrap()).unwrap();
+            assert_eq!(r.at(&["reasoning", "summary"]).and_then(Value::as_str), Some("auto"), "{chat}");
+        }
     }
 
     // Trimmed from Go's real reply for muse-spark-1.3-contributor.

@@ -34,9 +34,10 @@ tests/ui/node_modules/
 tests/ui/.console.json
 tests/ui/.console-url.txt
 
-# The capability fixture: 52MB of City of Calgary open data, not ours to
-# vendor. tests/capability/setup.ps1 names the path it expects.
-samples/
+# samples/ holds the test data (see samples/README.md) and is committed, so
+# a fresh clone can run the capability test and the natural sessions. The EV
+# file stays zipped: the 44MB CSV extracted from it is a local copy.
+samples/electric_vehicle_population_data.csv
 
 # Release packages: scripts/package.ps1
 dist/

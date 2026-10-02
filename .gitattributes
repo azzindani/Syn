@@ -1,0 +1,2 @@
+# Test data is stored byte for byte: no line-ending conversion of the CSVs.
+samples/** -text

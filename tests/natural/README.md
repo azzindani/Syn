@@ -16,7 +16,7 @@ The data files are real, published datasets from the Evals project
 (`Evals/dataframe/`), chosen because they are big and have the faults real
 data has: text placeholders for empty cells, codes instead of names,
 outliers, subtotals mixed in with the rows they total, a partial last year.
-They are not vendored here. Copy the one a script needs into the chat's
+They are in `samples/`. Copy the one a script needs into the chat's
 workspace folder (extract the EV file from its zip first).
 
 The capability test (`tests/capability/`) asks for everything in one brief

@@ -463,7 +463,20 @@ namespace Syn.Sidecar
                 if (showAfter)
                     lock (hidden)
                         foreach (var h in hidden)
-                            if (h != alsoHide) ShowWindow(new IntPtr(h), 4); // SW_SHOWNOACTIVATE
+                        {
+                            if (h == alsoHide) continue;
+                            // Only a frame with a person's workbook in it comes back.
+                            // The first version showed every frame it had hidden, and
+                            // that included the undo workbook's, titled just "Excel":
+                            // it sat on screen blank for 110 s, the very thing this
+                            // is meant to prevent, and the scorer's window sampler
+                            // caught it.
+                            var title = FrameTitle(new IntPtr(h));
+                            const string tail = " - Excel";
+                            if (!title.EndsWith(tail, StringComparison.Ordinal)) continue;
+                            if (IsScratch(title[..^tail.Length])) continue;
+                            ShowWindow(new IntPtr(h), 4); // SW_SHOWNOACTIVATE
+                        }
             }
         }
 

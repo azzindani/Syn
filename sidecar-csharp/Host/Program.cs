@@ -157,6 +157,7 @@ namespace Syn.Sidecar
                         app = Reattach(app);
                         reply = Serve(app, job.Line);
                     }
+                    reply = RecoverFromCellEdit(app, job.Line, reply);
                     if (job.Interrupted) reply = Recover(app, job, reply);
                     job.Reply.TrySetResult(reply);
                 }
@@ -364,7 +365,9 @@ namespace Syn.Sidecar
         private const int RpcEServerCallRetryLater = unchecked((int)0x8001010A);
 
         private static bool IsBusyOrCancelled(COMException e) =>
-            e.HResult is RpcECallRejected or RpcECallCanceled or RpcEServerCallRetryLater;
+            e.HResult is RpcECallRejected or RpcECallCanceled or RpcEServerCallRetryLater
+                // VBA_E_IGNORE: what Excel answers while a cell is being edited.
+                or unchecked((int)0x800AC472);
 
         private static string Dispatch(dynamic app, string line)
         {
@@ -437,6 +440,19 @@ namespace Syn.Sidecar
             try { painting = (bool)app.ScreenUpdating; app.ScreenUpdating = false; } catch { }
             try { return OpenCsvQuietly(app, full); }
             finally { try { app.ScreenUpdating = painting; } catch { } }
+        }
+
+        /// Open a workbook with its frame kept out of sight while it loads.
+        /// Excel puts the new frame on screen the moment the call begins, and
+        /// for a file of a hundred thousand rows it sat there blank, titled
+        /// just "Excel", for 4 to 10 seconds: the blinking empty window the
+        /// person saw and called a bug. The frame is shown again, without
+        /// taking focus, once the workbook is in it.
+        private static dynamic OpenWorkbook(dynamic app, string full)
+        {
+            object? opened = null;
+            WithNewFramesHidden((object)app, () => opened = app.Workbooks.Open(full, 0), showAfter: true);
+            return opened!;
         }
 
         /// What to tell a caller about a workbook that links to other
@@ -623,13 +639,22 @@ namespace Syn.Sidecar
                         app.Visible = true;
                         var note = "";
                         if (Path.GetExtension(full).Equals(".csv", StringComparison.OrdinalIgnoreCase))
-                            note = OpenCsv(app, full);
+                        {
+                            // The whole open, import included, out of sight: the
+                            // frame sat on screen titled just "Excel" for the 4 to
+                            // 10 seconds the import took (screen updating is off
+                            // for it, so the title is never painted), and each
+                            // time the person saw an empty window blink up.
+                            var csvNote = "";
+                            WithNewFramesHidden((object)app, () => csvNote = OpenCsv(app, full), showAfter: true);
+                            note = csvNote;
+                        }
                         else
                             // UpdateLinks 0: never ask. A workbook that links to others
                             // opens with Excel's own "update links?" box, which no
                             // caller can answer, and one turn waited an hour on it.
                             // The linked cells keep the values saved in the file.
-                            note = LinkNote(app.Workbooks.Open(full, 0));
+                            note = LinkNote(OpenWorkbook(app, full));
                         OpenedHere.Add(name);
                         return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s){note}");
                     }

@@ -415,7 +415,7 @@ namespace Syn.Sidecar
         /// `alsoHide` is one more frame to keep hidden for the call, a frame
         /// that was there before it: the undo workbook's, which has to be
         /// shown for a sheet to be copied into it.
-        private static void WithNewFramesHidden(object appO, Action call, long alsoHide = 0)
+        private static void WithNewFramesHidden(object appO, Action call, long alsoHide = 0, bool showAfter = false)
         {
             dynamic app = appO;
             uint pid = 0;
@@ -431,6 +431,9 @@ namespace Syn.Sidecar
             }, IntPtr.Zero);
 
             var stop = false;
+            // The frames this hid, to give back when the caller wants the
+            // new window to stay (a workbook someone asked to open).
+            var hidden = new HashSet<long>();
             var watcher = new System.Threading.Thread(() =>
             {
                 while (!stop)
@@ -438,8 +441,14 @@ namespace Syn.Sidecar
                     EnumWindows((h, _) =>
                     {
                         GetWindowThreadProcessId(h, out var p);
-                        if (p == pid && (!before.Contains(h.ToInt64()) || h.ToInt64() == alsoHide) && IsWindowVisible(h) && WindowClass(h) == "XLMAIN")
+                        // A frame titled just "Excel" has no workbook in it yet (or
+                        // no longer): that is the one the person sees as an empty
+                        // window, including the one a cold start opens first.
+                        if (p == pid && (!before.Contains(h.ToInt64()) || h.ToInt64() == alsoHide || (showAfter && FrameTitle(h) == "Excel")) && IsWindowVisible(h) && WindowClass(h) == "XLMAIN")
+                        {
                             ShowWindow(h, 0); // SW_HIDE
+                            lock (hidden) hidden.Add(h.ToInt64());
+                        }
                         return true;
                     }, IntPtr.Zero);
                     System.Threading.Thread.Sleep(10);
@@ -451,7 +460,18 @@ namespace Syn.Sidecar
             {
                 stop = true;
                 watcher.Join(2000);
+                if (showAfter)
+                    lock (hidden)
+                        foreach (var h in hidden)
+                            if (h != alsoHide) ShowWindow(new IntPtr(h), 4); // SW_SHOWNOACTIVATE
             }
+        }
+
+        private static string FrameTitle(IntPtr h)
+        {
+            var t = new System.Text.StringBuilder(256);
+            WdGetText(h, t, t.Capacity);
+            return t.ToString();
         }
 
         /// Hide the frame around a workbook that is about to be saved to a

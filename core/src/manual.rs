@@ -209,6 +209,15 @@ table to feed another such formula. Give each result its own SUMIFS over the
 range, a helper column, or a pivot. A call that keeps the application busy
 for two minutes is stopped with Esc and its change is undone.
 
+A CHECK THAT FINDS NOTHING PROVES NOTHING. When a formula meant to find
+problems returns 0, also compute how many rows it examined (COUNTA or
+ROWS of the same range) and read two or three rows it should have caught,
+or one it should not: a comparison that never matches looks exactly like
+data with no problems. Opening a CSV turns True and False into real
+booleans, so compare with TRUE, not with the text "TRUE" (the text never
+equals a boolean and every count comes out 0); dates and times arrive as
+numbers, so compare them as numbers.
+
 A CSV INTO A WORKBOOK IS TWO CALLS
 
 `open` the .csv in Excel -- it is split into its columns whatever the
@@ -810,6 +819,11 @@ mod tests {
         assert!(excel.contains("PIVOT MUST EXIST"));
         // A pivot cannot group dates.
         assert!(excel.contains("CANNOT group dates"));
+        // A check that returns 0 must show it could have returned more, and
+        // a CSV's True/False are booleans: one run reported a flag as
+        // "agrees exactly" because its two counts compared against text.
+        assert!(excel.contains("A CHECK THAT FINDS NOTHING PROVES NOTHING"));
+        assert!(excel.contains("compare with TRUE, not with the text"));
 
         let word = lookup("word");
         assert!(word.contains("Heading 1"), "a real heading style, not bold text");

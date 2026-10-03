@@ -194,3 +194,27 @@ C# helper is written the way it is:
     dates came across as serial numbers, and the saved file kept external
     links. `copy` takes `[Book.csv]Sheet!A1:D9` as its source; it is
     `Range.Copy` cell to cell, so blanks stay blank and formats come along.
+15. **A cell left in edit mode makes Excel refuse everything, with nothing on
+    screen to find.** The status bar reads "Cell Mode Enter" (or Edit, or
+    Point); every call is answered 0x800AC472 or rejected until the message
+    filter gives up at 15 s. A 50-message run lost seven turns to it: the
+    model ended each with "press Esc in Excel", and nobody was there. What
+    started the edit is not known (a person clicking in the window is one
+    possibility). `CellEdit.cs` reads the mode through UI Automation when a
+    call is refused that way, and presses Esc itself, then repeats the call,
+    only when the keyboard and mouse have been untouched for
+    `AGENT_OFFICE_IDLE_SECS` (60). Otherwise the refusal says in words that
+    someone is typing in a cell and what to do. Esc throws away only the
+    unfinished edit. Checked live by typing into a cell through
+    `Application.SendKeys` and calling through `mcpgate` both ways.
+16. **An empty frame titled just "Excel" stayed on screen while a big CSV
+    opened.** Opening a 170,000-row file takes 5 to 10 s counting the import
+    that splits its columns, with screen updating off, so the new frame was
+    never painted and sat there blank: the window that blinked up for the
+    person. The whole open runs with new frames (and any frame still titled
+    "Excel") hidden, and they are shown again, without taking focus, when the
+    workbook is in. Measured with the 30 ms window sampler: 8.9 s and 4.9 s
+    became 0.3 s and 0.04 s. A plain `Workbooks.Open` is fast (1.3 s for the
+    196,000-row file) and the hide call returns in 55 ms; what cannot be
+    hidden is a window whose thread is not pumping messages, which is why the
+    hide must not be left to the end.

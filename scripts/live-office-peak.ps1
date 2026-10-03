@@ -176,27 +176,27 @@ if ($png) {
 } else { Skip 'picture on a sheet' 'no chart png was exported to place' }
 Step 'page setup: landscape, one page wide' 'struct' @{ handle = $x; verb = 'pageSetup'; selector = 'Sheet1'; style = 'orientation=landscape;paper=A4;fitWide=1;fitTall=0' } | Out-Null
 Step 'replace North with Nord' 'struct' @{ handle = $x; verb = 'replace'; selector = 'Sheet1'; text = 'North'; with = 'Nord' } -Expect 'in 1 cell' | Out-Null
-Step 'undo the replace' 'undo' @{ handle = $x } -Expect 'undid the replace' | Out-Null
+Step 'undo the replace' 'undo' @{ handle = $x } -Expect 'undid replace' | Out-Null
 Step '  North is back' 'struct' @{ handle = $x; verb = 'find'; selector = 'Sheet1'; text = 'North' } -Expect 'Sheet1!A' | Out-Null
 # An empty `with` clears: "make the NULLs empty" is this call, and it was once
 # refused as if `text` were missing.
 Step 'replace North with nothing' 'struct' @{ handle = $x; verb = 'replace'; selector = 'Sheet1'; text = 'North'; with = '' } -Expect 'removed "North" from 1 cell' | Out-Null
 Step '  North is nowhere' 'struct' @{ handle = $x; verb = 'find'; selector = 'Sheet1'; text = 'North' } -Expect 'no cell shows North' | Out-Null
-Step '  undo brings North back' 'undo' @{ handle = $x } -Expect 'undid the replace' | Out-Null
+Step '  undo brings North back' 'undo' @{ handle = $x } -Expect 'undid replace' | Out-Null
 Step 'write G1:G2, then undo it' 'write' @{ handle = $x; selector = 'Sheet1!G1:G2'; values = 'temp;=1+1' } | Out-Null
-Step '  undo the write' 'undo' @{ handle = $x } -Expect 'undid the write' | Out-Null
+Step '  undo the write' 'undo' @{ handle = $x } -Expect 'undid write' | Out-Null
 Step '  G1:G2 are empty again' 'read' @{ handle = $x; selector = 'Sheet1!G1:G2' } -Expect '2x1 = ;\s*<' | Out-Null
 Step 'format A2:C2 bold on fill, then undo' 'format' @{ handle = $x; selector = 'Sheet1!A2:C2'; style = 'bold=1;fill=#FFFF00;merge=1' } | Out-Null
-Step '  undo the format (merge included)' 'undo' @{ handle = $x } -Expect 'undid the format' | Out-Null
+Step '  undo the format (merge included)' 'undo' @{ handle = $x } -Expect 'undid format' | Out-Null
 Step 'insert rows 3:4, then undo' 'struct' @{ handle = $x; verb = 'insert'; selector = 'Sheet1!3:4' } | Out-Null
-Step '  undo the insert' 'undo' @{ handle = $x } -Expect 'undid the insert' | Out-Null
+Step '  undo the insert' 'undo' @{ handle = $x } -Expect 'undid insert' | Out-Null
 Step '  row 3 has data again' 'read' @{ handle = $x; selector = 'Sheet1!A3' } -Expect '= \w' | Out-Null
 Step 'delete row 2, then undo' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Sheet1!2:2' } | Out-Null
-Step '  undo the delete' 'undo' @{ handle = $x } -Expect 'undid the delete' | Out-Null
+Step '  undo the delete' 'undo' @{ handle = $x } -Expect 'undid delete' | Out-Null
 Step 'a chart, then undo it' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Sheet1!A1:B5'; at = 'Copied!F34:M48'; title = 'Undo me' } | Out-Null
-Step '  undo the chart' 'undo' @{ handle = $x } -Expect 'undid the chart' | Out-Null
+Step '  undo the chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
 Step 'addSheet Temp, then undo' 'struct' @{ handle = $x; verb = 'addSheet'; name = 'Temp' } | Out-Null
-Step '  undo the addSheet' 'undo' @{ handle = $x } -Expect 'undid the addSheet' | Out-Null
+Step '  undo the addSheet' 'undo' @{ handle = $x } -Expect 'undid addSheet' | Out-Null
 Step '  Temp is gone' 'read' @{ handle = $x; selector = 'Temp!A1' } -Fails -Expect 'no sheet named' | Out-Null
 Step 'a footer on Sheet1' 'struct' @{ handle = $x; verb = 'header'; name = 'footer'; selector = 'Sheet1'; text = 'Plan & forecast' } -Expect '1 sheet' | Out-Null
 Step 'page numbers on every sheet' 'struct' @{ handle = $x; verb = 'pageNumbers'; text = 'Plan' } -Expect 'sheet' | Out-Null
@@ -233,7 +233,7 @@ Step '  the body is p1 again' 'read' @{ handle = $w; selector = 'p1' } -Expect '
 Step 'a bullet (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Bullet'; text = 'first point' } -Expect '\[List Bullet\]' | Out-Null
 Step 'a numbered item (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Number'; text = 'step one' } -Expect '\[List Number\]' | Out-Null
 Step 'a paragraph to undo' 'struct' @{ handle = $w; verb = 'insertParagraph'; text = 'undo me please' } | Out-Null
-Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid the insertParagraph' | Out-Null
+Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid insertParagraph' | Out-Null
 Step '  it is gone, step one is not' 'read' @{ handle = $w; selector = 'body' } -Expect '^(?![\s\S]*undo me please)[\s\S]*step one' | Out-Null
 Step 'sort on a document is refused, with the list' 'struct' @{ handle = $w; verb = 'sort'; selector = 'p1'; name = 'x' } -Fails -Expect 'Excel only.*insertParagraph' | Out-Null
 Step 'a table before p1' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Site|Score;North|3;South|4'; at = 'p1' } -Expect 'table t1 added, 3x2.*as p1:p\d+' | Out-Null
@@ -290,16 +290,16 @@ Step 'find alpha' 'struct' @{ handle = $p; verb = 'find'; text = 'alpha' } -Expe
 Step 'replace beta with gamma' 'struct' @{ handle = $p; verb = 'replace'; text = 'beta'; with = 'gamma' } -Expect 'time' | Out-Null
 Step 'delete s1' 'struct' @{ handle = $p; verb = 'delete'; selector = 's1' } | Out-Null
 Step '  two slides' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=2' | Out-Null
-Step 'undo the delete: the slide comes back' 'undo' @{ handle = $p } -Expect 'undid the delete' | Out-Null
+Step 'undo the delete: the slide comes back' 'undo' @{ handle = $p } -Expect 'undid delete' | Out-Null
 Step '  three slides again' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=3' | Out-Null
 Step 'rewrite a title, then undo' 'write' @{ handle = $p; selector = 's2'; values = 'Temporary title' } | Out-Null
-Step '  undo the write' 'undo' @{ handle = $p } -Expect 'undid the write' | Out-Null
+Step '  undo the write' 'undo' @{ handle = $p } -Expect 'undid write' | Out-Null
 Step '  the title is back' 'read' @{ handle = $p; selector = 'deck' } -Expect '^(?![\s\S]*Temporary title)' | Out-Null
 Step 'a slide to undo' 'struct' @{ handle = $p; verb = 'createSlide'; title = 'Undo me'; bullets = 'x' } | Out-Null
-Step '  undo the createSlide' 'undo' @{ handle = $p } -Expect 'undid the createSlide' | Out-Null
+Step '  undo the createSlide' 'undo' @{ handle = $p } -Expect 'undid createSlide' | Out-Null
 Step '  three slides still' 'read' @{ handle = $p; selector = 'deck' } -Expect 'slides=3' | Out-Null
 Step 'slide size 4:3' 'struct' @{ handle = $p; verb = 'pageSetup'; style = 'size=4:3' } -Expect '720x540' | Out-Null
-Step '  undo it: widescreen again' 'undo' @{ handle = $p } -Expect 'undid the pageSetup' | Out-Null
+Step '  undo it: widescreen again' 'undo' @{ handle = $p } -Expect 'undid pageSetup' | Out-Null
 Step 'sort on a deck is refused, with the list' 'struct' @{ handle = $p; verb = 'sort'; selector = 's1'; name = 'x' } -Fails -Expect 'Excel only.*createSlide' | Out-Null
 Step 'export summary' 'export' @{ handle = $p; format = 'summary' } -Expect 'slides=3' | Out-Null
 Step 'export png: every slide' 'export' @{ handle = $p; format = 'png'; path = (Join-Path $out 'peak-slide.png') } -Expect '3 slide' | Out-Null

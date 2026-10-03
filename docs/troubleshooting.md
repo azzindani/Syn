@@ -111,6 +111,14 @@ C# helper is written the way it is:
    sheet ("Unable to get the Copy property of the Worksheet class"), which
    made every undo of a deleted sheet fail; the window is shown for the copy
    alone, with screen updating off.
+   The workbooks an export makes along the way (`Sheets.Copy()` of a CSV,
+   a copy opened to be saved as xlsx) get a frame of their own that is on
+   screen until the call returns, a second or more for a large file; a
+   watcher thread hides new frames of that Excel while the call runs, as the
+   VBA watcher does for its dialogs. Hide only the frame there, never the
+   workbook's window: Excel writes a window's visibility into the file, and
+   an xlsx saved from a workbook whose window was hidden opens hidden, with
+   nothing on screen.
 7. **Word counts a table's cells as paragraphs**, and one more at the end
    of every row, so a 12x4 table is sixty `p` numbers. Shown one by one they
    read as loose lines, and a model deleted real tables three times taking

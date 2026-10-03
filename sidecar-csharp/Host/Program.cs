@@ -1897,7 +1897,7 @@ namespace Syn.Sidecar
                     // helper made it, so this helper closes it.
                     dynamic ws = sheet == "" ? wb.Worksheets[1] : Sheet(wb, SplitRange(sheet).sheet);
                     dynamic app = wb.Application;
-                    ws.Copy();
+                    WithNewFramesHidden((object)app, () => ws.Copy());
                     dynamic tmp = app.ActiveWorkbook;
                     bool alerts = app.DisplayAlerts;
                     app.DisplayAlerts = false;
@@ -1927,7 +1927,7 @@ namespace Syn.Sidecar
                         dynamic app0 = wb.Application;
                         bool alerts0 = app0.DisplayAlerts;
                         app0.DisplayAlerts = false;
-                        wb.Sheets.Copy();
+                        WithNewFramesHidden((object)app0, () => wb.Sheets.Copy());
                         dynamic book = app0.ActiveWorkbook;
                         try { book.SaveAs(full, 51); }
                         finally
@@ -1954,7 +1954,9 @@ namespace Syn.Sidecar
                     dynamic app = wb.Application;
                     bool alerts = app.DisplayAlerts;
                     app.DisplayAlerts = false;
-                    dynamic tmp = app.Workbooks.Open(tmpPath);
+                    object? opened = null;
+                    WithNewFramesHidden((object)app, () => opened = app.Workbooks.Open(tmpPath));
+                    dynamic tmp = opened!;
                     try { tmp.SaveAs(full, 51); }
                     finally
                     {

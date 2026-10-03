@@ -323,20 +323,14 @@ namespace Syn.Sidecar
                 try { _ = (string)_scratch.Name; return _scratch; }
                 catch { _scratch = null; }
             }
-            dynamic wb = app.Workbooks.Add();
+            object? added = null;
+            WithNewFramesHidden((object)app, () => added = app.Workbooks.Add());
+            dynamic wb = added!;
             // Each workbook has a top-level window of its own, and
             // `Visible = false` hides the workbook inside it but leaves that
             // frame on the desktop, empty and titled "Excel", beside the
             // person's real workbook. Hide the frame too.
-            try
-            {
-                dynamic win = wb.Windows[1];
-                int hwnd = 0;
-                try { hwnd = (int)win.Hwnd; } catch { }
-                win.Visible = false;
-                if (hwnd != 0) ShowWindow(new IntPtr(hwnd), 0); // SW_HIDE
-            }
-            catch { }
+            HideWorkbookWindow((object)wb);
             // Signed with this helper's process, so the next helper can tell
             // it from a workbook of the user's (msoPropertyTypeString 4).
             try { wb.CustomDocumentProperties.Add(ScratchTag, false, 4, Environment.ProcessId.ToString(CultureInfo.InvariantCulture)); } catch { }
@@ -377,6 +371,91 @@ namespace Syn.Sidecar
         }
 
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+        /// Hide a workbook this helper made for its own use: the workbook's
+        /// window and the top-level frame around it. Excel gives each workbook
+        /// a frame of its own, and `Visible = false` alone leaves that frame on
+        /// the desktop, empty. Called straight after the workbook exists, so
+        /// the person sees at most a flash and not the seconds a copy takes.
+        ///
+        /// Only for a workbook that is never saved. Excel writes a window's
+        /// visibility into the file, so a workbook hidden this way and then
+        /// saved as the person's own opens hidden, with nothing on screen.
+        private static void HideWorkbookWindow(object wbO)
+        {
+            try
+            {
+                dynamic win = ((dynamic)wbO).Windows[1];
+                int hwnd = 0;
+                try { hwnd = (int)win.Hwnd; } catch { }
+                win.Visible = false;
+                if (hwnd != 0) ShowWindow(new IntPtr(hwnd), 0); // SW_HIDE
+            }
+            catch { }
+        }
+
+        /// Run `call`, hiding every new Excel frame that appears in that
+        /// Excel while it runs.
+        ///
+        /// A call that makes a workbook (`Sheets.Copy()`, `Workbooks.Open`)
+        /// does not return until the workbook is filled, and its frame is on
+        /// the desktop from the start: exporting a 119,390-row CSV put an
+        /// empty "Book1 - Excel" window beside the person's for a second, on
+        /// every export. Hiding the frame afterwards is too late. A watcher on
+        /// its own thread, as the VBA watcher does, hides it as it appears.
+        /// Only frames that were not there when the call began are touched.
+        private static void WithNewFramesHidden(object appO, Action call)
+        {
+            dynamic app = appO;
+            uint pid = 0;
+            try { GetWindowThreadProcessId(new IntPtr((int)app.Hwnd), out pid); } catch { }
+            if (pid == 0) { call(); return; }
+
+            var before = new HashSet<long>();
+            EnumWindows((h, _) =>
+            {
+                GetWindowThreadProcessId(h, out var p);
+                if (p == pid && WindowClass(h) == "XLMAIN") before.Add(h.ToInt64());
+                return true;
+            }, IntPtr.Zero);
+
+            var stop = false;
+            var watcher = new System.Threading.Thread(() =>
+            {
+                while (!stop)
+                {
+                    EnumWindows((h, _) =>
+                    {
+                        GetWindowThreadProcessId(h, out var p);
+                        if (p == pid && !before.Contains(h.ToInt64()) && IsWindowVisible(h) && WindowClass(h) == "XLMAIN")
+                            ShowWindow(h, 0); // SW_HIDE
+                        return true;
+                    }, IntPtr.Zero);
+                    System.Threading.Thread.Sleep(10);
+                }
+            }) { IsBackground = true };
+            watcher.Start();
+            try { call(); }
+            finally
+            {
+                stop = true;
+                watcher.Join(2000);
+            }
+        }
+
+        /// Hide the frame around a workbook that is about to be saved to a
+        /// file the person will open: the frame alone, and the workbook's own
+        /// window setting left as it is, so the file is saved as visible.
+        private static void HideWorkbookFrame(object wbO)
+        {
+            try
+            {
+                dynamic win = ((dynamic)wbO).Windows[1];
+                int hwnd = (int)win.Hwnd;
+                if (hwnd != 0) ShowWindow(new IntPtr(hwnd), 0); // SW_HIDE
+            }
+            catch { }
+        }
 
         /// <summary>Close scratch workbooks whose helper is gone.</summary>
         ///

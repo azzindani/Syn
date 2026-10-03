@@ -359,8 +359,14 @@ namespace Syn.Sidecar
             try
             {
                 app.ScreenUpdating = false;
-                win.Visible = true;
-                ws.Copy(After: sw.Worksheets[(int)sw.Worksheets.Count]);
+                // Shown for the copy alone, and its frame hidden the moment
+                // Excel shows it: left to itself it was on the desktop for as
+                // long as the copy took, 700 ms for a large sheet.
+                WithNewFramesHidden((object)app, () =>
+                {
+                    win.Visible = true;
+                    ws.Copy(After: sw.Worksheets[(int)sw.Worksheets.Count]);
+                }, hwnd);
             }
             finally
             {
@@ -404,7 +410,11 @@ namespace Syn.Sidecar
         /// every export. Hiding the frame afterwards is too late. A watcher on
         /// its own thread, as the VBA watcher does, hides it as it appears.
         /// Only frames that were not there when the call began are touched.
-        private static void WithNewFramesHidden(object appO, Action call)
+        ///
+        /// `alsoHide` is one more frame to keep hidden for the call, a frame
+        /// that was there before it: the undo workbook's, which has to be
+        /// shown for a sheet to be copied into it.
+        private static void WithNewFramesHidden(object appO, Action call, long alsoHide = 0)
         {
             dynamic app = appO;
             uint pid = 0;
@@ -427,7 +437,7 @@ namespace Syn.Sidecar
                     EnumWindows((h, _) =>
                     {
                         GetWindowThreadProcessId(h, out var p);
-                        if (p == pid && !before.Contains(h.ToInt64()) && IsWindowVisible(h) && WindowClass(h) == "XLMAIN")
+                        if (p == pid && (!before.Contains(h.ToInt64()) || h.ToInt64() == alsoHide) && IsWindowVisible(h) && WindowClass(h) == "XLMAIN")
                             ShowWindow(h, 0); // SW_HIDE
                         return true;
                     }, IntPtr.Zero);

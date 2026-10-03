@@ -370,6 +370,7 @@ namespace Syn.Sidecar
             // had copied is put back afterwards.
             var kept = ClipboardText();
             int index;
+            var pastedPlain = false;
             try
             {
                 try { co.Chart.ChartArea.Copy(); }
@@ -390,7 +391,19 @@ namespace Syn.Sidecar
                 ApplyStyle(anchor, "Normal");
                 dynamic r = anchor.Range;
                 r.Collapse(1); // wdCollapseStart: in front of the mark, keeping it
-                Retry(() => r.PasteAndFormat(link ? WdChartLinked : WdChart));
+                // Word on this machine answers PasteAndFormat with the chart
+                // formats (14, 15) with 0x800A11FD "This command is not
+                // available", for a chart on the clipboard that pastes fine
+                // any other way: the tool had never once worked live. A plain
+                // paste of an Excel chart is a real chart (HasChart, a link
+                // to the workbook), so that is the way round it; the link is
+                // broken afterwards for a copy.
+                Retry(() =>
+                {
+                    try { r.PasteAndFormat(link ? WdChartLinked : WdChart); }
+                    catch (COMException e) when ((uint)e.ErrorCode == 0x800A11FD) { pastedPlain = true; }
+                });
+                if (pastedPlain) Retry(() => r.Paste());
             }
             finally
             {
@@ -412,6 +425,11 @@ namespace Syn.Sidecar
                 // MsoTriState, not bool: -1 is true. A bool cast threw and every
                 // real chart was reported as "not a chart".
                 try { real = Convert.ToInt32((object)shape.HasChart) != 0; } catch { }
+                if (pastedPlain && !link)
+                {
+                    try { shape.Chart.ChartData.BreakLink(); }
+                    catch (COMException) { link = true; } // could not: say it is still linked
+                }
             }
             doc.Saved = false;
             return Ok($"chart {sheet}!{n}{(title == "" ? "" : $" \"{title}\"")} from {book} added as p{index}, "

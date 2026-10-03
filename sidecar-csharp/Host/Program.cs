@@ -2414,7 +2414,13 @@ namespace Syn.Sidecar
             switch (f)
             {
                 case "pdf":
-                    pres.ExportAsFixedFormat(full, 2); // ppFixedFormatTypePDF
+                    // ExportAsFixedFormat is refused through late binding here
+                    // ("Could not convert argument 0"), so a deck could not be
+                    // exported as a PDF at all. SaveCopyAs with the PDF format
+                    // writes the same file and leaves the open deck, and its
+                    // path, where they are.
+                    try { pres.ExportAsFixedFormat(full, 2); } // ppFixedFormatTypePDF
+                    catch (Exception) { pres.SaveCopyAs(full, 32); } // ppSaveAsPDF
                     return Ok($"exported {full}");
                 case "pptx":
                     pres.SaveCopyAs(full);

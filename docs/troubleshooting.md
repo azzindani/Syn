@@ -149,3 +149,15 @@ C# helper is written the way it is:
    lose its data: `SaveCopyAs` on a workbook read from text writes text,
    one sheet, so a text workbook is now exported by copying all its sheets
    into a new workbook.
+10. **Word refuses a chart pasted in the chart formats.** `PasteAndFormat`
+    with `wdChart` (14) or `wdChartLinked` (15) answers 0x800A11FD "This
+    command is not available" for an Excel chart on the clipboard that pastes
+    fine every other way, so `embedChart` had never worked live. A plain
+    `Range.Paste()` of the chart is a real chart (`HasChart`, linked to the
+    workbook), and `Chart.ChartData.BreakLink()` makes it a copy; the helper
+    pastes plain when the chart formats are refused.
+11. **PowerPoint's `ExportAsFixedFormat` is refused through late binding**
+    ("Could not convert argument 0"). A deck is exported as a PDF with
+    `SaveCopyAs(path, 32)`, which writes the file and leaves the open deck,
+    and its path, alone. A deck with no slides cannot be saved as a PDF at
+    all.

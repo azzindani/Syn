@@ -478,12 +478,20 @@ namespace Syn.Sidecar
         {
             var (delim, utf8) = SniffCsv(full);
             bool semi = delim == ';';
+            // Which columns hold dates Excel would read in this machine's order
+            // rather than the file's: see CsvDates.cs. A failure to look is not a
+            // reason not to open.
+            object[]? columnTypes = null;
+            var dateNote = "";
+            try { (columnTypes, dateNote) = SniffDateColumns(full, delim, utf8); }
+            catch (Exception e) { Trace($"csv date sniff failed: {e.Message}"); }
             dynamic wb = app.Workbooks.Open(full, 0);
             try
             {
                 dynamic ws = wb.Worksheets[1];
                 ws.Cells.Clear();
                 dynamic qt = ws.QueryTables.Add("TEXT;" + full, ws.Range["A1"]);
+                if (columnTypes != null) qt.TextFileColumnDataTypes = columnTypes;
                 qt.TextFilePlatform = utf8 ? 65001 : 2; // UTF-8, else xlWindows (ANSI)
                 qt.TextFileStartRow = 1;
                 qt.TextFileParseType = 1; // xlDelimited
@@ -501,7 +509,7 @@ namespace Syn.Sidecar
                 qt.Delete();
                 // What is in the sheet is what is in the file: nothing to save.
                 wb.Saved = true;
-                return "";
+                return dateNote;
             }
             catch (Exception e)
             {
@@ -1821,6 +1829,13 @@ namespace Syn.Sidecar
             dynamic cache;
             try { cache = wb.SlicerCaches.Add2(pt, field); }
             catch (RuntimeBinderException) { cache = wb.SlicerCaches.Add(pt, field); }
+            catch (COMException e) when (e.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            {
+                // 0x800A03EC "This slicer cache already exists" told a model nothing
+                // it could act on.
+                throw new InvalidOperationException(
+                    $"slicer: this pivot already has a slicer on {field}. Use that one (it is already on the sheet), or give a different field");
+            }
 
             // Only the destination. Passing Type.Missing for the optional
             // arguments marshals badly through late binding and comes back as

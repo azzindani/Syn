@@ -80,7 +80,11 @@ def main():
     rate = (refused / calls) if calls else 0
     gate("D2 refused calls <= 8%", rate <= 0.08, f"{refused} of {calls} calls ({rate:.1%}); worst turns: "
          + str(sorted(per_turn_refused.items(), key=lambda kv: -kv[1])[:5]))
-    gate("D3 the repeated-call gate never fired", repeated == 0, f"{repeated} times")
+    # The gate ends the turn with STOPPED "same op+args 3x"; the model-facing
+    # refusal text is in the turn file. Count both.
+    stopped_by_gate = sorted(n for n, t in turns.items() if "same op+args 3x" in t["text"])
+    gate("D3 the repeated-call gate never fired", repeated == 0 and not stopped_by_gate,
+         f"{repeated} refusals, turns stopped by it: {stopped_by_gate}")
 
     print(f"# {os.path.basename(args.log)}: {len(turns)} turns, {sum(secs) / 60:.0f} min, {sum(t['steps'] for t in turns.values())} steps")
     for name, ok, detail in gates:

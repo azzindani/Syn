@@ -209,6 +209,16 @@ table to feed another such formula. Give each result its own SUMIFS over the
 range, a helper column, or a pivot. A call that keeps the application busy
 for two minutes is stopped with Esc and its change is undone.
 
+DATES THAT CAME IN AS TEXT. A CSV date such as 12/1/2023 is month first in
+one file and day first in another, and Excel on a given machine reads it one
+way and does not say so. Opening a CSV therefore leaves a date column as text
+when the file does not settle the order, and the reply says so. Settle it from
+the data before converting: the part that never goes above 12 and the part
+that does are the month and the day, and a monthly series has one part that
+cycles through 1 to 12 and one that never changes. Build the date from its
+parts with DATE(year, month, day); DATEVALUE reads the text in the machine's
+order, which is how a column of firsts of the month became twelfths.
+
 SCRATCH WORK GOES ON A SHEET OF ITS OWN. Work out a count or a check on a
 new sheet (addSheet), not in a column beside the data, and delete that sheet
 when you are done: a column that looks free may hold data. Reading A1:Z1 of a
@@ -834,6 +844,10 @@ mod tests {
         // Scratch work on a free-looking column deleted two real columns of
         // a working copy across two turns, and the replies said nothing.
         assert!(excel.contains("SCRATCH WORK GOES ON A SHEET OF ITS OWN"));
+        // A text date read in the machine's order turned a column of firsts
+        // of the month into twelfths, and a model spent 73 steps finding out.
+        assert!(excel.contains("DATES THAT CAME IN AS TEXT"));
+        assert!(excel.contains("DATEVALUE reads the text in the machine's"));
         assert!(excel.contains("compare with TRUE, not with the text"));
 
         let word = lookup("word");

@@ -232,3 +232,14 @@ C# helper is written the way it is:
     tells the model to do scratch work on a sheet of its own. Not done for
     LibreOffice (its replies are not changed). Checked live by replaying the
     two calls on a copy of the file.
+18. **A CSV date was silently read in the machine's order.** `12/1/2023` in a
+    file written month first became 12 January on a machine set day first, for
+    every row whose two numbers could be either; a monthly series of firsts of
+    the month became twelfths, nothing said so, and a 50-message run spent 73
+    steps (then a stop by the repeated-call gate) finding out. The CSV import
+    (`CsvDates.cs`) now looks at each column before Excel does: a column made
+    entirely of d/m/yyyy-shaped values is read in the order the file proves (a
+    part over 12 is the day), and when no part goes over 12 it is imported as
+    text, with a note in the `open` reply, so no order is guessed. ISO dates and
+    everything else are left to Excel. Checked live on a monthly file, a
+    mixed file and a month-first file.

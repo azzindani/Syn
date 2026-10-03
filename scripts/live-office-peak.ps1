@@ -179,6 +179,7 @@ Step 'doughnut chart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'doughnut'
 Step 'pivot: revenue by region' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Q3 Revenue'; at = 'Copied!A20' } -Expect 'sum of Q3 Revenue by Region' | Out-Null
 Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Growth'; at = 'Copied!F34' } -Expect 'slicer on Growth' | Out-Null
 Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region' | Out-Null
+Step '  the same field again is refused in words' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!L34' } -Fails -Expect 'already has a slicer on Region' | Out-Null
 Step 'a second pivot' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A30' } -Expect 'sum of Growth by Region' | Out-Null
 Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '2 pivot tables \(Pivot\d+, Pivot\d+\)' | Out-Null
 Step 'export the charts as png' 'export' @{ handle = $x; format = 'png'; path = (Join-Path $out 'peak-charts.png') } | Out-Null

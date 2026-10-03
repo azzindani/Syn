@@ -1422,8 +1422,22 @@ namespace Syn.Sidecar
             dynamic ws = Sheet(wb, sheet);
             dynamic rng = string.IsNullOrEmpty(addr) ? ws.UsedRange : ws.Range[addr];
             int rows = rng.Rows.Count, cols = rng.Columns.Count;
+            // A header read from column A that ends before the data does: a model
+            // asked for A1:Z1, got 26 names, called it "26 columns", took AA for an
+            // unused column, wrote its scratch there, deleted it, and did the same
+            // again next turn. Two real columns (customer_type, adr) were gone before
+            // anyone looked. The reply now says where the data really ends.
+            var edge = "";
+            if (!string.IsNullOrEmpty(addr) && (int)rng.Column == 1 && (int)rng.Row == 1)
+            {
+                dynamic used = ws.UsedRange;
+                int usedRight = (int)used.Column + (int)used.Columns.Count - 1;
+                if (cols < usedRight)
+                    edge = $" (this is not all of it: the data on {sheet} runs to {(string)used.Cells[(int)used.Rows.Count, (int)used.Columns.Count].Address(false, false)}; " +
+                           "columns after this range hold data, so do not treat them as free)";
+            }
             if ((long)rows * cols > ReadCellCap)
-                return $"grid {sheet}: {rows}x{cols} (over the {ReadCellCap}-cell read cap: narrow the selector to see values)";
+                return $"grid {sheet}: {rows}x{cols} (over the {ReadCellCap}-cell read cap: narrow the selector to see values){edge}";
 
             var sb = new StringBuilder();
             for (var i = 1; i <= rows; i++)
@@ -1435,7 +1449,7 @@ namespace Syn.Sidecar
                     sb.Append(EscapeCell(CellText(rng.Cells[i, j])));
                 }
             }
-            return $"grid {sheet}: {rows}x{cols} = {sb}";
+            return $"grid {sheet}: {rows}x{cols} = {sb}{edge}";
         }
 
         // Value2 hands back a date as an OLE serial, and "42989.33" is not a
@@ -1475,15 +1489,18 @@ namespace Syn.Sidecar
             if (span > 1 && rows.Length == 1 && rows[0].Length == 1)
             {
                 var one = rows[0][0];
+                var heldBefore = Held(ws, target);
                 if (one.StartsWith("=", StringComparison.Ordinal)) SetFormula(target, one);
                 else target.Value2 = one;
                 // InvariantCulture: this locale groups with a period, so 258,423
                 // cells was reporting itself as "258.423".
-                return Ok($"filled {sheet}!{addr} ({span.ToString("N0", CultureInfo.InvariantCulture)} cells) from {Trunc(one)}");
+                return Ok($"filled {sheet}!{addr} ({span.ToString("N0", CultureInfo.InvariantCulture)} cells) from {Trunc(one)}{heldBefore}");
             }
 
             var r0 = target.Row;
             var c0 = target.Column;
+            var wideBefore = rows.Max(r => r.Length);
+            var heldNote = Held(ws, ws.Range[ws.Cells[r0, c0], ws.Cells[r0 + rows.Length - 1, c0 + wideBefore - 1]]);
             for (var i = 0; i < rows.Length; i++)
                 for (var j = 0; j < rows[i].Length; j++)
                 {
@@ -1499,7 +1516,25 @@ namespace Syn.Sidecar
             string endCell = last.Address(false, false);
             dynamic first = ws.Cells[r0, c0];
             string startCell = first.Address(false, false);
-            return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}");
+            return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}{heldNote}");
+        }
+
+        /// What a write is about to replace, as a sentence for the reply, or
+        /// nothing when the cells were empty. A model that picks a "free"
+        /// column by guessing, and overwrites real data with its scratch, is
+        /// told on the spot, with what the first cell held.
+        private static string Held(dynamic ws, dynamic range)
+        {
+            try
+            {
+                double held = ws.Application.WorksheetFunction.CountA(range);
+                if (held < 1) return "";
+                var firstText = "";
+                try { firstText = CellText(range.Cells[1, 1]); } catch { }
+                var was = firstText.Length > 0 ? $"; the first held \"{Trunc(firstText)}\"" : "";
+                return $" -- WARNING: this replaced {((long)held).ToString("N0", CultureInfo.InvariantCulture)} cell(s) that already held data{was}. If that was not meant, undo puts them back";
+            }
+            catch (Exception) { return ""; }
         }
 
         // Mirrors grid() in core/src/tools.rs: cells by '|', rows by ';', a

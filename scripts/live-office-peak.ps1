@@ -142,6 +142,12 @@ Step 'copy the table to Copy!B2' 'struct' @{ handle = $x; verb = 'copy'; source 
 # (here the same one, which is the only one every run has open).
 Step 'copy from a named workbook' 'struct' @{ handle = $x; verb = 'copy'; source = '[plan.xlsx]Sheet1!A1:C5'; at = 'Copy!H2' } -Expect 'copied \[plan.xlsx\]' | Out-Null
 Step 'copy from a workbook that is not open' 'struct' @{ handle = $x; verb = 'copy'; source = '[nothere.xlsx]Sheet1!A1:C5'; at = 'Copy!H2' } -Fails -Expect 'no open workbook' | Out-Null
+# A write onto cells that hold data says so, a delete says what it removed, and a
+# read from A1 that stops before the data does says where the data ends: a model
+# once took a column it had not read for a free one, and lost two real ones.
+Step 'a write over data says so' 'write' @{ handle = $x; selector = 'Copy!H2:H2'; values = 'x' } -Expect 'WARNING: this replaced 1 cell' | Out-Null
+Step 'a read that stops short says where the data ends' 'read' @{ handle = $x; selector = 'Copy!A1:C2' } -Expect 'not all of it' | Out-Null
+Step 'a delete says what it held' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!J:J' } -Expect 'it held [0-9,]+ cell' | Out-Null
 Step '  it arrived' 'read' @{ handle = $x; selector = 'Copy!B2:D2' } -Expect 'Region\|Q3 Revenue\|Growth' | Out-Null
 Step 'rename Copy to Copied' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copy'; action = 'rename'; name = 'Copied' } | Out-Null
 Step 'copy the sheet as Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copied'; action = 'copy'; name = 'Again' } | Out-Null

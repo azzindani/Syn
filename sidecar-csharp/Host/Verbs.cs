@@ -101,10 +101,33 @@ namespace Syn.Sidecar
             Snapshot(handle);
             var t = Target((object)wb, selector, "delete");
             const int xlShiftUp = -4162;
+            // What is about to go, said afterwards: deleting "an unused column" that
+            // held a real one (header and all) came back as a bare "deleted".
+            var held = "";
+            try
+            {
+                dynamic doomed = t.kind == "rows" ? t.rng.EntireRow : t.kind == "columns" ? t.rng.EntireColumn : t.rng;
+                double n = t.ws.Application.WorksheetFunction.CountA(doomed);
+                if (n >= 1)
+                {
+                    var label = "";
+                    try
+                    {
+                        // The first cell of the deleted line: the header of a column, the
+                        // first value of a row.
+                        dynamic c = t.kind == "columns" ? t.ws.Cells[1, (int)t.rng.Column] : t.kind == "rows" ? t.ws.Cells[(int)t.rng.Row, 1] : t.rng.Cells[1, 1];
+                        var text = CellText(c);
+                        if (text.Length > 0) label = $", {(t.kind == "columns" ? "header" : "first cell")} \"{Trunc(text)}\"";
+                    }
+                    catch { }
+                    held = $" (it held {((long)n).ToString("N0", CultureInfo.InvariantCulture)} cell(s) with data{label}; undo puts it back)";
+                }
+            }
+            catch (Exception) { }
             if (t.kind == "rows") t.rng.EntireRow.Delete();
             else if (t.kind == "columns") t.rng.EntireColumn.Delete();
             else t.rng.Delete(xlShiftUp);
-            return Ok($"deleted {t.kind} {SheetRef(t.sheet)}!{t.addr}; what was after them moved {(t.kind == "columns" ? "left" : "up")}");
+            return Ok($"deleted {t.kind} {SheetRef(t.sheet)}!{t.addr}{held}; what was after them moved {(t.kind == "columns" ? "left" : "up")}");
         }
 
         private static string ExcelSort(dynamic wb, string handle, string selector, string header, string order)

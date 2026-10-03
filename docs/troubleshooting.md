@@ -218,3 +218,17 @@ C# helper is written the way it is:
     196,000-row file) and the hide call returns in 55 ms; what cannot be
     hidden is a window whose thread is not pumping messages, which is why the
     hide must not be left to the end.
+17. **A scratch write into a "free" column destroyed real columns, and every
+    reply was a bare success.** A model read A1:Z1, took the 26 names for the
+    whole sheet (it ran on to AF), wrote its counts into AA1:AA6, which held
+    `customer_type`, and deleted AA; the next turn did it again and deleted
+    `adr`, which had moved into AA. The working copy lost both before anyone
+    looked, and eight later turns answered "there is no rate column". The
+    source file was never touched. Three replies now say what happened:
+    `write` and fill name the cells they replaced ("this replaced 6 cell(s)
+    that already held data; the first held \"customer_type\""), `delete` names
+    the cells with data and the header of the column it removed, and a read
+    from A1 that ends before the data does says where the data ends. The manual
+    tells the model to do scratch work on a sheet of its own. Not done for
+    LibreOffice (its replies are not changed). Checked live by replaying the
+    two calls on a copy of the file.

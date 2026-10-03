@@ -209,6 +209,14 @@ table to feed another such formula. Give each result its own SUMIFS over the
 range, a helper column, or a pivot. A call that keeps the application busy
 for two minutes is stopped with Esc and its change is undone.
 
+SCRATCH WORK GOES ON A SHEET OF ITS OWN. Work out a count or a check on a
+new sheet (addSheet), not in a column beside the data, and delete that sheet
+when you are done: a column that looks free may hold data. Reading A1:Z1 of a
+sheet that goes on to AF shows 26 names, not 32; a read from column A that
+stops short of the data says where the data ends, so believe it. A write that
+lands on cells that hold data says so in its reply, and so does a delete; if
+that was not what you meant, undo before doing anything else.
+
 A CHECK THAT FINDS NOTHING PROVES NOTHING. When a formula meant to find
 problems returns 0, also compute how many rows it examined (COUNTA or
 ROWS of the same range) and read two or three rows it should have caught,
@@ -823,6 +831,9 @@ mod tests {
         // a CSV's True/False are booleans: one run reported a flag as
         // "agrees exactly" because its two counts compared against text.
         assert!(excel.contains("A CHECK THAT FINDS NOTHING PROVES NOTHING"));
+        // Scratch work on a free-looking column deleted two real columns of
+        // a working copy across two turns, and the replies said nothing.
+        assert!(excel.contains("SCRATCH WORK GOES ON A SHEET OF ITS OWN"));
         assert!(excel.contains("compare with TRUE, not with the text"));
 
         let word = lookup("word");

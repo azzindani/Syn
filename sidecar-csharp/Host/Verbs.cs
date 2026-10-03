@@ -19,6 +19,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Microsoft.CSharp.RuntimeBinder;
 
 namespace Syn.Sidecar
 {
@@ -108,8 +109,22 @@ namespace Syn.Sidecar
 
         private static string ExcelSort(dynamic wb, string handle, string selector, string header, string order)
         {
-            Snapshot(handle);
             var t = Target((object)wb, selector, "sort");
+            // Sorting some columns of a table moves only those: every row
+            // then holds one booking's A:V beside another's W:AG. A live run
+            // sorted W1:AG119391 of a table that began at A and every number
+            // read from those columns afterwards belonged to the wrong row.
+            // Excel's own sort asks "expand the selection?"; here the answer
+            // is to say which range to sort, and let the call be made again.
+            dynamic region = t.rng.Cells[1, 1].CurrentRegion;
+            int c1 = (int)t.rng.Column, c2 = c1 + (int)t.rng.Columns.Count - 1;
+            int r1 = (int)region.Column, r2 = r1 + (int)region.Columns.Count - 1;
+            if (r1 < c1 || r2 > c2)
+                throw new InvalidOperationException(
+                    $"sort: {SheetRef(t.sheet)}!{t.addr} is only some of the columns of the table {SheetRef(t.sheet)}!{(string)region.Address(false, false)}. " +
+                    "Sorting them alone would pull them out of line with the rest of each row. " +
+                    $"Sort {SheetRef(t.sheet)}!{(string)region.Address(false, false)} instead, with name set to the header of the column to sort by");
+            Snapshot(handle);
             int col = HeaderColumn((object)t.rng, header, "sort");
             var desc = (order ?? "").Trim().ToLowerInvariant() switch
             {
@@ -397,27 +412,69 @@ namespace Syn.Sidecar
         private static string ExcelReplace(dynamic wb, string handle, string selector, string text, string with)
         {
             CheckFindable(text, "replace");
-            CheckFindable(with, "replace");
+            with = CheckReplacement(with, "replace");
             Snapshot(handle);
             var count = 0;
+            var more = false;
             foreach (var (_, rng) in SearchRanges((object)wb, selector))
             {
                 dynamic first = rng.Find(What: text, LookIn: -4123, LookAt: 2, MatchCase: false); // xlFormulas
                 if (first == null) continue;
-                string firstAddr = first.Address(false, false);
-                dynamic cur = first;
-                while (true)
-                {
-                    count++;
-                    cur = rng.FindNext(cur);
-                    if (cur == null || count >= 100000) break;
-                    string a = cur!.Address(false, false);
-                    if (a == firstAddr) break;
-                }
+                var (n, cut) = CountMatches((object)wb.Application, (object)rng, (object)first, text);
+                count += n;
+                more |= cut;
+                // Every match, however many: Range.Replace has no cap. An
+                // empty `with` leaves a cell that held only `text` truly empty
+                // (COUNTBLANK sees it), which is how "make the NULLs empty" is
+                // done; refusing it sent one run through a hundred steps of
+                // workarounds that left a space in every cell.
                 rng.Replace(What: text, Replacement: with, LookAt: 2, MatchCase: false);
             }
-            return Ok(count == 0 ? $"no cell contains {text}; nothing changed" : $"replaced {text} with {with} in {count} cell(s)");
+            if (count == 0) return Ok($"no cell contains \"{text}\"; nothing changed");
+            var cells = $"{count}{(more ? "+" : "")} cell(s)";
+            return Ok(with.Length == 0
+                ? $"removed \"{text}\" from {cells}; a cell that held only \"{text}\" is now empty"
+                : $"replaced \"{text}\" with \"{with}\" in {cells}");
         }
+
+        /// How many cells of `rng` contain `text`.
+        ///
+        /// COUNTIF answers in one call. Walking FindNext cell by cell took
+        /// seven minutes for 128,933 NULLs in a live run and stopped at
+        /// 100,000, and the reply then said "100000 cell(s)" -- which the
+        /// model read as a cap and went looking for the rest. COUNTIF's
+        /// wildcard sees text only, not a number or the inside of a formula,
+        /// so when it finds nothing where Find did, walk instead (bounded,
+        /// and said so with a "+").
+        private static (int n, bool more) CountMatches(object appO, object rngO, object firstO, string text)
+        {
+            dynamic app = appO, rng = rngO, first = firstO;
+            var crit = "*" + text.Replace("~", "~~").Replace("*", "~*").Replace("?", "~?") + "*";
+            if (crit.Length <= 255) // COUNTIF's own limit on a criterion
+            {
+                try
+                {
+                    var n = (int)(double)app.WorksheetFunction.CountIf(rng, crit);
+                    if (n > 0) return (n, false);
+                }
+                catch (COMException) { /* fall through to the walk */ }
+                catch (RuntimeBinderException) { }
+            }
+            string firstAddr = first.Address(false, false);
+            dynamic cur = first;
+            var count = 0;
+            while (true)
+            {
+                count++;
+                if (count >= CountWalkCap) return (count, true);
+                cur = rng.FindNext(cur);
+                if (cur == null) break;
+                if ((string)cur.Address(false, false) == firstAddr) break;
+            }
+            return (count, false);
+        }
+
+        private const int CountWalkCap = 10000;
 
         /// A selector for find and replace: a sheet, a range, or nothing for
         /// every sheet. Only the used part of a sheet is searched.
@@ -444,6 +501,18 @@ namespace Syn.Sidecar
             if (string.IsNullOrEmpty(text)) throw new InvalidOperationException($"{verb} needs the text to look for in `text`");
             if (text.Length > FindCap)
                 throw new InvalidOperationException($"{verb} works on up to {FindCap} characters at a time, and this is {text.Length}");
+        }
+
+        /// What `replace` puts in. Empty is allowed and means "remove it":
+        /// this was once checked like the search text, so `with:""` came
+        /// back as "needs the text to look for in `text`" -- naming a field
+        /// the call had filled in.
+        private static string CheckReplacement(string with, string verb)
+        {
+            with ??= "";
+            if (with.Length > FindCap)
+                throw new InvalidOperationException($"{verb} puts in up to {FindCap} characters at a time (`with`), and this is {with.Length}");
+            return with;
         }
 
         private static IEnumerable<(string k, string v)> Pairs(string style)
@@ -532,7 +601,7 @@ namespace Syn.Sidecar
         private static string WordReplace(dynamic doc, string handle, string text, string with)
         {
             CheckFindable(text, "replace");
-            CheckFindable(with, "replace");
+            with = CheckReplacement(with, "replace");
             Snapshot(handle);
             var count = 0;
             dynamic probe = doc.Content;
@@ -544,7 +613,7 @@ namespace Syn.Sidecar
                 count++;
                 probe.Collapse(0);
             }
-            if (count == 0) return Ok($"{text} does not appear in the document; nothing changed");
+            if (count == 0) return Ok($"\"{text}\" does not appear in the document; nothing changed");
             dynamic rng = doc.Content;
             dynamic f = rng.Find;
             f.ClearFormatting();
@@ -553,7 +622,9 @@ namespace Syn.Sidecar
             f.Execute(FindText: text, MatchCase: false, MatchWholeWord: false, MatchWildcards: false,
                       Forward: true, Wrap: 1, Format: false, ReplaceWith: with, Replace: 2);
             doc.Saved = false;
-            return Ok($"replaced {text} with {with}, {count} time(s)");
+            return Ok(with.Length == 0
+                ? $"removed \"{text}\", {count} time(s)"
+                : $"replaced \"{text}\" with \"{with}\", {count} time(s)");
         }
 
         private static string WordComment(dynamic doc, string handle, string selector, string text)
@@ -758,7 +829,7 @@ namespace Syn.Sidecar
         private static string DeckReplace(dynamic pres, string handle, string text, string with)
         {
             CheckFindable(text, "replace");
-            CheckFindable(with, "replace");
+            with = CheckReplacement(with, "replace");
             Snapshot(handle);
             var count = 0;
             int n = pres.Slides.Count;
@@ -779,7 +850,10 @@ namespace Syn.Sidecar
                     }
                 }
             }
-            return Ok(count == 0 ? $"{text} is on no slide; nothing changed" : $"replaced {text} with {with}, {count} time(s)");
+            if (count == 0) return Ok($"\"{text}\" is on no slide; nothing changed");
+            return Ok(with.Length == 0
+                ? $"removed \"{text}\", {count} time(s)"
+                : $"replaced \"{text}\" with \"{with}\", {count} time(s)");
         }
 
         /// Every text range on a slide: text boxes, placeholders, table cells.

@@ -103,7 +103,14 @@ C# helper is written the way it is:
    and never saved, because it never reaches its own clean-up. Each scratch
    workbook carries a `SynUndoScratch` property naming its helper's process,
    and an Excel helper starting up closes the ones whose helper is gone;
-   a workbook without that property is never touched.
+   a workbook without that property is never touched. The scratch
+   workbook's window is hidden as well as the workbook: `Visible = false`
+   alone left an empty frame titled "Excel" on the desktop beside the
+   person's own.
+   Worksheet.Copy into a workbook whose window is hidden is refused for any
+   sheet ("Unable to get the Copy property of the Worksheet class"), which
+   made every undo of a deleted sheet fail; the window is shown for the copy
+   alone, with screen updating off.
 7. **Word counts a table's cells as paragraphs**, and one more at the end
    of every row, so a 12x4 table is sixty `p` numbers. Shown one by one they
    read as loose lines, and a model deleted real tables three times taking

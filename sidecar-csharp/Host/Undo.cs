@@ -324,7 +324,19 @@ namespace Syn.Sidecar
                 catch { _scratch = null; }
             }
             dynamic wb = app.Workbooks.Add();
-            try { wb.Windows[1].Visible = false; } catch { }
+            // Each workbook has a top-level window of its own, and
+            // `Visible = false` hides the workbook inside it but leaves that
+            // frame on the desktop, empty and titled "Excel", beside the
+            // person's real workbook. Hide the frame too.
+            try
+            {
+                dynamic win = wb.Windows[1];
+                int hwnd = 0;
+                try { hwnd = (int)win.Hwnd; } catch { }
+                win.Visible = false;
+                if (hwnd != 0) ShowWindow(new IntPtr(hwnd), 0); // SW_HIDE
+            }
+            catch { }
             // Signed with this helper's process, so the next helper can tell
             // it from a workbook of the user's (msoPropertyTypeString 4).
             try { wb.CustomDocumentProperties.Add(ScratchTag, false, 4, Environment.ProcessId.ToString(CultureInfo.InvariantCulture)); } catch { }
@@ -335,6 +347,36 @@ namespace Syn.Sidecar
         }
 
         private const string ScratchTag = "SynUndoScratch";
+
+        /// Worksheet.Copy into a workbook whose window is hidden is refused
+        /// by Excel, whatever the sheet holds: "Unable to get the Copy
+        /// property of the Worksheet class". Every undo of a deleted sheet
+        /// hit it, so deleting a sheet could never be taken back. The scratch
+        /// window is shown for the copy alone, with screen updating off so
+        /// nothing is drawn, and hidden again (frame included) after.
+        private static void CopySheetIntoScratch(object appO, object wsO, object scratchO)
+        {
+            dynamic app = appO, ws = wsO, sw = scratchO;
+            dynamic win = sw.Windows[1];
+            int hwnd = 0;
+            try { hwnd = (int)win.Hwnd; } catch { }
+            bool updating = true;
+            try { updating = (bool)app.ScreenUpdating; } catch { }
+            try
+            {
+                app.ScreenUpdating = false;
+                win.Visible = true;
+                ws.Copy(After: sw.Worksheets[(int)sw.Worksheets.Count]);
+            }
+            finally
+            {
+                try { win.Visible = false; } catch { }
+                if (hwnd != 0) ShowWindow(new IntPtr(hwnd), 0); // SW_HIDE
+                try { app.ScreenUpdating = updating; } catch { }
+            }
+        }
+
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int cmd);
 
         /// <summary>Close scratch workbooks whose helper is gone.</summary>
         ///
@@ -639,7 +681,7 @@ namespace Syn.Sidecar
                 sheetName = ws.Name;
                 sheetIndex = ws.Index;
                 dynamic sw = Scratch(appO);
-                ws.Copy(After: sw.Worksheets[(int)sw.Worksheets.Count]);
+                CopySheetIntoScratch(appO, ws, sw);
                 sheetCopy = sw.Worksheets[(int)sw.Worksheets.Count].Name;
                 sw.Saved = true;
                 e.ScratchSheets.Add(sheetCopy);

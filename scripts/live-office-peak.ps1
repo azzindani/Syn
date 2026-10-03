@@ -130,6 +130,8 @@ Step 'delete row 3' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Sheet1
 Step '  South is back on row 3' 'read' @{ handle = $x; selector = 'Sheet1!A3' } -Expect '= South' | Out-Null
 Step 'sort by Q3 Revenue, largest first' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Sheet1!A1:C5'; name = 'Q3 Revenue'; rule = 'desc' } | Out-Null
 Step '  West is first, header stayed' 'read' @{ handle = $x; selector = 'Sheet1!A1:A2' } -Expect '= Region;West' | Out-Null
+# Some columns of a table sorted alone would pull them out of line with the rest of each row.
+Step '  sorting only B:C of the table is refused' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Sheet1!B1:C5'; name = 'Q3 Revenue'; rule = 'asc' } -Fails -Expect 'only some of the columns of the table Sheet1!A1:C5' | Out-Null
 Step 'filter Region = North' 'struct' @{ handle = $x; verb = 'filter'; selector = 'Sheet1!A1:C5'; name = 'Region'; rule = 'North' } -Expect '1 row' | Out-Null
 Step 'clear the filter' 'struct' @{ handle = $x; verb = 'filter'; selector = 'Sheet1!A1:C5'; name = 'Region'; rule = '' } -Expect 'cleared' | Out-Null
 Step 'write a duplicate row' 'write' @{ handle = $x; selector = 'Sheet1!A6:C6'; values = 'West|501200|0.19' } | Out-Null
@@ -167,6 +169,11 @@ Step 'page setup: landscape, one page wide' 'struct' @{ handle = $x; verb = 'pag
 Step 'replace North with Nord' 'struct' @{ handle = $x; verb = 'replace'; selector = 'Sheet1'; text = 'North'; with = 'Nord' } -Expect 'in 1 cell' | Out-Null
 Step 'undo the replace' 'undo' @{ handle = $x } -Expect 'undid the replace' | Out-Null
 Step '  North is back' 'struct' @{ handle = $x; verb = 'find'; selector = 'Sheet1'; text = 'North' } -Expect 'Sheet1!A' | Out-Null
+# An empty `with` clears: "make the NULLs empty" is this call, and it was once
+# refused as if `text` were missing.
+Step 'replace North with nothing' 'struct' @{ handle = $x; verb = 'replace'; selector = 'Sheet1'; text = 'North'; with = '' } -Expect 'removed "North" from 1 cell' | Out-Null
+Step '  North is nowhere' 'struct' @{ handle = $x; verb = 'find'; selector = 'Sheet1'; text = 'North' } -Expect 'no cell shows North' | Out-Null
+Step '  undo brings North back' 'undo' @{ handle = $x } -Expect 'undid the replace' | Out-Null
 Step 'write G1:G2, then undo it' 'write' @{ handle = $x; selector = 'Sheet1!G1:G2'; values = 'temp;=1+1' } | Out-Null
 Step '  undo the write' 'undo' @{ handle = $x } -Expect 'undid the write' | Out-Null
 Step '  G1:G2 are empty again' 'read' @{ handle = $x; selector = 'Sheet1!G1:G2' } -Expect '2x1 = ;\s*<' | Out-Null

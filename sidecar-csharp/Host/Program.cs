@@ -1688,20 +1688,29 @@ namespace Syn.Sidecar
             // with 0x80028018 TYPE_E_INVDATAREAD -- which reads as a broken
             // type library and is really just the wrong way to walk the
             // collection. FindWorkbook learned this already.
-            dynamic pt = null;
-            for (var i = 1; i <= wb.Worksheets.Count && pt == null; i++)
+            var all = new List<dynamic>();
+            for (var i = 1; i <= wb.Worksheets.Count; i++)
             {
                 dynamic ws = wb.Worksheets[i];
                 int n = ws.PivotTables().Count;
-                for (var j = 1; j <= n; j++)
-                {
-                    dynamic candidate = ws.PivotTables(j);
-                    var nameMatches = string.IsNullOrWhiteSpace(pivotName)
-                        || string.Equals((string)candidate.Name, pivotName, StringComparison.OrdinalIgnoreCase);
-                    if (nameMatches) { pt = candidate; break; }
-                }
+                for (var j = 1; j <= n; j++) all.Add(ws.PivotTables(j));
             }
-            if (pt == null) throw new InvalidOperationException("no pivot table to attach a slicer to: build the pivot first");
+            // `name` is the pivot's own name. A model reading the schema's
+            // "what to call it" gives the slicer's name instead ("hotel"), and
+            // 36 steps of "no pivot table to attach a slicer to" followed, in
+            // a workbook that had one. A name that matches no pivot is not an
+            // error when there is only one pivot: it can only mean that one.
+            dynamic pt = null;
+            if (!string.IsNullOrWhiteSpace(pivotName))
+                foreach (var c in all)
+                    if (string.Equals((string)c.Name, pivotName, StringComparison.OrdinalIgnoreCase)) { pt = c; break; }
+            if (pt == null && all.Count == 1) pt = all[0];
+            if (pt == null)
+            {
+                if (all.Count == 0) throw new InvalidOperationException("no pivot table in this workbook to attach a slicer to: build one first with `pivot`");
+                var names = string.Join(", ", all.Select(c => (string)c.Name));
+                throw new InvalidOperationException($"slicer: this workbook has {all.Count} pivot tables ({names}); put the one to filter in `name`");
+            }
 
             dynamic dws = Sheet(wb, dstSheet);
             dynamic cell = dws.Range[dstAddr];
@@ -1794,14 +1803,24 @@ namespace Syn.Sidecar
                 h = (double)box.Height;
             }
             dynamic shape = dws.Shapes.AddChart2(-1, type, box.Left, box.Top, w, h);
-            dynamic chart = shape.Chart;
-            chart.SetSourceData(sws.Range[srcAddr]);
-            if (!string.IsNullOrWhiteSpace(title))
+            try
             {
-                chart.HasTitle = true;
-                chart.ChartTitle.Text = title;
+                dynamic chart = shape.Chart;
+                chart.SetSourceData(sws.Range[srcAddr]);
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    chart.HasTitle = true;
+                    chart.ChartTitle.Text = title;
+                }
+                StyleChart(chart, style);
             }
-            StyleChart(chart, style);
+            catch
+            {
+                // A refused chart must leave no chart behind: AddChart2 has
+                // already put an empty one on the sheet by this point.
+                try { shape.Delete(); } catch { }
+                throw;
+            }
             return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr} "
                       + $"({Math.Round(w)}x{Math.Round(h)})");
         }

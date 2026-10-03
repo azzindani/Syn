@@ -106,7 +106,7 @@ application is asked, with the list of verbs that app does have.
 | Verb | Fields | Notes |
 |---|---|---|
 | `find` | `text`, `selector` (Excel: a sheet or range) | Where the text appears. |
-| `replace` | `text`, `with`, `selector` (Excel) | Every occurrence; says how many. |
+| `replace` | `text`, `with`, `selector` (Excel) | Every occurrence; says how many. An empty `with` removes `text`: a cell that held only `text` is left empty. |
 | `delete` | `selector` | Excel rows/columns/cells, Word `p3` or `p3:p5`, PowerPoint `s3`. |
 | `pageSetup` | `style`, `selector` (Excel: the sheet) | `orientation=landscape`, `paper=A4` or `Letter`, `margin=0.75` (inches); Excel adds `fitWide`, `fitTall`; a deck takes `size=16:9`, `4:3`, `16:10`, `A4`, `Letter` and `orientation`. |
 | `pageNumbers` | `text` (optional footer text) | Excel: every sheet's footer. Word: the footer. PowerPoint: slide numbers. |
@@ -121,7 +121,7 @@ application is asked, with the list of verbs that app does have.
 | `addSheet` | `name` | |
 | `sheet` | `selector` (sheet), `action`, `name` | `rename`, `delete`, `copy`, `hide`, `show`. |
 | `insert` | `selector` | Rows `data!5:7`, columns `data!C:E`, or cells (pushed down). |
-| `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. |
+| `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. Refused when `selector` covers only some of a table's columns, naming the range to use: those columns alone would come out of line with the rest of each row. |
 | `filter` | `selector`, `name` (header), `rule` | What to keep: `North`, `>100`, `<>0`; empty clears. |
 | `dedupe` | `selector`, `name` | Headers that must all match, joined by `|`; every column when empty. |
 | `copy` | `source`, `at` | Values, formulas and formats to the top-left cell `at`. |
@@ -130,7 +130,7 @@ application is asked, with the list of verbs that app does have.
 | `name` | `name`, `at` | A named range. |
 | `conditional` | `selector`, `rule` | `dataBar`, `colorScale`, `iconSet`, `top10`, `greaterThan=N`, `lessThan=N`. |
 | `pivot` | `source`, `rows`, `cols`, `values`, `at` | Fields are header names; the destination sheet must exist. |
-| `slicer` | `rows` (the field), `name` (the pivot; the only one when empty), `at` | Build the pivot first. |
+| `slicer` | `rows` (the field), `name` (the pivot; the only one when empty, or when no pivot has that name), `at` | Build the pivot first. The field is any column of the pivot's source, not only one the pivot shows. |
 | `chart` | `kind`, `source`, `at`, `title`, `style` | `kind`: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar. `at` as a range sizes the chart to it. `style`: `legend=0`, `gridlines=0`, `xTitle=…`, `yTitle=…`, `dataLabels=1`. |
 | `comment` | `selector`, `text` | A note on a cell. |
 | `link` | `selector`, `text` (address), `title` | |

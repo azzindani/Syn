@@ -776,8 +776,10 @@ class Calc:
             rd.SearchCaseSensitive = False
             count += r.replaceAll(rd)
         if not count:
-            return "no cell contains %s; nothing changed" % text
-        return "replaced %s with %s in %d cell(s)" % (text, with_, count)
+            return 'no cell contains "%s"; nothing changed' % text
+        if not with_:
+            return 'removed "%s" from %d cell(s); a cell that held only "%s" is now empty' % (text, count, text)
+        return 'replaced "%s" with "%s" in %d cell(s)' % (text, with_, count)
 
 
 class Writer:
@@ -899,8 +901,10 @@ class Writer:
         rd.SearchCaseSensitive = False
         n = self.doc.replaceAll(rd)
         if not n:
-            return "%s does not appear in the document; nothing changed" % text
-        return "replaced %s with %s, %d time(s)" % (text, with_, n)
+            return '"%s" does not appear in the document; nothing changed' % text
+        if not with_:
+            return 'removed "%s", %d time(s)' % (text, n)
+        return 'replaced "%s" with "%s", %d time(s)' % (text, with_, n)
 
     def comment(self, selector, text):
         a, _ = self.para_span(selector, "comment")
@@ -1155,8 +1159,10 @@ class Impress:
             rd.SearchCaseSensitive = False
             count += page.replaceAll(rd)
         if not count:
-            return "%s is on no slide; nothing changed" % text
-        return "replaced %s with %s, %d time(s)" % (text, with_, count)
+            return '"%s" is on no slide; nothing changed' % text
+        if not with_:
+            return 'removed "%s", %d time(s)' % (text, count)
+        return 'replaced "%s" with "%s", %d time(s)' % (text, with_, count)
 
 
 # ---------------------------------------------------------------- dispatch

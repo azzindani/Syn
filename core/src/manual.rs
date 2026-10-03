@@ -265,7 +265,9 @@ CONDITIONAL, SLICER
 `conditional` shades a range: dataBar, colorScale, iconSet, top10,
 greaterThan=N, lessThan=N. Distinct kinds are distinct rules.
 `slicer` is a filter control wired to a pivot, so THE PIVOT MUST EXIST
-FIRST and the slicer's field must be one the pivot uses.
+FIRST. Its field (`rows`) is the header of any column in the pivot's
+source: it need not be one the pivot shows. `name` is the pivot's name,
+and can be left out when the workbook has only one.
 
 FORMAT
 

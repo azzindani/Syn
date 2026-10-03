@@ -25,6 +25,16 @@ and scores the result. These do the opposite: no single message asks for
 much, and what they show is whether a model can hold a real working session
 together over fifty turns.
 
+## Scoring
+
+`EXPECTATIONS.md` says what a passing session looks like (written before the
+runs it scores, and never loosened afterwards). `drive.ps1` plays a script
+against the running console and logs each turn; `score.py` reads that log
+and checks the machine-checkable gates (every turn answers, nobody
+intervened, step budget, speed, refusals). The gates that need reading the
+run against the data are checked by a person, with the script's header as
+the answer key.
+
 ## How to run one
 
 1. A fresh chat, its workspace set to a folder holding the script's data

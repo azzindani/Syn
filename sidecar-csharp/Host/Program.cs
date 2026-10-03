@@ -1865,16 +1865,42 @@ namespace Syn.Sidecar
 
             dynamic sws = Sheet(wb, srcSheet);
             dynamic dws = Sheet(wb, dstSheet);
+            // The fields are headers of the source's first row. A name that is not
+            // there failed AFTER the pivot had been created and left an empty one
+            // on the sheet (an orphan on a dashboard, found in a scored run),
+            // behind a refusal that named nothing. Check first, and name the
+            // headers there are.
+            dynamic head = sws.Range[srcAddr].Rows[1];
+            var headers = new List<string>();
+            for (var c = 1; c <= (int)head.Columns.Count; c++) headers.Add(((string)head.Cells[1, c].Text).Trim());
+            string Exact(string field)
+            {
+                var hit = headers.FirstOrDefault(x => x.Equals(field.Trim(), StringComparison.OrdinalIgnoreCase));
+                return hit ?? throw new InvalidOperationException(
+                    $"pivot: no column headed {field} in {srcSheet}!{srcAddr}; its headers are {string.Join(", ", headers.Take(30))}");
+            }
+            rowField = Exact(rowField);
+            valueField = Exact(valueField);
+            if (!string.IsNullOrWhiteSpace(colField)) colField = Exact(colField);
             // xlDatabase = 1
             dynamic cache = wb.PivotCaches().Create(1, sws.Range[srcAddr]);
             var name = "Pivot" + (DateTime.UtcNow.Ticks % 1000000);
             dynamic pt = cache.CreatePivotTable(dws.Range[dstAddr], name);
-            // xlRowField = 1, xlColumnField = 2, xlDataField = 4, xlSum = -4157
-            pt.PivotFields(rowField).Orientation = 1;
-            if (!string.IsNullOrWhiteSpace(colField)) pt.PivotFields(colField).Orientation = 2;
-            dynamic data = pt.PivotFields(valueField);
-            data.Orientation = 4;
-            data.Function = -4157;
+            try
+            {
+                // xlRowField = 1, xlColumnField = 2, xlDataField = 4, xlSum = -4157
+                pt.PivotFields(rowField).Orientation = 1;
+                if (!string.IsNullOrWhiteSpace(colField)) pt.PivotFields(colField).Orientation = 2;
+                dynamic data = pt.PivotFields(valueField);
+                data.Orientation = 4;
+                data.Function = -4157;
+            }
+            catch
+            {
+                // A pivot that could not be finished must not stay half built.
+                try { pt.TableRange2.Clear(); } catch { }
+                throw;
+            }
             var across = string.IsNullOrWhiteSpace(colField) ? "" : $" x {colField}";
             return Ok($"pivot {name} at {dstSheet}!{dstAddr}: sum of {valueField} by {rowField}{across}");
         }
@@ -2092,14 +2118,38 @@ namespace Syn.Sidecar
             dynamic wb = wbO;
             var parts = new List<string>();
             int n = wb.Worksheets.Count;
+            // Slicers per sheet. A summary that said only how many charts a sheet
+            // held let a dashboard be described as having a slicer that was not
+            // there: the call that added it had said "done", and nothing a
+            // later read showed told otherwise. Pivots and slicers are listed
+            // too, so what the workbook holds can be checked against what was said.
+            var slicersOn = new Dictionary<string, int>();
+            try
+            {
+                int caches = wb.SlicerCaches.Count;
+                for (var a = 1; a <= caches; a++)
+                {
+                    dynamic cache = wb.SlicerCaches[a];
+                    int ns = cache.Slicers.Count;
+                    for (var b = 1; b <= ns; b++)
+                        try { var on = (string)cache.Slicers[b].Shape.Parent.Name; slicersOn[on] = slicersOn.GetValueOrDefault(on) + 1; } catch { }
+                }
+            }
+            catch { }
             for (var i = 1; i <= n; i++)
             {
                 dynamic ws = wb.Worksheets[i];
                 string used = "empty";
                 try { used = ws.UsedRange.Address(false, false); } catch { }
-                int charts = 0;
+                int charts = 0, pivots = 0;
                 try { charts = ws.ChartObjects().Count; } catch { }
-                parts.Add($"{SheetRef((string)ws.Name)} {used}" + (charts > 0 ? $" ({charts} chart(s))" : "") + ((int)ws.Visible != -1 ? " (hidden)" : ""));
+                try { pivots = ws.PivotTables().Count; } catch { }
+                var slicers = slicersOn.GetValueOrDefault((string)ws.Name);
+                var things = new List<string>();
+                if (charts > 0) things.Add($"{charts} chart(s)");
+                if (pivots > 0) things.Add($"{pivots} pivot table(s)");
+                if (slicers > 0) things.Add($"{slicers} slicer(s)");
+                parts.Add($"{SheetRef((string)ws.Name)} {used}" + (things.Count > 0 ? $" ({string.Join(", ", things)})" : "") + ((int)ws.Visible != -1 ? " (hidden)" : ""));
             }
             return $"{(string)wb.Name}: {n} sheet(s): {string.Join("; ", parts)}";
         }

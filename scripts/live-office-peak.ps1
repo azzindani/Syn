@@ -87,10 +87,11 @@ $null = Invoke-Rpc 'initialize' @{ protocolVersion = '2025-11-25'; capabilities 
 $script:results = New-Object System.Collections.ArrayList
 
 # One call, one line of report. -Expect is a regex the reply must match;
-# -Fails means the call is meant to be refused.
-function Step([string]$label, [string]$tool, [hashtable]$arguments, [string]$Expect = '', [switch]$Fails) {
+# -Fails means the call is meant to be refused; -Under is the seconds it may take.
+function Step([string]$label, [string]$tool, [hashtable]$arguments, [string]$Expect = '', [switch]$Fails, [double]$Under = 0) {
     $text = ''
     $isError = $true
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     try {
         $r = Invoke-Rpc 'tools/call' @{ name = $tool; arguments = $arguments }
         if ($r.result) {
@@ -102,7 +103,8 @@ function Step([string]$label, [string]$tool, [hashtable]$arguments, [string]$Exp
     } catch {
         $text = "script error: $($_.Exception.Message)"
     }
-    $ok = ($isError -eq [bool]$Fails) -and ($Expect -eq '' -or $text -match $Expect)
+    $ok = ($isError -eq [bool]$Fails) -and ($Expect -eq '' -or $text -match $Expect) -and ($Under -le 0 -or $clock.Elapsed.TotalSeconds -le $Under)
+    if ($Under -gt 0) { $text = ('[{0:N1} s] ' -f $clock.Elapsed.TotalSeconds) + $text }
     $flat = ($text -replace '\s+', ' ').Trim()
     if ($flat.Length -gt 170) { $flat = $flat.Substring(0, 170) + '...' }
     $tag = if ($ok) { 'PASS' } else { 'FAIL' }
@@ -148,6 +150,15 @@ Step 'copy from a workbook that is not open' 'struct' @{ handle = $x; verb = 'co
 Step 'a write over data says so' 'write' @{ handle = $x; selector = 'Copy!H2:H2'; values = 'x' } -Expect 'WARNING: this replaced 1 cell' | Out-Null
 Step 'a read that stops short says where the data ends' 'read' @{ handle = $x; selector = 'Copy!A1:C2' } -Expect 'not all of it' | Out-Null
 Step 'a delete says what it held' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!J:J' } -Expect 'it held [0-9,]+ cell' | Out-Null
+# An undo of a delete read and put back one row's size at a time: 110 s for 4,846
+# rows on a sheet of 121,000, enough for the watchdog to give up on it.
+Step 'a column of 120,000 formulas' 'write' @{ handle = $x; selector = 'Copy!R1:R120000'; values = '=ROW()' } -Expect 'filled' -Under 60 | Out-Null
+Step '  delete 4,846 rows of it' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!100000:104845' } -Expect 'it held' -Under 20 | Out-Null
+Step '  its undo is quick, whatever the sheet holds' 'undo' @{ handle = $x } -Expect 'undid delete' -Under 20 | Out-Null
+Step '  the cells came back' 'read' @{ handle = $x; selector = 'Copy!R100000:R100001' } -Expect '= 100000;100001' | Out-Null
+Step '  and the column goes again' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!R:R' } -Expect 'it held' | Out-Null
+Step '  undone' 'undo' @{ handle = $x } -Expect 'undid delete' -Under 20 | Out-Null
+Step '  clear it for good' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!R:R' } | Out-Null
 # Formulas into the values they show, in place: how a computed column becomes the
 # column. A model once spent 100 steps without this.
 Step 'fill a formula' 'write' @{ handle = $x; selector = 'Copy!N1:N3'; values = '=ROW()*2' } -Expect 'filled' | Out-Null
@@ -168,10 +179,10 @@ Step '  Again is back, table and all' 'read' @{ handle = $x; selector = 'Again!B
 Step 'delete Again for good' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'delete' } | Out-Null
 Step 'drop-down on D2:D5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!D2:D5'; rule = 'list=Yes,No,Maybe' } | Out-Null
 Step 'whole numbers 1..10 on E2:E5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!E2:E5'; rule = 'whole=1..10' } | Out-Null
-Step 'choices for a drop-down, written into cells' 'write' @{ handle = $x; selector = 'Copy!Q1:Q3'; values = 'North;South;East' } | Out-Null
-Step 'a drop-down fed by cells says how many choices it resolves to' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F2:F5'; rule = 'list==Copy!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
-Step '  the same range without its "=" is still a reference, not a one-choice list' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F6:F7'; rule = 'list=Copy!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
-Step '  cells with nothing in them give no choices: refused, with the way out' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F8:F9'; rule = 'list==Copy!$Z$1:$Z$3' } -Fails -Expect 'gives no choices.*list==Sheet!' | Out-Null
+Step 'choices for a drop-down, written into cells' 'write' @{ handle = $x; selector = 'Copied!Q1:Q3'; values = 'North;South;East' } | Out-Null
+Step 'a drop-down fed by cells says how many choices it resolves to' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F2:F5'; rule = 'list==Copied!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
+Step '  the same range without its "=" is still a reference, not a one-choice list' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F6:F7'; rule = 'list=Copied!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
+Step '  cells with nothing in them give no choices: refused, with the way out' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F8:F9'; rule = 'list==Copied!$Z$1:$Z$3' } -Fails -Expect 'gives no choices.*list==Sheet!' | Out-Null
 Step '  a name that does not exist is refused, with the way out' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F8:F9'; rule = 'list==NoSuchName' } -Fails -Expect 'list==Sheet!' | Out-Null
 Step 'a two-line note on A1' 'struct' @{ handle = $x; verb = 'comment'; selector = 'Sheet1!A1'; text = "first line`nsecond line" } | Out-Null
 Step 'a link on A8' 'struct' @{ handle = $x; verb = 'link'; selector = 'Sheet1!A8'; text = 'https://example.com'; title = 'Example' } | Out-Null
@@ -192,6 +203,8 @@ Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb =
 Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region' | Out-Null
 Step '  the same field again is refused in words' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!L34' } -Fails -Expect 'already has a slicer on Region' | Out-Null
 Step 'a second pivot' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A30' } -Expect 'sum of Growth by Region' | Out-Null
+Step '  a pivot with a misspelt header is refused, naming the headers, and leaves nothing behind' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Regoin'; values = 'Growth'; at = 'Copied!A40' } -Fails -Expect 'no column headed Regoin.*headers are Region' | Out-Null
+Step '  the summary lists what each sheet holds, pivots and slicers too' 'export' @{ handle = $x; format = 'summary' } -Expect 'pivot table\(s\), \d slicer\(s\)' | Out-Null
 Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '2 pivot tables \(Pivot\d+, Pivot\d+\)' | Out-Null
 Step 'sort a pivot by its totals' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Grand Total'; rule = 'desc' } -Expect 'by its totals' | Out-Null
 Step '  and by its row labels' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Region'; rule = 'asc' } -Expect 'by its row labels' | Out-Null

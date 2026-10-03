@@ -431,7 +431,12 @@ EXPORT
 writes EVERY chart in the workbook to disk as <stem>-<sheet>-<n>.png, which
 is how a chart becomes a picture in a document or on a slide. "csv" writes
 one sheet (`sheet`), "pdf" the workbook as printed, "xlsx" a copy, and
-"summary" (no path) lists the sheets and what each holds.
+"summary" (no path) lists the sheets and what each holds: the used range, and
+how many charts, pivot tables and slicers are on each. Read it before you tell
+the person something is on a sheet: a call that said "done" does not prove the
+object is still there, and the summary does. Duplicate charts on one sheet, a
+slicer that is not on the sheet you named, and a pivot you did not build all
+show up in it.
 
 HEADERS AND PAGE NUMBERS
 
@@ -886,6 +891,8 @@ mod tests {
         assert!(excel.contains("TO CHANGE A CHART, DRAW IT AGAIN ON THE SAME RANGE"));
         // A pivot could not be sorted, so a run rebuilt it as a grid of SUMIFS.
         assert!(excel.contains("TO SORT A PIVOT use `sort` on its range"));
+        // A dashboard was described as holding a slicer the workbook did not hold.
+        assert!(excel.contains("how many charts, pivot tables and slicers are on each"));
         // Opening the workbook before closing the CSV keeps Excel's window from
         // standing empty for the length of the load.
         assert!(excel.contains("open the workbook FIRST and then close the CSV"));

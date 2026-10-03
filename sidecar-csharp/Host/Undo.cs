@@ -556,6 +556,12 @@ namespace Syn.Sidecar
             public Dictionary<int, double> Heights = new();
             public Dictionary<int, bool> RowsHidden = new();
             public Dictionary<int, bool> ColsHidden = new();
+            // The rows and columns the sizes above were taken from, and the one
+            // value that stands for all of them when they are alike: one call to
+            // read and one to put back, instead of one per row.
+            public int RowFirst, RowCount, ColFirst, ColCount;
+            public double? RowHeightAll, ColWidthAll;
+            public bool? RowsHiddenAll, ColsHiddenAll;
         }
 
         /// <summary>What a workbook holds that a call can add or take away.</summary>
@@ -668,20 +674,95 @@ namespace Syn.Sidecar
                 int c0 = rng.Column, nc = rng.Columns.Count, r0 = rng.Row, nr = rng.Rows.Count;
                 // A whole column has no row heights worth keeping, a whole
                 // row no column widths; either would be thousands of calls.
-                if (nc < (int)ws.Columns.Count)
-                    for (var c = c0; c < c0 + Math.Min(nc, 256); c++)
-                    {
-                        snap.Widths[c] = (double)ws.Columns[c].ColumnWidth;
-                        snap.ColsHidden[c] = (bool)ws.Columns[c].Hidden;
-                    }
-                if (nr < (int)ws.Rows.Count)
-                    for (var r = r0; r < r0 + Math.Min(nr, 2000); r++)
-                    {
-                        snap.Heights[r] = (double)ws.Rows[r].RowHeight;
-                        snap.RowsHidden[r] = (bool)ws.Rows[r].Hidden;
-                    }
+                if (nc < (int)ws.Columns.Count) SnapAxis(ws, rng.EntireColumn, false, c0, nc, 256, snap);
+                if (nr < (int)ws.Rows.Count) SnapAxis(ws, rng.EntireRow, true, r0, nr, 2000, snap);
             }
             return snap;
+        }
+
+        /// <summary>The heights (rows) or widths (columns) and hidden flags of a
+        /// block. When the block is alike all through, which is nearly always,
+        /// one value and one call say it; only a mixed block is read one row or
+        /// column at a time, keeping what differs from the sheet's standard.
+        /// Reading and putting back 2,000 rows' sizes one call each took 110 s
+        /// inside an undo of a 4,846-row delete on a sheet of 121,000 rows.</summary>
+        private static void SnapAxis(dynamic ws, dynamic block, bool rows, int first, int count, int limit, RangeSnap snap)
+        {
+            object size = rows ? block.RowHeight : block.ColumnWidth;
+            // Hidden says True only when every row is hidden and False for a
+            // block that is only partly hidden, so False proves nothing: a block
+            // is called visible all through only when its visible cells number as
+            // many as it has rows (or columns).
+            bool? hiddenAll = null;
+            if (block.Hidden is bool allHidden && allHidden) hiddenAll = true;
+            else
+            {
+                try
+                {
+                    dynamic line = rows ? block.Columns[1] : block.Rows[1];
+                    long visible = (long)line.SpecialCells(12).Count; // xlCellTypeVisible
+                    long all = rows ? (long)block.Rows.Count : (long)block.Columns.Count;
+                    if (visible == all) hiddenAll = false;
+                }
+                catch (COMException) { }
+            }
+            // A block alike all through is kept whole, however long; a mixed one
+            // only as far as it can be read and put back one by one.
+            if (!(size is double) || hiddenAll == null) count = Math.Min(count, limit);
+            if (rows) { snap.RowFirst = first; snap.RowCount = count; } else { snap.ColFirst = first; snap.ColCount = count; }
+            if (size is double d)
+            {
+                if (rows) snap.RowHeightAll = d; else snap.ColWidthAll = d;
+            }
+            else
+            {
+                double std = rows ? (double)ws.StandardHeight : (double)ws.StandardWidth;
+                for (var i = first; i < first + count; i++)
+                {
+                    var v = rows ? (double)ws.Rows[i].RowHeight : (double)ws.Columns[i].ColumnWidth;
+                    if (Math.Abs(v - std) > 0.01) (rows ? snap.Heights : snap.Widths)[i] = v;
+                }
+            }
+            if (hiddenAll is bool b)
+            {
+                if (rows) snap.RowsHiddenAll = b; else snap.ColsHiddenAll = b;
+            }
+            else
+            {
+                for (var i = first; i < first + count; i++)
+                    if ((bool)(rows ? ws.Rows[i].Hidden : ws.Columns[i].Hidden)) (rows ? snap.RowsHidden : snap.ColsHidden)[i] = true;
+            }
+        }
+
+        private static void RestoreAxis(dynamic ws, bool rows, RangeSnap snap)
+        {
+            var first = rows ? snap.RowFirst : snap.ColFirst;
+            var count = rows ? snap.RowCount : snap.ColCount;
+            if (count <= 0) return;
+            // EntireRow, not the bare "5:9" range: Excel refuses to set Hidden on
+            // that one ("Unable to set the Hidden property of the Range class").
+            dynamic block = rows
+                ? ws.Range[$"{first}:{first + count - 1}"].EntireRow
+                : ws.Range[ws.Cells[1, first], ws.Cells[1, first + count - 1]].EntireColumn;
+            var all = rows ? snap.RowHeightAll : snap.ColWidthAll;
+            if (all is double d)
+            {
+                if (rows) block.RowHeight = d; else block.ColumnWidth = d;
+            }
+            else
+            {
+                if (rows) block.RowHeight = (double)ws.StandardHeight; else block.ColumnWidth = (double)ws.StandardWidth;
+                foreach (var (i, v) in rows ? snap.Heights : snap.Widths)
+                    if (rows) ws.Rows[i].RowHeight = v; else ws.Columns[i].ColumnWidth = v;
+            }
+            var hidAll = rows ? snap.RowsHiddenAll : snap.ColsHiddenAll;
+            if (hidAll is bool h) block.Hidden = h;
+            else
+            {
+                block.Hidden = false;
+                foreach (var (i, _) in rows ? snap.RowsHidden : snap.ColsHidden)
+                    if (rows) ws.Rows[i].Hidden = true; else ws.Columns[i].Hidden = true;
+            }
         }
 
         private static void RestoreRange(object appO, object wbO, RangeSnap snap)
@@ -702,10 +783,8 @@ namespace Syn.Sidecar
                 try { rng.Formula = snap.Formulas; }
                 catch (COMException) { /* merged cells take their values from the copy */ }
             }
-            foreach (var (c, w) in snap.Widths) ws.Columns[c].ColumnWidth = w;
-            foreach (var (c, h) in snap.ColsHidden) ws.Columns[c].Hidden = h;
-            foreach (var (r, h) in snap.Heights) ws.Rows[r].RowHeight = h;
-            foreach (var (r, h) in snap.RowsHidden) ws.Rows[r].Hidden = h;
+            RestoreAxis(ws, false, snap);
+            RestoreAxis(ws, true, snap);
         }
 
         private static void DropScratchSheet(object appO, string name)

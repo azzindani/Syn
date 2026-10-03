@@ -240,6 +240,24 @@ namespace Syn.Sidecar
             return Ok($"copied {fromNote}{SheetRef(ss)}!{sa} to {SheetRef(ds)}!{da} ({src.Rows.Count}x{src.Columns.Count}: values, formulas and formats; empty cells stay empty)");
         }
 
+        /// Formulas in a range become the values they show. A computed column
+        /// (a date built from text, a cleaned number) had no way to become the
+        /// column itself: `copy` carries formulas along, so a model spent a
+        /// hundred steps on helper columns, circular references and
+        /// delete-and-reinsert tricks for what is one paste-values in Excel.
+        private static string ExcelValues(dynamic wb, string handle, string selector)
+        {
+            Snapshot(handle);
+            var t = Target((object)wb, selector, "values");
+            // Only what is a formula changes, and the number format stays with
+            // the cell, so a date built by DATE() is still a date afterwards.
+            double formulas = 0;
+            try { formulas = t.ws.Application.WorksheetFunction.CountA(t.rng.SpecialCells(-4123)); } // xlCellTypeFormulas
+            catch (COMException) { return Ok($"nothing to do: {SheetRef(t.sheet)}!{t.addr} holds no formulas"); }
+            t.rng.Value2 = t.rng.Value2;
+            return Ok($"converted {((long)formulas).ToString("N0", CultureInfo.InvariantCulture)} formula(s) in {SheetRef(t.sheet)}!{t.addr} to the values they showed; formats are unchanged");
+        }
+
         private static string ExcelValidate(dynamic wb, string handle, string selector, string rule)
         {
             Snapshot(handle);

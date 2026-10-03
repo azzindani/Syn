@@ -602,7 +602,7 @@ namespace Syn.Sidecar
                     return (sheet, (string)target.Resize(rows, cols).Address(false, false));
                 }
                 case "format": case "conditional": case "validate": case "comment": case "link":
-                case "sort": case "dedupe": case "filter": case "table":
+                case "sort": case "dedupe": case "filter": case "table": case "values":
                 {
                     var sel = method == "table" ? JsonField(args, "source") : selector;
                     var (sheet, addr) = SplitRange(sel);

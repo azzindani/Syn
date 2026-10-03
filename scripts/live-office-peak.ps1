@@ -148,6 +148,12 @@ Step 'copy from a workbook that is not open' 'struct' @{ handle = $x; verb = 'co
 Step 'a write over data says so' 'write' @{ handle = $x; selector = 'Copy!H2:H2'; values = 'x' } -Expect 'WARNING: this replaced 1 cell' | Out-Null
 Step 'a read that stops short says where the data ends' 'read' @{ handle = $x; selector = 'Copy!A1:C2' } -Expect 'not all of it' | Out-Null
 Step 'a delete says what it held' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!J:J' } -Expect 'it held [0-9,]+ cell' | Out-Null
+# Formulas into the values they show, in place: how a computed column becomes the
+# column. A model once spent 100 steps without this.
+Step 'fill a formula' 'write' @{ handle = $x; selector = 'Copy!N1:N3'; values = '=ROW()*2' } -Expect 'filled' | Out-Null
+Step 'values turns formulas into values' 'struct' @{ handle = $x; verb = 'values'; selector = 'Copy!N1:N3' } -Expect 'converted 3 formula' | Out-Null
+Step '  and has nothing left to do' 'struct' @{ handle = $x; verb = 'values'; selector = 'Copy!N1:N3' } -Expect 'nothing to do' | Out-Null
+Step '  the values are what the formulas showed' 'read' @{ handle = $x; selector = 'Copy!N1:N3' } -Expect '2;4;6' | Out-Null
 Step '  it arrived' 'read' @{ handle = $x; selector = 'Copy!B2:D2' } -Expect 'Region\|Q3 Revenue\|Growth' | Out-Null
 Step 'rename Copy to Copied' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copy'; action = 'rename'; name = 'Copied' } | Out-Null
 Step 'copy the sheet as Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copied'; action = 'copy'; name = 'Again' } | Out-Null

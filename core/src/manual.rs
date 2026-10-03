@@ -338,6 +338,12 @@ its header, not its letter:
   struct {verb:"sort", selector:"data!A1:H500", name:"Units", rule:"desc"}
   struct {verb:"filter", selector:"data!A1:H500", name:"Region", rule:"North"}
   struct {verb:"dedupe", selector:"data!A1:H500", name:"Region|Month"}
+  struct {verb:"values", selector:"data!J2:J9000"}
+
+`values` turns the formulas in a range into the values they show, in place, and
+keeps their formats (dates stay dates). It is how a computed column is made
+permanent: put a formula in a helper column, run `values` over it, then copy it
+over the column it replaces or delete the old one.
 
 A filter hides rows and leaves them in place; rule ">100" or "<>0" work,
 and an empty rule clears it. Dedupe DELETES the later copies; with no

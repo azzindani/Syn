@@ -1348,6 +1348,7 @@ namespace Syn.Sidecar
                     "sort" => ExcelSort(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
                     "filter" => ExcelFilter(wb, handle, selector, JsonField(args, "name"), JsonField(args, "rule")),
                     "dedupe" => ExcelDedupe(wb, handle, selector, JsonField(args, "name")),
+                    "values" => ExcelValues(wb, handle, selector),
                     "copy" => ExcelCopy(wb, handle, JsonField(args, "source"), JsonField(args, "at")),
                     "validate" => ExcelValidate(wb, handle, selector, JsonField(args, "rule")),
                     "sheet" => ExcelSheet(wb, handle, selector, JsonField(args, "action"), JsonField(args, "name")),

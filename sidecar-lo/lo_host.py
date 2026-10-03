@@ -652,6 +652,23 @@ class Calc:
         uno.invoke(r, "sort", (tuple(desc),))
         return "sorted %s!%s by %s, %s first" % (sheet, a, header, "smallest" if asc else "largest")
 
+    def values(self, selector):
+        sheet, a = split_range(selector)
+        if not a:
+            raise Refused("values needs a range like data!J2:J9000")
+        rng = self.rng(self.sheet(sheet), a)
+        # getDataArray returns each cell's shown value (a number, or text), and
+        # writing it back replaces the formula with it; number formats stay.
+        n = 0
+        for row in rng.getFormulaArray():
+            for f in row:
+                if isinstance(f, str) and f.startswith("="):
+                    n += 1
+        if n == 0:
+            return "nothing to do: %s!%s holds no formulas" % (sheet, a)
+        rng.setDataArray(rng.getDataArray())
+        return "converted %d formula(s) in %s!%s to the values they showed; formats are unchanged" % (n, sheet, a)
+
     def copy(self, source, at):
         if source.lstrip().startswith("["):
             raise Refused("copying from another workbook is not available here: open the data in this workbook instead")
@@ -1435,6 +1452,7 @@ def handle_line(office, line):
                 "delete": lambda: c.delete(selector),
                 "sort": lambda: c.sort(selector, args.get("name", ""), args.get("rule", "")),
                 "copy": lambda: c.copy(args.get("source", ""), args.get("at", "")),
+                "values": lambda: c.values(selector),
                 "sheet": lambda: c.sheet_op(selector, args.get("action", ""), args.get("name", "")),
                 "comment": lambda: c.comment(selector, payload),
                 "find": lambda: c.find(selector, args.get("text", "")),

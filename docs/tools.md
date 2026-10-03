@@ -123,6 +123,7 @@ application is asked, with the list of verbs that app does have.
 | `insert` | `selector` | Rows `data!5:7`, columns `data!C:E`, or cells (pushed down). |
 | `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. Refused when `selector` covers only some of a table's columns, naming the range to use: those columns alone would come out of line with the rest of each row. |
 | `filter` | `selector`, `name` (header), `rule` | What to keep: `North`, `>100`, `<>0`; empty clears. |
+| `values` | `selector` | Formulas in the range become the values they show, in place; formats stay (a date stays a date). Excel and LibreOffice. |
 | `dedupe` | `selector`, `name` | Headers that must all match, joined by `|`; every column when empty. |
 | `copy` | `source`, `at` | Values, formulas and formats to the top-left cell `at`. `source` can start with `[Book.xlsx]` to read from another open workbook (Excel only); empty cells stay empty. |
 | `validate` | `selector`, `rule` | `list=Yes,No,Maybe`, `whole=1..10`, `decimal=0..1`. |

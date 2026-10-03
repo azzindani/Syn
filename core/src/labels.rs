@@ -85,6 +85,7 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("filter", ("Filter", "Filtering", "Filtered", "a range")),
     ("dedupe", ("Remove", "Removing", "Removed", "duplicate rows")),
     ("copy", ("Copy", "Copying", "Copied", "a range")),
+    ("values", ("Convert", "Converting", "Converted", "formulas to values")),
     ("validate", ("Add", "Adding", "Added", "a validation rule")),
     ("sheet", ("Change", "Changing", "Changed", "a worksheet")),
     ("comment", ("Add", "Adding", "Added", "a comment")),

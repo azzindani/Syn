@@ -1907,20 +1907,18 @@ namespace Syn.Sidecar
                     $"chart does not know {kind}: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar"),
             };
             dynamic sws = Sheet(wb, srcSheet);
-            dynamic dws = Sheet(wb, dstSheet);
-            dynamic box = dws.Range[dstAddr];
             // A single cell only anchors the top-left, and Excel's default
             // 440x260 then spills over whatever is placed at the next anchor
             // down or across: a five-chart dashboard came out with eight
             // overlapping pairs. A multi-cell anchor is the whole rectangle,
             // so charts laid out in non-overlapping ranges cannot overlap.
-            double w = 440.0, h = 260.0;
-            if (dstAddr.Contains(':'))
-            {
-                w = (double)box.Width;
-                h = (double)box.Height;
-            }
-            dynamic shape = dws.Shapes.AddChart2(-1, type, box.Left, box.Top, w, h);
+            var (dws, left, top, w, h) = ChartBox((object)wb, at);
+            // A chart already on those cells is the one to change, not to cover
+            // (ChartReplace.cs).
+            var old = FindChartToReplace((object)dws, left, top, w, h);
+            if (old != null)
+                return RedrawChart((object)old, (object)sws, kind, type, srcSheet, srcAddr, title, style, dstSheet, dstAddr, left, top, w, h);
+            dynamic shape = dws.Shapes.AddChart2(-1, type, left, top, w, h);
             try
             {
                 dynamic chart = shape.Chart;

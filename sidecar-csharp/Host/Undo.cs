@@ -771,10 +771,14 @@ namespace Syn.Sidecar
                 });
             }
 
+            // A sort of a pivot changes the pivot's sort order, not cells that
+            // could be pasted back over it (PivotSort.cs).
+            var pivotSortWas = CapturePivotSort((object)wb, method, selector);
+
             // Cells the call changes, copied first.
             RangeSnap? snap = null;
             var style = method == "format" ? JsonField(line, "payload").ToLowerInvariant() : "";
-            var cells = CellsOf((object)wb, method, line, selector);
+            (string sheet, string addr)? cells = pivotSortWas != null ? null : CellsOf((object)wb, method, line, selector);
             if (cells is { } c) snap = SnapRange(appO, (object)wb, c.sheet, c.addr, method == "format");
             if (snap != null) e.ScratchSheets.Add(snap.ScratchSheet);
 
@@ -840,6 +844,19 @@ namespace Syn.Sidecar
             bool? filterWas = null;
             if (method == "filter" && cells is { } fc)
                 filterWas = (bool)Sheet(wb, fc.sheet).AutoFilterMode;
+
+            // A chart the call redraws in place (ChartReplace.cs), as it was.
+            ChartState? chartWas = null;
+            if (method == "chart")
+            {
+                try
+                {
+                    var (cws, cl, ct, cw, ch) = ChartBox((object)wb, JsonField(args, "at"));
+                    var hit = FindChartToReplace((object)cws, cl, ct, cw, ch);
+                    if (hit != null) chartWas = CaptureChart((object)hit, (string)cws.Name);
+                }
+                catch (Exception) { }
+            }
 
             var before = Take((object)wb);
 
@@ -923,6 +940,8 @@ namespace Syn.Sidecar
                         }
                         if (filterWas == false && cells is { } f2) Sheet(book, f2.sheet).AutoFilterMode = false;
                         if (snap != null) RestoreRange(appO, (object)book, snap);
+                        if (chartWas != null) RestoreChart(book, chartWas);
+                        if (pivotSortWas != null) RestorePivotSort(book, pivotSortWas);
                         if (page != null)
                             foreach (var (sheetName2, props) in page)
                             {

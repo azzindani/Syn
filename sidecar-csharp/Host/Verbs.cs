@@ -133,6 +133,20 @@ namespace Syn.Sidecar
         private static string ExcelSort(dynamic wb, string handle, string selector, string header, string order)
         {
             var t = Target((object)wb, selector, "sort");
+            // A pivot is sorted through its row field, not with Range.Sort
+            // (PivotSort.cs).
+            dynamic? pivot = PivotAt((object)t.rng);
+            if (pivot != null)
+            {
+                var pivotDesc = (order ?? "").Trim().ToLowerInvariant() switch
+                {
+                    "" or "asc" or "ascending" => false,
+                    "desc" or "descending" => true,
+                    _ => throw new InvalidOperationException($"sort: rule is asc or desc, not {order}"),
+                };
+                Snapshot(handle);
+                return SortPivot((object)pivot, (string)t.sheet, header, pivotDesc);
+            }
             // Sorting some columns of a table moves only those: every row
             // then holds one booking's A:V beside another's W:AG. A live run
             // sorted W1:AG119391 of a table that began at A and every number
@@ -273,21 +287,53 @@ namespace Syn.Sidecar
             {
                 case "list":
                 {
-                    // A range reference passes through; a written list is joined
-                    // with the list separator, which is a comma in English Excel
-                    // and a semicolon in much of the world. Try one, then the
-                    // other, rather than guess the machine's locale.
-                    if (val.StartsWith("="))
+                    // The choices come from cells (a range, a defined name that
+                    // points at them) or are written out. A reference written
+                    // WITHOUT its "=" used to be taken for a written list of one
+                    // choice -- the address itself -- and said "done": a dashboard
+                    // went out whose drop-down offered a single entry named after
+                    // the range, and the answer claimed it listed 48 countries.
+                    // Here a reference is recognised either way, and the reply says
+                    // how many choices the rule really resolves to.
+                    var source = val.StartsWith("=") ? "=" + val.TrimStart('=', ' ').Trim()
+                        : LooksLikeListSource(wb, val) ? "=" + val : null;
+                    if (source != null)
                     {
-                        v.Add(3, alertStop, between, val);
+                        try { v.Add(3, alertStop, between, source); }
+                        catch (COMException ex)
+                        {
+                            throw new InvalidOperationException(
+                                $"validate: Excel did not accept {source} as the choices of a drop-down ({ex.Message.Trim()}). " +
+                                "Give the cells that hold the choices, list==Sheet!$A$2:$A$49, or the name of a range that points at them, list==Name " +
+                                "(a name that is missing, or points at #REF!, is refused); written choices are list=Yes,No,Maybe");
+                        }
+                        v.InCellDropdown = true;
+                        // Cast: a dynamic argument would make the whole call dynamic,
+                        // and a dynamic result cannot be deconstructed.
+                        var (count, first) = ListChoices((object)t.ws, source);
+                        if (count == 0)
+                        {
+                            v.Delete();
+                            throw new InvalidOperationException(
+                                $"validate: {source} gives no choices: it points at empty cells or at something that is not a range. " +
+                                "Point it at the cells that hold the choices, list==Sheet!$A$2:$A$49");
+                        }
+                        v.IgnoreBlank = true;
+                        return Ok($"{SheetRef(t.sheet)}!{t.addr} now offers a drop-down fed by {source.TrimStart('=')}: " +
+                                  $"{count.ToString("N0", CultureInfo.InvariantCulture)} value(s), the first \"{Trunc(first, 40)}\"");
                     }
-                    else
-                    {
-                        var items = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
-                        if (items.Length == 0) throw new InvalidOperationException("validate: list= needs its choices, like list=Yes,No");
-                        try { v.Add(3, alertStop, between, string.Join(",", items)); }
-                        catch (COMException) { v.Add(3, alertStop, between, string.Join(";", items)); }
-                    }
+                    // A written list is joined with the list separator, which is a
+                    // comma in English Excel and a semicolon in much of the world.
+                    // Try one, then the other, rather than guess the machine's locale.
+                    var items = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
+                    if (items.Length == 0) throw new InvalidOperationException("validate: list= needs its choices, like list=Yes,No");
+                    var written = string.Join(",", items);
+                    if (written.Length > 255)
+                        throw new InvalidOperationException(
+                            $"validate: written choices are limited to 255 characters and these come to {written.Length}. " +
+                            "Put the choices in cells and give the range, list==Sheet!$A$2:$A$49");
+                    try { v.Add(3, alertStop, between, written); }
+                    catch (COMException) { v.Add(3, alertStop, between, string.Join(";", items)); }
                     v.InCellDropdown = true;
                     break;
                 }
@@ -309,6 +355,39 @@ namespace Syn.Sidecar
             }
             v.IgnoreBlank = true;
             return Ok($"{SheetRef(t.sheet)}!{t.addr} now takes only {kind} {val}");
+        }
+
+        // A cell range ('Sheet'!$A$2:$A$49, A1:A5, $B$2) or the name of an existing
+        // defined name: what `list=` means as a source of choices without its "=".
+        private static readonly Regex ListRangeRef = new(
+            @"^(?:(?:'[^']+'|[^'!\s]+)!)?\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$", RegexOptions.Compiled);
+
+        private static bool LooksLikeListSource(dynamic wb, string val)
+        {
+            if (ListRangeRef.IsMatch(val)) return true;
+            if (val.Contains(',') || val.Contains(';')) return false;
+            try { var n = wb.Names.Item(val); return n != null; }
+            catch (COMException) { return false; }
+        }
+
+        /// <summary>What a list rule really resolves to: how many non-empty
+        /// cells it points at and the first of them; (0, "") when the source is
+        /// not a range or holds nothing.</summary>
+        private static (long count, string first) ListChoices(dynamic ws, string source)
+        {
+            try
+            {
+                object? r = ws.Evaluate(source.TrimStart('='));
+                if (r is null or int or double or string or bool) return (0, "");
+                dynamic rng = r;
+                double n = ws.Application.WorksheetFunction.CountA(rng);
+                if (n < 1) return (0, "");
+                var first = "";
+                int look = Math.Min((int)rng.Cells.Count, 20);
+                for (var i = 1; i <= look && first.Length == 0; i++) first = CellText(rng.Cells[i]);
+                return ((long)n, first);
+            }
+            catch (Exception) { return (0, ""); }
         }
 
         private static string ExcelSheet(dynamic wb, string handle, string selector, string action, string name)

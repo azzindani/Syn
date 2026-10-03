@@ -248,11 +248,13 @@ The rows never pass through you. Reading a CSV to write it back cell by
 cell is the slowest way there is to do this, and it is capped anyway.
 
 The export writes the workbook; the .csv stays open. To go on working in
-the workbook, close the CSV and open the workbook, or the person sees both
-open side by side:
+the workbook, open the workbook FIRST and then close the CSV. The other way
+round leaves Excel's window empty, with no file in its title, while the
+workbook loads, and skipping the close leaves the person with both open side
+by side:
 
-  struct {handle:"excel:sales.csv:workbook", verb:"close"}
   open   {app:"excel", path:"C:\\data\\sales.xlsx"}
+  struct {handle:"excel:sales.csv:workbook", verb:"close"}
 
 SHEETS MUST EXIST FIRST
 
@@ -280,6 +282,12 @@ It groups a column's values exactly as they are and CANNOT group dates into
 months or years — if you want a monthly view, pivot on a column that already
 holds the month, or total with SUMIFS. One value field per pivot.
 
+TO SORT A PIVOT use `sort` on its range: name "Grand Total" sorts the rows by
+their totals, the row field's name sorts by the labels, and a column heading
+(a year, say) sorts by that column; rule is asc or desc. The pivot keeps the
+order when it is refreshed. Do not rebuild a pivot as a grid of formulas to get
+it sorted, and do not copy it elsewhere to sort the copy.
+
 CHART
 
 Anchor it to a RANGE and it fills exactly those cells:
@@ -289,6 +297,13 @@ Anchor it to a RANGE and it fills exactly those cells:
 
 Anchored to a single cell it keeps Excel's default size, which is how
 several charts end up overlapping. Lay out ranges that do not overlap.
+
+TO CHANGE A CHART, DRAW IT AGAIN ON THE SAME RANGE. In Excel a chart drawn
+over the cells another chart already covers (80% or more) REPLACES that chart:
+new source, kind and title, same place, and the reply says so. Never draw a
+second one on top to "update" the first: the first would stay underneath (in
+LibreOffice it does: there a chart is only ever added). `undo` puts the old
+one back. A chart that should sit beside another gets its own range.
 Kinds: line, bar, column, pie, scatter, area, doughnut, stackedColumn,
 stackedBar, lineMarkers, radar. Style keys: legend, gridlines, xTitle,
 yTitle, dataLabels.
@@ -372,8 +387,14 @@ After a rename every selector says the new name.
 
 VALIDATION, NOTES, LINKS
 
-`validate` limits what a cell accepts: rule "list=Yes,No" makes a drop-down,
-"whole=1..10" and "decimal=0..1" limit numbers. `comment` puts a note on a
+`validate` limits what a cell accepts: rule "list=Yes,No" makes a drop-down
+of written choices (a short list: no commas inside a choice, 200 characters at
+most). For a longer list put the choices in cells and point the rule at them:
+"list==Lists!$A$2:$A$49", or "list==Countries" for a defined name (`name`)
+that points at them. The reply says how many choices the drop-down really
+resolves to and the first of them: if that is not the number you expected,
+the rule is wrong, whatever else you were told. "whole=1..10" and
+"decimal=0..1" limit numbers. `comment` puts a note on a
 cell, `link` a hyperlink (`text` is the address, `title` what the cell
 shows). `picture` with a range in `selector` fills that range with an
 image.
@@ -855,6 +876,19 @@ mod tests {
         assert!(excel.contains("DATES THAT CAME IN AS TEXT"));
         assert!(excel.contains("DATEVALUE reads the text in the machine's"));
         assert!(excel.contains("compare with TRUE, not with the text"));
+        // A drop-down of 48 countries cannot be written out (the rule is capped),
+        // and a range given without its "=" was taken for one choice named after
+        // the address: a dashboard went out with a one-entry drop-down.
+        assert!(excel.contains("list==Lists!$A$2:$A$49"));
+        assert!(excel.contains("how many choices the drop-down really"));
+        // A chart cannot be edited, so a model drew a new one over the old each
+        // time it changed its mind: three charts stacked on one range.
+        assert!(excel.contains("TO CHANGE A CHART, DRAW IT AGAIN ON THE SAME RANGE"));
+        // A pivot could not be sorted, so a run rebuilt it as a grid of SUMIFS.
+        assert!(excel.contains("TO SORT A PIVOT use `sort` on its range"));
+        // Opening the workbook before closing the CSV keeps Excel's window from
+        // standing empty for the length of the load.
+        assert!(excel.contains("open the workbook FIRST and then close the CSV"));
 
         let word = lookup("word");
         assert!(word.contains("Heading 1"), "a real heading style, not bold text");

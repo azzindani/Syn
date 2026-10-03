@@ -641,7 +641,11 @@ impl Runner {
 /// watching saw two files appear for one request. Closing the CSV is allowed
 /// -- Syn opened it, and office-host marks it saved once its every sheet is
 /// in the workbook -- so the two calls that finish the job are given ready to
-/// copy. None for anything but a `.csv` document.
+/// copy, in the order that keeps Excel's window from going empty: closing the
+/// CSV first left the window blank, titled just "Excel", for as long as a
+/// 121,000-row workbook took to open (2.3 s in a scored run, over the 0.5 s a
+/// person is not meant to see). The workbook is opened first, then the CSV
+/// closed. None for anything but a `.csv` document.
 fn csv_saved_as_book(handle: &str, written: &str) -> Option<String> {
     let mut parts = handle.splitn(3, ':');
     let (app, doc) = (parts.next()?, parts.next()?);
@@ -652,7 +656,7 @@ fn csv_saved_as_book(handle: &str, written: &str) -> Option<String> {
     let close = crate::json::obj(vec![("handle", s(handle)), ("verb", s("close"))]).to_json();
     let open = crate::json::obj(vec![("app", s(app)), ("path", s(written))]).to_json();
     Some(format!(
-        "\n{doc} is still open beside it, and everything in it is in the workbook now. To go on in the workbook alone, close the CSV and open the workbook: struct{close} then open{open}"
+        "\n{doc} is still open beside it, and everything in it is in the workbook now. To go on in the workbook alone, open the workbook first and then close the CSV (closing first leaves Excel's window empty while the workbook loads): open{open} then struct{close}"
     ))
 }
 
@@ -662,15 +666,18 @@ mod tests {
     use crate::bus::{FileContent, FileKind, OpenFile};
 
     #[test]
-    fn a_csv_saved_as_a_workbook_says_how_to_close_it_and_open_the_book() {
+    fn a_csv_saved_as_a_workbook_says_to_open_the_book_before_closing_the_csv() {
         let next = csv_saved_as_book("excel:sales.csv:workbook", r"C:\data\sales.xlsx").unwrap();
         // Both calls are ones the tool parser takes as they stand.
         let call = |name: &str, tail: &str| {
             let json = &tail[..tail.find('}').unwrap() + 1];
             crate::tools::to_action(&crate::tools::ToolCall { id: "1".into(), name: name.into(), arguments: json.into() })
         };
-        let after_struct = next.split("struct").nth(1).unwrap();
-        let after_open = next.split(" then open").nth(1).unwrap();
+        // The workbook comes first: closing the only open file leaves an empty
+        // Excel window on screen until the next one has loaded.
+        let (open_part, after_struct) = next.split_once(" then struct").unwrap();
+        let after_open = open_part.rsplit_once("open").unwrap().1;
+        assert!(next.contains("closing first leaves Excel's window empty"), "{next}");
         assert!(call("struct", after_struct).is_ok(), "{next}");
         assert!(call("open", after_open).is_ok(), "{next}");
         assert!(after_struct.starts_with(r#"{"handle":"excel:sales.csv:workbook","verb":"close"}"#), "{next}");

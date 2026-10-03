@@ -168,6 +168,11 @@ Step '  Again is back, table and all' 'read' @{ handle = $x; selector = 'Again!B
 Step 'delete Again for good' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'delete' } | Out-Null
 Step 'drop-down on D2:D5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!D2:D5'; rule = 'list=Yes,No,Maybe' } | Out-Null
 Step 'whole numbers 1..10 on E2:E5' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!E2:E5'; rule = 'whole=1..10' } | Out-Null
+Step 'choices for a drop-down, written into cells' 'write' @{ handle = $x; selector = 'Copy!Q1:Q3'; values = 'North;South;East' } | Out-Null
+Step 'a drop-down fed by cells says how many choices it resolves to' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F2:F5'; rule = 'list==Copy!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
+Step '  the same range without its "=" is still a reference, not a one-choice list' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F6:F7'; rule = 'list=Copy!$Q$1:$Q$3' } -Expect '3 value\(s\), the first "North"' | Out-Null
+Step '  cells with nothing in them give no choices: refused, with the way out' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F8:F9'; rule = 'list==Copy!$Z$1:$Z$3' } -Fails -Expect 'gives no choices.*list==Sheet!' | Out-Null
+Step '  a name that does not exist is refused, with the way out' 'struct' @{ handle = $x; verb = 'validate'; selector = 'Sheet1!F8:F9'; rule = 'list==NoSuchName' } -Fails -Expect 'list==Sheet!' | Out-Null
 Step 'a two-line note on A1' 'struct' @{ handle = $x; verb = 'comment'; selector = 'Sheet1!A1'; text = "first line`nsecond line" } | Out-Null
 Step 'a link on A8' 'struct' @{ handle = $x; verb = 'link'; selector = 'Sheet1!A8'; text = 'https://example.com'; title = 'Example' } | Out-Null
 Step 'format keys: underline, valign, height' 'format' @{ handle = $x; selector = 'Sheet1!A1:C1'; style = 'underline=1;valign=center;height=24' } | Out-Null
@@ -188,6 +193,11 @@ Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; v
 Step '  the same field again is refused in words' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!L34' } -Fails -Expect 'already has a slicer on Region' | Out-Null
 Step 'a second pivot' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A30' } -Expect 'sum of Growth by Region' | Out-Null
 Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '2 pivot tables \(Pivot\d+, Pivot\d+\)' | Out-Null
+Step 'sort a pivot by its totals' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Grand Total'; rule = 'desc' } -Expect 'by its totals' | Out-Null
+Step '  and by its row labels' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Region'; rule = 'asc' } -Expect 'by its row labels' | Out-Null
+Step '  a column it does not have is refused, naming what it can sort by' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Nope'; rule = 'desc' } -Fails -Expect 'sorts its rows by its totals' | Out-Null
+Step '  undo the label sort' 'undo' @{ handle = $x } -Expect 'undid sort' | Out-Null
+Step '  undo the totals sort' 'undo' @{ handle = $x } -Expect 'undid sort' | Out-Null
 Step 'export the charts as png' 'export' @{ handle = $x; format = 'png'; path = (Join-Path $out 'peak-charts.png') } | Out-Null
 $png = Get-ChildItem $out -Filter 'peak-charts*.png' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($png) {
@@ -214,6 +224,10 @@ Step 'delete row 2, then undo' 'struct' @{ handle = $x; verb = 'delete'; selecto
 Step '  undo the delete' 'undo' @{ handle = $x } -Expect 'undid delete' | Out-Null
 Step 'a chart, then undo it' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Sheet1!A1:B5'; at = 'Copied!F34:M48'; title = 'Undo me' } | Out-Null
 Step '  undo the chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+Step 'a chart on cells nothing covers' 'struct' @{ handle = $x; verb = 'chart'; kind = 'line'; source = 'Sheet1!A1:B5'; at = 'Copied!F34:M48'; title = 'First' } -Expect 'line chart at' | Out-Null
+Step '  drawn again over it, it is redrawn, not stacked' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Sheet1!A1:C5'; at = 'Copied!F34:M48'; title = 'Second' } -Expect 'REPLACED the line chart' | Out-Null
+Step '  undo puts the first one back' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+Step '  and undo removes it' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
 Step 'addSheet Temp, then undo' 'struct' @{ handle = $x; verb = 'addSheet'; name = 'Temp' } | Out-Null
 Step '  undo the addSheet' 'undo' @{ handle = $x } -Expect 'undid addSheet' | Out-Null
 Step '  Temp is gone' 'read' @{ handle = $x; selector = 'Temp!A1' } -Fails -Expect 'no sheet named' | Out-Null

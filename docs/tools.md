@@ -121,18 +121,18 @@ application is asked, with the list of verbs that app does have.
 | `addSheet` | `name` | |
 | `sheet` | `selector` (sheet), `action`, `name` | `rename`, `delete`, `copy`, `move`, `hide`, `show`. `move` takes `name` as where it goes: `first`, `last`, `before:Other` or `after:Other`; the reply lists the order now. |
 | `insert` | `selector` | Rows `data!5:7`, columns `data!C:E`, or cells (pushed down). |
-| `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. Refused when `selector` covers only some of a table's columns, naming the range to use: those columns alone would come out of line with the rest of each row. |
+| `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. Refused when `selector` covers only some of a table's columns, naming the range to use: those columns alone would come out of line with the rest of each row. On a range inside a PivotTable it sorts the pivot's rows through its row field: `name` is `Grand Total` (the totals), the row field's name (the labels) or a column heading such as a year; a heading the pivot lacks is refused with the ones it has; `undo` restores the old order. Excel only. |
 | `filter` | `selector`, `name` (header), `rule` | What to keep: `North`, `>100`, `<>0`; empty clears. |
 | `values` | `selector` | Formulas in the range become the values they show, in place; formats stay (a date stays a date). Excel and LibreOffice. |
 | `dedupe` | `selector`, `name` | Headers that must all match, joined by `|`; every column when empty. |
 | `copy` | `source`, `at` | Values, formulas and formats to the top-left cell `at`. `source` can start with `[Book.xlsx]` to read from another open workbook (Excel only); empty cells stay empty. |
-| `validate` | `selector`, `rule` | `list=Yes,No,Maybe`, `whole=1..10`, `decimal=0..1`. |
+| `validate` | `selector`, `rule` | `list=Yes,No,Maybe` (written choices, short), `list==Sheet!$A$2:$A$49` (choices in cells) or `list==Name` (a defined name that points at them), `whole=1..10`, `decimal=0..1`. A reference given without its `=` is read as a reference too. The reply says how many choices a list resolves to; a rule that resolves to none is refused. Excel only; LibreOffice refuses `validate`. |
 | `table` | `source`, `name` | A real Excel Table. |
 | `name` | `name`, `at` | A named range. |
 | `conditional` | `selector`, `rule` | `dataBar`, `colorScale`, `iconSet`, `top10`, `greaterThan=N`, `lessThan=N`. |
 | `pivot` | `source`, `rows`, `cols`, `values`, `at` | Fields are header names; the destination sheet must exist. |
 | `slicer` | `rows` (the field), `name` (the pivot; the only one when empty, or when no pivot has that name), `at` | Build the pivot first. The field is any column of the pivot's source, not only one the pivot shows. |
-| `chart` | `kind`, `source`, `at`, `title`, `style` | `kind`: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar. `at` as a range sizes the chart to it. `style`: `legend=0`, `gridlines=0`, `xTitle=…`, `yTitle=…`, `dataLabels=1`. |
+| `chart` | `kind`, `source`, `at`, `title`, `style` | `kind`: line, bar, column, pie, scatter, area, doughnut, stackedColumn, stackedBar, lineMarkers, radar. `at` as a range sizes the chart to it. `style`: `legend=0`, `gridlines=0`, `xTitle=…`, `yTitle=…`, `dataLabels=1`. Drawn over the cells an existing chart already covers (80% or more) it redraws that chart in place (new data, type and title) and the reply says so; `undo` puts the old data, type, title and size back. A chart given its own range is added as before. Excel only: LibreOffice always adds. |
 | `comment` | `selector`, `text` | A note on a cell. |
 | `link` | `selector`, `text` (address), `title` | |
 | `header` | `name` (`header`/`footer`), `text`, `selector` | Centre header or footer; every sheet when no sheet is named. |

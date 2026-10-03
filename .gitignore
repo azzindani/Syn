@@ -38,6 +38,7 @@ tests/ui/.console-url.txt
 # a fresh clone can run the capability test and the natural sessions. The EV
 # file stays zipped: the 44MB CSV extracted from it is a local copy.
 samples/electric_vehicle_population_data.csv
+samples/logistics/
 
 # Release packages: scripts/package.ps1
 dist/

@@ -1,6 +1,6 @@
 # Natural sessions
 
-Four scripted conversations, 50 messages each, written the way a person
+Five scripted conversations, 50 messages each, written the way a person
 works: one or two things per message, building on what is already there,
 with questions, second thoughts, undos and "put it back" along the way. Each
 moves from Excel to a report in Word to a deck in PowerPoint.
@@ -11,13 +11,14 @@ moves from Excel to a report in Word to a deck in PowerPoint.
 | `oil.md` | `US_Crude_Oil_Import.csv` | 483,053 rows |
 | `electricity.md` | `Global_Electricity_Production.csv` | 121,074 rows |
 | `ev.md` | `electric_vehicle_population_data.csv`, from `Electric_Vehicle_Population.zip` | 181,458 rows |
+| `logistics.md` | eleven of the fourteen CSVs in `Logistics_Operations_Database.zip`, which join on keys | 85,410 loads, 196,442 fuel purchases |
 
 The data files are real, published datasets from the Evals project
 (`Evals/dataframe/`), chosen because they are big and have the faults real
 data has: text placeholders for empty cells, codes instead of names,
 outliers, subtotals mixed in with the rows they total, a partial last year.
 They are in `samples/`. Copy the one a script needs into the chat's
-workspace folder (extract the EV file from its zip first).
+workspace folder (extract the EV file, or the logistics tables, from their zips first).
 
 The capability test (`tests/capability/`) asks for everything in one brief
 and scores the result. These do the opposite: no single message asks for

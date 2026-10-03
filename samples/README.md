@@ -11,6 +11,7 @@ faults are part of what the tests check.
 | `US_Crude_Oil_Import.csv` | 483,053 | `tests/natural/oil.md` |
 | `Global_Electricity_Production.csv` | 121,074 | `tests/natural/electricity.md` |
 | `Electric_Vehicle_Population.zip` | 181,458 | `tests/natural/ev.md` |
+| `Logistics_Operations_Database.zip` | 14 tables, 85,410 loads | `tests/natural/logistics.md` |
 
 The solar readings are City of Calgary open data, the electricity figures
 are IEA monthly statistics, the oil imports are EIA data, and the vehicle

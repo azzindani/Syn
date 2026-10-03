@@ -143,6 +143,8 @@ Step 'rename Copy to Copied' 'struct' @{ handle = $x; verb = 'sheet'; selector =
 Step 'copy the sheet as Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copied'; action = 'copy'; name = 'Again' } | Out-Null
 Step 'hide Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'hide' } | Out-Null
 Step 'show Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'show' } | Out-Null
+Step 'move Again to first' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'move'; name = 'first' } -Expect 'order is now Again' | Out-Null
+Step 'move Again after Copied' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'move'; name = 'after:Copied' } -Expect 'moved to after:Copied' | Out-Null
 Step 'delete Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Again'; action = 'delete' } | Out-Null
 Step '  Again is gone' 'read' @{ handle = $x; selector = 'Again!A1' } -Fails -Expect 'no sheet named' | Out-Null
 Step 'undo: the deleted sheet comes back' 'undo' @{ handle = $x } -Expect 'undid' | Out-Null

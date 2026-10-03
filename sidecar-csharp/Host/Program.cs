@@ -1700,7 +1700,7 @@ namespace Syn.Sidecar
             // 36 steps of "no pivot table to attach a slicer to" followed, in
             // a workbook that had one. A name that matches no pivot is not an
             // error when there is only one pivot: it can only mean that one.
-            dynamic pt = null;
+            dynamic? pt = null;
             if (!string.IsNullOrWhiteSpace(pivotName))
                 foreach (var c in all)
                     if (string.Equals((string)c.Name, pivotName, StringComparison.OrdinalIgnoreCase)) { pt = c; break; }

@@ -119,7 +119,7 @@ application is asked, with the list of verbs that app does have.
 | Verb | Fields | Notes |
 |---|---|---|
 | `addSheet` | `name` | |
-| `sheet` | `selector` (sheet), `action`, `name` | `rename`, `delete`, `copy`, `hide`, `show`. |
+| `sheet` | `selector` (sheet), `action`, `name` | `rename`, `delete`, `copy`, `move`, `hide`, `show`. `move` takes `name` as where it goes: `first`, `last`, `before:Other` or `after:Other`; the reply lists the order now. |
 | `insert` | `selector` | Rows `data!5:7`, columns `data!C:E`, or cells (pushed down). |
 | `sort` | `selector`, `name` (header), `rule` | Header row first; `asc` or `desc`. Refused when `selector` covers only some of a table's columns, naming the range to use: those columns alone would come out of line with the rest of each row. |
 | `filter` | `selector`, `name` (header), `rule` | What to keep: `North`, `>100`, `<>0`; empty clears. |

@@ -322,7 +322,8 @@ SHEETS
 
   struct {verb:"sheet", selector:"data", action:"rename", name:"Raw"}
 
-action is rename, delete, copy (name is the copy's name), hide or show.
+action is rename, delete, copy (name is the copy's name), move (name is where it
+goes: first, last, before:Other or after:Other), hide or show.
 After a rename every selector says the new name.
 
 VALIDATION, NOTES, LINKS

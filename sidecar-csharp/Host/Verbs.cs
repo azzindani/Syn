@@ -281,6 +281,32 @@ namespace Syn.Sidecar
                     copy.Name = name;
                     return Ok($"sheet {sheetName} copied as {name}");
                 }
+                case "move":
+                {
+                    // Where it goes, in one word or one `before:`/`after:` and a
+                    // sheet: "put Trends first" had no verb at all, and a model
+                    // asked to reorder the sheets said it could not. A colon is
+                    // not allowed in a sheet name, so it cannot be mistaken for
+                    // part of one.
+                    var where = (name ?? "").Trim();
+                    var low = where.ToLowerInvariant();
+                    if (low == "first") ws.Move(Before: wb.Worksheets[1]);
+                    else if (low == "last") ws.Move(After: wb.Worksheets[(int)wb.Worksheets.Count]);
+                    else if (low.StartsWith("before:") || low.StartsWith("after:"))
+                    {
+                        var other = where[(where.IndexOf(':') + 1)..].Trim();
+                        if (string.Equals(other, (string)ws.Name, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException($"sheet {sheetName} cannot be moved relative to itself: name another sheet");
+                        dynamic target = Sheet(wb, other);
+                        if (low.StartsWith("before:")) ws.Move(Before: target);
+                        else ws.Move(After: target);
+                    }
+                    else throw new InvalidOperationException(
+                        $"sheet move needs `name` to say where: first, last, before:Other or after:Other, not {where}");
+                    var order = new List<string>();
+                    for (var i = 1; i <= (int)wb.Worksheets.Count; i++) order.Add((string)wb.Worksheets[i].Name);
+                    return Ok($"sheet {sheetName} moved to {where}; the order is now {string.Join(", ", order)}");
+                }
                 case "hide":
                     ws.Visible = 0; // xlSheetHidden
                     return Ok($"sheet {sheetName} hidden");
@@ -288,7 +314,7 @@ namespace Syn.Sidecar
                     ws.Visible = -1; // xlSheetVisible
                     return Ok($"sheet {sheetName} shown");
                 default:
-                    throw new InvalidOperationException($"sheet does not know {action}: rename, delete, copy, hide or show");
+                    throw new InvalidOperationException($"sheet does not know {action}: rename, delete, copy, move, hide or show");
             }
         }
 

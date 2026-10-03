@@ -683,10 +683,31 @@ class Calc:
             idx = list(sheets.ElementNames).index(sheet)
             sheets.copyByName(sheet, name, idx + 1)
             return "sheet %s copied as %s" % (sheet, name)
+        if action == "move":
+            names = list(sheets.ElementNames)
+            where = (name or "").strip()
+            low = where.lower()
+            if low == "first":
+                dest = 0
+            elif low == "last":
+                dest = len(names)
+            elif low.startswith(("before:", "after:")):
+                other = where.split(":", 1)[1].strip()
+                if other == sheet:
+                    raise Refused("sheet %s cannot be moved relative to itself: name another sheet" % sheet)
+                if other not in names:
+                    raise Refused("no sheet named %r: this workbook has %s" % (other, ", ".join(names)))
+                dest = names.index(other) + (0 if low.startswith("before:") else 1)
+            else:
+                raise Refused("sheet move needs `name` to say where: first, last, before:Other or after:Other, not %s" % where)
+            # The destination is a position among the sheets as they are now:
+            # 0 is the front, and the count is after the last.
+            sheets.moveByName(sheet, dest)
+            return "sheet %s moved to %s; the order is now %s" % (sheet, where, ", ".join(sheets.ElementNames))
         if action in ("hide", "show"):
             ws.IsVisible = action == "show"
             return "sheet %s %s" % (sheet, "shown" if action == "show" else "hidden")
-        raise Refused("sheet does not know %s: rename, delete, copy, hide or show" % action)
+        raise Refused("sheet does not know %s: rename, delete, copy, move, hide or show" % action)
 
     def page_styles(self, selector):
         """The page styles of the named sheet, or of every sheet."""

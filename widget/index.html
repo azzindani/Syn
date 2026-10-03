@@ -2240,6 +2240,7 @@ function onDelta(d) {
 // they were drawn again on top of it: the answer showed twice. Everything
 // until the next turn begins is already on screen.
 let settledRun = false;
+let exactAnswer = null;
 
 function liveStep(line) {
   if (settledRun) {
@@ -2363,11 +2364,19 @@ function liveStep(line) {
     return;
   }
   if (/^(STEP|REFUSED|DID) /.test(line)) return;
+  // The exact reply, newlines and all, which the ANSWER line right after it
+  // has flattened to one line. A list or a table needs its line breaks.
+  m = line.match(/^RECEIPT answer (\{.*\})$/);
+  if (m) {
+    try { exactAnswer = JSON.parse(m[1]).text; } catch { exactAnswer = null; }
+    return;
+  }
   m = line.match(/^ANSWER ([\s\S]*)$/);
   if (m) {
     setBanner("busy", null);
     const d = el("div", "bot");
-    d.innerHTML = md(m[1]);
+    d.innerHTML = md(typeof exactAnswer === "string" ? exactAnswer : m[1]);
+    exactAnswer = null;
     liveRow(d);
     return void liveClose();
   }

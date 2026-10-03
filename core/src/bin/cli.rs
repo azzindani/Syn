@@ -268,6 +268,12 @@ fn drive(
             // work): the loop's own nudge, with no call to draw a row for.
             Step::Refused(why) => pr!("REFUSED {why}"),
             Step::Answered(text) => {
+                // The line protocol is one line per message, so ANSWER is the
+                // reply flattened. A numbered list or a table flattened to one
+                // line is not readable (a 10-row table came out as a run of
+                // pipes), so the exact text goes first, as JSON, for a page
+                // that can draw it.
+                pr!("RECEIPT answer {{\"text\":\"{}\"}}", core::provider::escape_json(&text));
                 pr!("ANSWER {}", text.replace('\n', " "));
                 report(a);
                 return None;

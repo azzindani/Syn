@@ -244,6 +244,18 @@ test("a reply is drawn as the model writes it, then replaced by the answer", asy
   expect(drafts).toBeNull();
 });
 
+test("a reply with a list and a table is drawn as a list and a table", async ({ page }) => {
+  // The CLI's ANSWER line is the reply on one line, and a ten-row table read
+  // as a run of pipes. The exact text arrives first, as JSON, and is what is drawn.
+  const text = ["Top two:", "", "1. **A** - 9", "2. **B** - 8", "", "| rank | name |", "|---|---|", "| 1 | A |", "| 2 | B |"].join("\n");
+  emit(`RECEIPT say model=test/m open=0 at=${Date.now()}`);
+  emit("RECEIPT answer " + JSON.stringify({ text }));
+  emit("ANSWER " + text.replace(/\n/g, " "));
+  const bot = page.locator(".bot").last();
+  await expect(bot.locator("ol li")).toHaveCount(2);
+  await expect(bot.locator("table tbody tr")).toHaveCount(2);
+});
+
 test("a finished run keeps how long it took, counted from when it began", async ({ page }) => {
   // The clock vanished the moment a run finished, and a twenty-minute run
   // read the same as a quick one. And it counted from when the page saw the

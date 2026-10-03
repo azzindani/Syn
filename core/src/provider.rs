@@ -33,7 +33,7 @@ pub fn effort_str(effort: Effort) -> &'static str {
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-fn escape_json(s: &str) -> String {
+pub fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
         match c {
@@ -506,7 +506,7 @@ pub fn retryable_message(msg: &str) -> bool {
         // reset. Nothing had been acted on -- the tool calls of a reply that
         // never finished are never run -- so asking again is safe.
         "stream ended before", "stream ended unexpectedly", "recv failure", "connection was reset",
-        "connection reset", "empty reply from server", "transfer closed",
+        "connection reset", "empty reply from server", "transfer closed", "closed abruptly", "close_notify",
         // timeouts
         "timeout", "timed out", "time out",
         // explicit invitations to retry
@@ -1412,6 +1412,7 @@ mod cover_tests {
             // Verbatim from a live run: a stream that stalled, and a reset.
             "provider: upstream failed inside a 200 (unknown): the stream ended before the response was complete",
             "provider: curl transport failed: curl: (35) Recv failure: Connection was reset",
+            "provider: curl transport failed: curl: (56) schannel: server closed abruptly (missing close_notify)",
         ] {
             assert!(retryable_message(e), "should be retryable: {e}");
         }

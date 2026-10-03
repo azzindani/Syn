@@ -195,6 +195,26 @@ fn a_rate_limit_the_next_attempt_gets_past_is_not_shown_as_a_stop() {
 }
 
 #[test]
+fn a_reply_with_a_list_and_a_table_reaches_the_console_with_its_line_breaks() {
+    // The ANSWER line is one line, so a reply was flattened to it, and the
+    // console drew a ten-row table as a run of pipes and a numbered list as
+    // one paragraph. The exact text goes out first as JSON.
+    let reply = "Top two:\n\n1. **A** - 9\n2. **B** - 8\n\n| rank | name |\n|---|---|\n| 1 | A |";
+    let p = provider(vec![answer(reply)]);
+    let out = cli(&p, &["attach excel plan.xlsx Sheet1", "say list them"]);
+    let want = format!("RECEIPT answer {{\"text\":\"{}\"}}", reply.replace('\n', "\\n"));
+    assert!(out.contains(&want), "the exact reply was not sent:\n{out}");
+    assert!(
+        out.contains("ANSWER Top two:  1. **A** - 9 2. **B** - 8"),
+        "the one-line ANSWER is still what the terminal and the drivers read:\n{out}"
+    );
+    assert!(
+        out.find("RECEIPT answer ").unwrap() < out.find("ANSWER Top").unwrap(),
+        "the exact text must come first:\n{out}"
+    );
+}
+
+#[test]
 fn a_connection_that_dies_mid_turn_is_waited_out_and_the_turn_goes_on() {
     // Eight turns of a live 50-message run ended on "the stream ended before
     // the response was complete" or "Recv failure: Connection was reset",

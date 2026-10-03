@@ -499,6 +499,14 @@ pub fn retryable_message(msg: &str) -> bool {
         "upstream connect", "connection error", "connection refused", "connection lost",
         "socket connection was closed", "socket hang up", "reset before headers",
         "getaddrinfo", "enotfound", "eai_again", "econnrefused", "econnreset", "etimedout",
+        // A model stream that dies mid-answer. Eight turns of one 50-message
+        // run ended on these, each a lost turn, because none of them matched
+        // anything above: the provider sent a 200 and then went quiet until
+        // our idle limit, or curl (the transport) reported the connection
+        // reset. Nothing had been acted on -- the tool calls of a reply that
+        // never finished are never run -- so asking again is safe.
+        "stream ended before", "stream ended unexpectedly", "recv failure", "connection was reset",
+        "connection reset", "empty reply from server", "transfer closed",
         // timeouts
         "timeout", "timed out", "time out",
         // explicit invitations to retry
@@ -1401,6 +1409,9 @@ mod cover_tests {
             "the service is currently at capacity",
             "upstream connect error",
             "provider returned error",
+            // Verbatim from a live run: a stream that stalled, and a reset.
+            "provider: upstream failed inside a 200 (unknown): the stream ended before the response was complete",
+            "provider: curl transport failed: curl: (35) Recv failure: Connection was reset",
         ] {
             assert!(retryable_message(e), "should be retryable: {e}");
         }

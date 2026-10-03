@@ -42,6 +42,11 @@ fn provider(script: Vec<String>) -> Provider {
             let _ = r.read_exact(&mut body);
             log.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
             let reply = script.next().unwrap_or_else(|| answer("out of script"));
+            // `drop`: the provider takes the request and the connection dies
+            // with nothing sent, which curl reports as an empty reply.
+            if reply == "drop" {
+                continue;
+            }
             // A scripted stream is sent the way a provider sends one: no
             // length, a keep-alive comment, and the chunks with pauses
             // between them, so the reader really sees pieces.
@@ -189,6 +194,20 @@ fn a_rate_limit_the_next_attempt_gets_past_is_not_shown_as_a_stop() {
     assert_eq!(turn.matches("RECEIPT did ").count(), 1, "the turn's summary was printed more than once:\n{out}");
 }
 
+#[test]
+fn a_connection_that_dies_mid_turn_is_waited_out_and_the_turn_goes_on() {
+    // Eight turns of a live 50-message run ended on "the stream ended before
+    // the response was complete" or "Recv failure: Connection was reset",
+    // each after a tool step and each a lost turn, because neither was on the
+    // list of failures worth a second try. The call that died had not been
+    // answered, so nothing it asked for had run, and asking again is safe.
+    let p = provider(vec![call("c1", "read", READ), "drop".to_string(), answer("done")]);
+    let out = cli(&p, &["attach excel plan.xlsx Sheet1", "say read it"]);
+    let turn = &out[out.find("RECEIPT say model=").expect(&out)..];
+    assert!(turn.contains("RECEIPT waiting "), "a dead connection was not waited out:\n{out}");
+    assert!(turn.contains("ANSWER done"), "the turn did not finish after the retry:\n{out}");
+    assert!(!turn.contains("STOPPED"), "the turn was stopped by a failure the retry got past:\n{out}");
+}
 #[test]
 fn a_turn_that_does_end_on_a_refusal_says_so_once() {
     // Held back while a retry might follow, the stop must still be printed

@@ -186,16 +186,35 @@ namespace Syn.Sidecar
         private static string ExcelCopy(dynamic wb, string handle, string source, string at)
         {
             Snapshot(handle);
+            // `[trips.csv]trips!A1:L9` reads from another open workbook, the way
+            // Excel writes an outside reference. Without it a model that had to
+            // gather several files into one workbook wrote `=trips.csv!A1:L9`
+            // formulas and pasted them as values: every empty cell came across
+            // as a 0, and 1,714 trips with no driver became trips with driver
+            // "0", which a count of blanks then found none of.
+            dynamic srcBook = wb;
+            var from = "";
+            if (source.TrimStart().StartsWith("["))
+            {
+                var t = source.TrimStart();
+                var close = t.IndexOf(']');
+                if (close < 0) throw new InvalidOperationException("copy source from another workbook looks like [Book.xlsx]Sheet!A1:D20");
+                from = t.Substring(1, close - 1).Trim();
+                source = t.Substring(close + 1);
+                srcBook = FindWorkbook((object)wb.Application, from)
+                    ?? throw new InvalidOperationException($"copy: no open workbook {from}: open it first, or give the name of one that is open");
+            }
             var (ss, sa) = SplitRange(source);
             var (ds, da) = SplitRange(at);
             if (string.IsNullOrEmpty(sa)) throw new InvalidOperationException("copy needs a source like data!A1:D20");
             if (string.IsNullOrEmpty(da)) throw new InvalidOperationException("copy needs a destination cell like Summary!A1");
-            dynamic src = Sheet(wb, ss).Range[sa];
+            dynamic src = Sheet(srcBook, ss).Range[sa];
             dynamic dst = Sheet(wb, ds).Range[da];
             // Copy with a destination goes cell to cell and never touches the
             // clipboard, which is the human's.
             src.Copy(dst.Cells[1, 1]);
-            return Ok($"copied {SheetRef(ss)}!{sa} to {SheetRef(ds)}!{da} ({src.Rows.Count}x{src.Columns.Count}: values, formulas and formats)");
+            var fromNote = from.Length > 0 ? $"[{from}]" : "";
+            return Ok($"copied {fromNote}{SheetRef(ss)}!{sa} to {SheetRef(ds)}!{da} ({src.Rows.Count}x{src.Columns.Count}: values, formulas and formats; empty cells stay empty)");
         }
 
         private static string ExcelValidate(dynamic wb, string handle, string selector, string rule)

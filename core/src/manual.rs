@@ -203,6 +203,12 @@ that is billions of comparisons, and the workbook -- with every call to it --
 stays busy until it is done, which can be hours. COUNTA(UNIQUE(A2:A200000))
 counts distinct values in one pass, and a pivot on the column lists them.
 
+The same goes for SUMIF, COUNTIF or SUMPRODUCT whose criteria is a whole
+column or INDEX(range,0), and for a lookup written into every row of a big
+table to feed another such formula. Give each result its own SUMIFS over the
+range, a helper column, or a pivot. A call that keeps the application busy
+for two minutes is stopped with Esc and its change is undone.
+
 A CSV INTO A WORKBOOK IS TWO CALLS
 
 `open` the .csv in Excel -- it is split into its columns whatever the
@@ -317,6 +323,11 @@ FIND, REPLACE, COPY
 sheet or a range. `copy` copies values, formulas and formatting:
 
   struct {verb:"copy", source:"data!A1:D10", at:"Summary!A1"}
+
+To bring a range in from another open workbook, put its name in square
+brackets in front, as Excel does: source:"[Book2.csv]data!A1:L500". Empty
+cells stay empty. Do not copy by writing `=Book.csv!A1:L9` formulas: an empty
+cell becomes a 0.
 
 SHEETS
 

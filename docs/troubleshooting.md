@@ -161,3 +161,36 @@ C# helper is written the way it is:
     `SaveCopyAs(path, 32)`, which writes the file and leaves the open deck,
     and its path, alone. A deck with no slides cannot be saved as a PDF at
     all.
+12. **A call that never comes back hangs the whole turn.** Excel answers a
+    COM call only when it is done, so a formula that compares every row
+    with every other (`SUMIF` with a whole column of criteria over 85,000
+    rows, for 58 cells) kept a write waiting for 22 minutes, twice in one
+    50-message run, and each time someone had to kill Excel, which takes
+    the person's other workbooks with it. `Watchdog.cs` watches from the
+    listener threads, which use only Win32: past `AGENT_OFFICE_CALL_SECS`
+    (120) it presses Esc at Excel, which stops a calculation as it does for
+    a person (probed: an Esc at 8 s ended a 29 s calculation at 8.7 s, with
+    `CalculationState` left pending); the call's change is then undone with
+    calculation switched to manual around it, because the formula that
+    caused it would start the calculation again; and after a further 60 s
+    the caller is answered anyway. Calls that are slow by nature (`open`,
+    `export`, `save`, `close`) get `AGENT_OFFICE_LONG_SECS` (1200) and no Esc.
+13. **A box on screen that only a person can answer.** Opening a workbook
+    that links to others raised "This workbook contains links to one or more
+    external sources that could be unsafe", and the `open` waited an hour.
+    `Workbooks.Open` now passes `UpdateLinks:=0`, so it never asks (linked
+    cells keep the values saved in the file, and the reply says the workbook
+    has links). Any other box is read through UI Automation, by window
+    handle (hit-testing points on the screen read whatever was on top of the
+    box, and returned nothing once something was), and reported to the
+    caller with its text and buttons after 10 s; the one box answered for
+    the caller is the links one, with Don't Update. The older message
+    filter (`Guarded`, 15 s) still answers calls Excel *refuses* while a
+    box is up; this covers calls Excel *accepts* and never finishes.
+14. **Gathering files into one workbook turned empty cells into 0.** With
+    no way to copy a range from another open workbook, a model wrote
+    `=trips.csv!A1:L85411` formulas and pasted them as values: every empty
+    cell came across as 0 (1,714 trips with no driver became driver "0"),
+    dates came across as serial numbers, and the saved file kept external
+    links. `copy` takes `[Book.csv]Sheet!A1:D9` as its source; it is
+    `Range.Copy` cell to cell, so blanks stay blank and formats come along.

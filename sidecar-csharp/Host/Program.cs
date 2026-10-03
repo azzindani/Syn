@@ -49,6 +49,14 @@ namespace Syn.Sidecar
         {
             public TaskCompletionSource<string> Reply { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // What the watchdog (Watchdog.cs) needs to know about a call that
+            // is taking too long. Written by the listener and the STA thread.
+            public volatile bool Started;
+            public volatile bool Abandoned;
+            public volatile bool Interrupted;
+            public long StartTick;
+            public int PushSeq;
         }
 
         /// <summary>Requests from every connected client, in arrival order,
@@ -123,6 +131,16 @@ namespace Syn.Sidecar
                     new Thread(Listen) { IsBackground = true, Name = $"pipe-{i}" }.Start();
                 foreach (var job in Jobs.GetConsumingEnumerable())
                 {
+                    // Refused while it waited its turn behind a call that never
+                    // came back: the caller has its answer, so it must not run
+                    // now, long after, as a surprise.
+                    lock (job)
+                    {
+                        if (job.Abandoned) continue;
+                        job.Started = true;
+                    }
+                    job.StartTick = Environment.TickCount64;
+                    job.PushSeq = _pushSeq;
                     var reply = Serve(app, job.Line);
                     // The application this helper attached to can go away
                     // under it: the human quits Word, or Word crashes. Every
@@ -139,6 +157,7 @@ namespace Syn.Sidecar
                         app = Reattach(app);
                         reply = Serve(app, job.Line);
                     }
+                    if (job.Interrupted) reply = Recover(app, job, reply);
                     job.Reply.TrySetResult(reply);
                 }
             }
@@ -185,7 +204,7 @@ namespace Syn.Sidecar
                         var job = new Job(line);
                         try { Jobs.Add(job); }
                         catch (InvalidOperationException) { break; } // stopping
-                        writer.WriteLine(job.Reply.Task.Result);
+                        writer.WriteLine(Await(job));
                         Trace("pipe: reply sent");
                     }
                 }
@@ -420,11 +439,30 @@ namespace Syn.Sidecar
             finally { try { app.ScreenUpdating = painting; } catch { } }
         }
 
+        /// What to tell a caller about a workbook that links to other
+        /// workbooks: they were not updated, so linked cells show what was
+        /// saved. Empty when it links to nothing.
+        private static string LinkNote(dynamic wb)
+        {
+            try
+            {
+                object? links = wb.LinkSources(1); // xlExcelLinks
+                if (links is Array arr && arr.Length > 0)
+                {
+                    var names = new List<string>();
+                    foreach (var l in arr) names.Add(Path.GetFileName(Convert.ToString(l) ?? ""));
+                    return $" (it links to {string.Join(", ", names)}; the links were not updated, so linked cells show the values saved in it)";
+                }
+            }
+            catch (COMException) { }
+            return "";
+        }
+
         private static string OpenCsvQuietly(dynamic app, string full)
         {
             var (delim, utf8) = SniffCsv(full);
             bool semi = delim == ';';
-            dynamic wb = app.Workbooks.Open(full);
+            dynamic wb = app.Workbooks.Open(full, 0);
             try
             {
                 dynamic ws = wb.Worksheets[1];
@@ -455,7 +493,7 @@ namespace Syn.Sidecar
                 // helper opened the workbook a moment ago, so it closes it
                 // and opens it again the ordinary way.
                 try { wb.Close(false); } catch { }
-                app.Workbooks.Open(full);
+                app.Workbooks.Open(full, 0);
                 return $" (its columns could not be split: {e.Message}; it is open as Excel reads it, one column per line)";
             }
         }
@@ -587,7 +625,11 @@ namespace Syn.Sidecar
                         if (Path.GetExtension(full).Equals(".csv", StringComparison.OrdinalIgnoreCase))
                             note = OpenCsv(app, full);
                         else
-                            app.Workbooks.Open(full);
+                            // UpdateLinks 0: never ask. A workbook that links to others
+                            // opens with Excel's own "update links?" box, which no
+                            // caller can answer, and one turn waited an hour on it.
+                            // The linked cells keep the values saved in the file.
+                            note = LinkNote(app.Workbooks.Open(full, 0));
                         OpenedHere.Add(name);
                         return Ok($"opened {name}, {(int)app.Workbooks.Count} workbook(s){note}");
                     }
@@ -1955,7 +1997,7 @@ namespace Syn.Sidecar
                     bool alerts = app.DisplayAlerts;
                     app.DisplayAlerts = false;
                     object? opened = null;
-                    WithNewFramesHidden((object)app, () => opened = app.Workbooks.Open(tmpPath));
+                    WithNewFramesHidden((object)app, () => opened = app.Workbooks.Open(tmpPath, 0));
                     dynamic tmp = opened!;
                     try { tmp.SaveAs(full, 51); }
                     finally

@@ -653,6 +653,8 @@ class Calc:
         return "sorted %s!%s by %s, %s first" % (sheet, a, header, "smallest" if asc else "largest")
 
     def copy(self, source, at):
+        if source.lstrip().startswith("["):
+            raise Refused("copying from another workbook is not available here: open the data in this workbook instead")
         ss, sa = split_range(source)
         ds, da = split_range(at)
         if not sa:

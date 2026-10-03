@@ -61,6 +61,8 @@ different providers) is what makes the fallback useful.
 |---|---|---|
 | `AGENT_STREAM` | on | `0` waits for whole replies (up to five minutes each) instead of streaming, for a gateway that mishandles `"stream": true`. |
 | `AGENT_STREAM_IDLE_SECS` | `180` | How long a streamed reply may send nothing at all before it is abandoned (10–3600). Providers send keep-alives while a model thinks, so this detects a dead connection, not a slow model. |
+| `AGENT_OFFICE_CALL_SECS` | `120` | Seconds an Office call may run before the Office helper presses Esc at Excel to stop a calculation, undoes what the call changed and tells the model why (5–86400). Read by `office-host`. See `docs/troubleshooting.md`, item 12. |
+| `AGENT_OFFICE_LONG_SECS` | `1200` | The same for calls that are slow by nature (open, export, save, close): no Esc, only an answer to the caller after this long and a grace period. |
 | `AGENT_MAX_STEPS` | `100` | Tool calls the agent loop may make in one turn. |
 | `AGENT_CONTEXT_CHARS` | `240000`, less for small models | How much conversation the loop keeps before compacting. It shrinks automatically to fit the context window the provider reports for the chosen model. |
 | `AGENT_PLAN` | on | `0` removes the `plan` tool from the loop. |

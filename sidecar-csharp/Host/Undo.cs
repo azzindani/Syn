@@ -88,6 +88,7 @@ namespace Syn.Sidecar
 
         private static void Push(string doc, UndoEntry e)
         {
+            System.Threading.Interlocked.Increment(ref _pushSeq);
             var s = StackFor(doc);
             s.Add(e);
             while (s.Count > UndoDepth)

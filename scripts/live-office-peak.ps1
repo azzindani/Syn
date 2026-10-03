@@ -138,6 +138,10 @@ Step 'write a duplicate row' 'write' @{ handle = $x; selector = 'Sheet1!A6:C6'; 
 Step 'dedupe' 'struct' @{ handle = $x; verb = 'dedupe'; selector = 'Sheet1!A1:C6' } -Expect '5 data row\(s\) before, 4 after' | Out-Null
 Step 'addSheet Copy' 'struct' @{ handle = $x; verb = 'addSheet'; name = 'Copy' } | Out-Null
 Step 'copy the table to Copy!B2' 'struct' @{ handle = $x; verb = 'copy'; source = 'Sheet1!A1:C5'; at = 'Copy!B2' } | Out-Null
+# A range from another open workbook, named in brackets as Excel writes it
+# (here the same one, which is the only one every run has open).
+Step 'copy from a named workbook' 'struct' @{ handle = $x; verb = 'copy'; source = '[plan.xlsx]Sheet1!A1:C5'; at = 'Copy!H2' } -Expect 'copied \[plan.xlsx\]' | Out-Null
+Step 'copy from a workbook that is not open' 'struct' @{ handle = $x; verb = 'copy'; source = '[nothere.xlsx]Sheet1!A1:C5'; at = 'Copy!H2' } -Fails -Expect 'no open workbook' | Out-Null
 Step '  it arrived' 'read' @{ handle = $x; selector = 'Copy!B2:D2' } -Expect 'Region\|Q3 Revenue\|Growth' | Out-Null
 Step 'rename Copy to Copied' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copy'; action = 'rename'; name = 'Copied' } | Out-Null
 Step 'copy the sheet as Again' 'struct' @{ handle = $x; verb = 'sheet'; selector = 'Copied'; action = 'copy'; name = 'Again' } | Out-Null

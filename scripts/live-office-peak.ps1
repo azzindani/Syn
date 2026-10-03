@@ -160,6 +160,15 @@ Step 'hide row 5' 'format' @{ handle = $x; selector = 'Sheet1!5:5'; style = 'hid
 Step 'show row 5' 'format' @{ handle = $x; selector = 'Sheet1!5:5'; style = 'hidden=0' } | Out-Null
 Step 'scatter chart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'scatter'; source = 'Sheet1!B1:C5'; at = 'Copied!F2:M16'; title = 'Revenue vs growth' } | Out-Null
 Step 'doughnut chart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'doughnut'; source = 'Sheet1!A1:B5'; at = 'Copied!F18:M32'; title = 'Revenue share' } | Out-Null
+# A pivot, and the slicer's two claims that were wrong in a live run: `name` is
+# the pivot's (and can be left out for the only one, or be anything when there
+# is only one), and the field is any column of the source, not only one the
+# pivot shows. Growth is not in this pivot.
+Step 'pivot: revenue by region' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Q3 Revenue'; at = 'Copied!A20' } -Expect 'sum of Q3 Revenue by Region' | Out-Null
+Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Growth'; at = 'Copied!F34' } -Expect 'slicer on Growth' | Out-Null
+Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region' | Out-Null
+Step 'a second pivot' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A30' } -Expect 'sum of Growth by Region' | Out-Null
+Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '2 pivot tables \(Pivot\d+, Pivot\d+\)' | Out-Null
 Step 'export the charts as png' 'export' @{ handle = $x; format = 'png'; path = (Join-Path $out 'peak-charts.png') } | Out-Null
 $png = Get-ChildItem $out -Filter 'peak-charts*.png' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($png) {

@@ -135,7 +135,7 @@ fn max_steps() -> u32 {
     std::env::var("AGENT_MAX_STEPS").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(100)
 }
 
-const SYSTEM: &str = "\
+pub const SYSTEM: &str = "\
 You drive real applications that a human has open on their own computer. \
 Every tool call changes, or reads from, a document they are looking at right now.
 

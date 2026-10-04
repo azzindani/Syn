@@ -97,7 +97,10 @@ START
      From the zip: unzip it somewhere you own (Documents is fine; not
      Program Files, which Syn cannot write its chats into) and
      double-click Syn.cmd.
-  2. A small Syn window opens, and your browser shows the console.
+  2. Syn opens in a window of its own, titled Syn: no tabs, no address bar.
+     It uses the Edge that comes with Windows, so no browser of yours is
+     needed (with no Edge it opens in your default browser instead). A
+     minimized console window sits in the taskbar beside it.
   3. Add an API key: the key icon at the bottom of the sidebar.
   4. Ask for something: "open C:\...\budget.xlsx and total column C".
   Closing the Syn window stops Syn and anything it started. Your Office

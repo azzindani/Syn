@@ -36,6 +36,9 @@ the run → Artifacts), or build it: `powershell -File scripts\package.ps1`.
 - [ ] Uninstall from Settings > Apps, answering No to deleting chats: the
       programs and shortcuts go, `.agent\` and `.env` stay. Uninstall again
       after reinstalling, answering Yes: the folder is gone.
+- [ ] Start Syn from the Start menu: it opens in a window of its own titled
+      Syn (no tabs, no address bar), whatever the default browser is.
+      Closing that window leaves no `ui`, `cli` or `office-host` process.
 - [ ] The zip: unzip into `Documents\Syn-test`, double-click `Syn.cmd`,
       and it works the same.
 

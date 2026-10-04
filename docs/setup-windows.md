@@ -14,7 +14,11 @@ appears in Settings > Apps to uninstall; uninstalling asks before it
 deletes your chats and saved keys. The same files come as
 `Syn-<version>-win-x64.zip` for anyone who would rather unzip and
 double-click `Syn.cmd`. The installer is not code-signed yet, so Windows
-SmartScreen warns the first time: More info, then Run anyway. The package is Office only: the console, the CLI, the MCP server
+SmartScreen warns the first time: More info, then Run anyway. Syn opens in
+a window of its own, titled Syn, with no tabs or address bar. It uses the
+Edge that ships with Windows 10 and 11, so no browser of yours is needed;
+with no Edge it opens in the default browser instead. Closing that window
+stops Syn and everything it started. The package is Office only: the console, the CLI, the MCP server
 and a self-contained Office helper, which carries its own .NET. It needs
 Windows 10 or 11 and desktop Office, nothing else.
 

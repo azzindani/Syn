@@ -783,7 +783,7 @@ namespace Syn.Sidecar
                         try { where = $" (table t{one.Index}, row {(int)cellRange.Cells[1].RowIndex}, column {(int)cellRange.Cells[1].ColumnIndex})"; }
                         catch { where = $" (in table t{one.Index}, p{one.First}:p{one.Last})"; }
                     }
-                    return $"para {from}{where}: {Trunc((string)doc.Paragraphs[from + 1].Range.Text, 4000)}";
+                    return $"para {from}{where}: {Trunc(ShownText(doc.Paragraphs[from + 1].Range, (string)doc.Paragraphs[from + 1].Range.Text), 4000)}";
                 }
             }
             var spans = TableSpans(docO);
@@ -811,7 +811,7 @@ namespace Syn.Sidecar
                     continue;
                 }
                 dynamic p = doc.Paragraphs[i + 1];
-                var text = ((string)p.Range.Text).TrimEnd('\r', '\a', '\n');
+                var text = ShownText(p.Range, ((string)p.Range.Text).TrimEnd('\r', '\a', '\n'));
                 string style = "";
                 try { style = (string)p.Style.NameLocal; } catch { }
                 var tag = style is "" or "Normal" ? "" : $" [{style}]";
@@ -822,6 +822,39 @@ namespace Syn.Sidecar
                 sb.Append($" | p{i}{tag}: {shown}");
             }
             return sb.ToString();
+        }
+
+        // "[chart]", "[picture]" or "[object]" for each inline shape in a
+        // range, or nothing. Word gives a paragraph holding a figure the text
+        // "/", so a read showed it as a stray slash, and in a "tidy up the
+        // blank paragraphs" turn a model deleted the paragraph holding the
+        // report's second chart, keeping its caption, and told the user it had
+        // only removed blanks.
+        private static string InlineMarks(dynamic range)
+        {
+            try
+            {
+                int n = (int)range.InlineShapes.Count;
+                if (n == 0) return "";
+                var kinds = new List<string>();
+                for (var k = 1; k <= n; k++)
+                {
+                    int type = (int)range.InlineShapes[k].Type; // wdInlineShapeChart 12, Picture 3, LinkedPicture 4
+                    kinds.Add(type == 12 ? "[chart]" : type is 3 or 4 ? "[picture]" : "[object]");
+                }
+                return string.Join(" ", kinds);
+            }
+            catch (COMException) { return ""; }
+        }
+
+        private static string ShownText(dynamic range, string text)
+        {
+            var marks = InlineMarks(range);
+            if (marks.Length == 0) return text;
+            // Word's own stand-in for a figure is a bare "/": drop it when it is
+            // all the paragraph holds, so the mark is what the reader sees.
+            if (text.Trim('/', ' ', '\u0001').Length == 0) text = "";
+            return text.Length == 0 ? marks : $"{marks} {text}";
         }
 
         private static dynamic? FindWordDoc(dynamic app, string handle)
@@ -946,6 +979,13 @@ namespace Syn.Sidecar
             // its numbers filled the document's outline.
             ApplyStyle(anchor, "Normal");
             dynamic t = doc.Tables.Add(anchor.Range, rows.Length, nc);
+            // Resetting the anchor was not enough: Tables.Add takes its cell
+            // paragraphs from the paragraph at the insertion point, which is
+            // the heading behind the anchor, so a table inserted before one
+            // still came out Heading 1 in all 44 cells (EV r9). The earlier
+            // peak step checked only "table t1 added" and passed. Set the
+            // table's own paragraphs, before the text goes in.
+            ApplyStyle(t.Range, "Normal");
             for (int r = 0; r < rows.Length; r++)
                 for (int c = 0; c < nc; c++)
                     t.Cell(r + 1, c + 1).Range.Text = c < rows[r].Length ? rows[r][c] : "";
@@ -1069,8 +1109,7 @@ namespace Syn.Sidecar
         private static string Picture(dynamic doc, string handle, string path, string widthPt)
         {
             Snapshot(handle);
-            var full = Path.GetFullPath(path);
-            if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
+            var full = ImageFile(path);
             dynamic r = AppendParagraph(doc, "").Range;
             dynamic pic = doc.InlineShapes.AddPicture(full, false, true, r);
             if (double.TryParse(widthPt, NumberStyles.Any, CultureInfo.InvariantCulture, out var w) && w > 0)
@@ -1504,6 +1543,8 @@ namespace Syn.Sidecar
             dynamic ws = Sheet(wb, sheet);
             var rows = ParseGrid(payload);
             dynamic target = RangeOf((object)ws, addr);
+            var filteredNote = FilteredRowsNote(ws, target, handle, sheet);
+            if (filteredNote.Length > 0) throw new InvalidOperationException($"write: {filteredNote}");
 
             // One value into a range of many cells means fill, not "write to
             // the corner". This is the only way to put a derived column
@@ -1514,22 +1555,28 @@ namespace Syn.Sidecar
             {
                 var one = rows[0][0];
                 var heldBefore = Held(ws, target);
-                if (one.StartsWith("=", StringComparison.Ordinal)) SetFormula(target, one);
+                var arrayNote = "";
+                if (one.StartsWith("=", StringComparison.Ordinal)) { SetFormula(target, one); arrayNote = ArrayNote(target.Cells[1, 1], one); }
                 else target.Value2 = one;
                 // InvariantCulture: this locale groups with a period, so 258,423
                 // cells was reporting itself as "258.423".
-                return Ok($"filled {sheet}!{addr} ({span.ToString("N0", CultureInfo.InvariantCulture)} cells) from {Trunc(one)}{heldBefore}");
+                return Ok($"filled {sheet}!{addr} ({span.ToString("N0", CultureInfo.InvariantCulture)} cells) from {Trunc(one)}{heldBefore}{arrayNote}");
             }
 
             var r0 = target.Row;
             var c0 = target.Column;
             var wideBefore = rows.Max(r => r.Length);
             var heldNote = Held(ws, ws.Range[ws.Cells[r0, c0], ws.Cells[r0 + rows.Length - 1, c0 + wideBefore - 1]]);
+            var arrays = "";
             for (var i = 0; i < rows.Length; i++)
                 for (var j = 0; j < rows[i].Length; j++)
                 {
                     var v = rows[i][j];
-                    if (v.StartsWith("=", StringComparison.Ordinal)) SetFormula(ws.Cells[r0 + i, c0 + j], v);
+                    if (v.StartsWith("=", StringComparison.Ordinal))
+                    {
+                        SetFormula(ws.Cells[r0 + i, c0 + j], v);
+                        if (arrays.Length == 0) arrays = ArrayNote(ws.Cells[r0 + i, c0 + j], v);
+                    }
                     else ws.Cells[r0 + i, c0 + j].Value2 = v;
                 }
             // Name the range that actually took the values, not just a shape.
@@ -1540,7 +1587,42 @@ namespace Syn.Sidecar
             string endCell = last.Address(false, false);
             dynamic first = ws.Cells[r0, c0];
             string startCell = first.Address(false, false);
-            return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}{heldNote}");
+            return Ok($"wrote {rows.Length} row(s) x {wide} column(s) into {sheet}!{startCell}:{endCell}{heldNote}{arrays}");
+        }
+
+        /// A formula that returns several values is entered by Excel as ONE
+        /// array formula that fills a block (a spill): the cells under the first
+        /// cannot be edited, sorted or deleted one at a time. A model wrote
+        /// =routes!A2:A61 meaning "one per row", sorted the range, and was
+        /// refused eight times with advice about formula syntax. Said on the
+        /// write that made it, with how to get one formula per row.
+        private static string ArrayNote(dynamic cell, string formula)
+        {
+            try
+            {
+                var spills = false;
+                try { spills = (bool)cell.HasSpill; } catch (RuntimeBinderException) { }
+                if (!spills) { try { spills = (bool)cell.HasArray; } catch (RuntimeBinderException) { } }
+                if (!spills)
+                {
+                    // A range formula written over several cells is not one array:
+                    // every cell holds its own copy and each tries to fill the cells
+                    // below it, so they all show #SPILL!.
+                    string shown = "";
+                    try { shown = (string)cell.Text; } catch (Exception) { }
+                    return shown == "#SPILL!"
+                        ? " -- WARNING: that formula returns several values, so every cell tried to fill the cells below it and Excel shows #SPILL!. " +
+                          "For one formula per row, write it for the first row alone (a single cell like =routes!A2, not a range) and fill it down"
+                        : "";
+                }
+                string covers = "";
+                try { covers = (string)cell.SpillingToRange.Address(false, false); } catch (Exception) { }
+                if (covers.Length == 0) try { covers = (string)cell.CurrentArray.Address(false, false); } catch (Exception) { }
+                return $" -- WARNING: that formula returns several values, so Excel entered it as ONE array formula{(covers.Length > 0 ? $" filling {covers}" : "")}: " +
+                       "those cells cannot be sorted, deleted or edited one at a time. For one formula per row, write it for the first row alone " +
+                       "(a single cell like =routes!A2, not a range) and fill it down; to keep what it shows as plain values, use struct verb values over the whole block";
+            }
+            catch (Exception) { return ""; }
         }
 
         /// What a write is about to replace, as a sentence for the reply, or
@@ -1592,6 +1674,7 @@ namespace Syn.Sidecar
             dynamic ws = Sheet(wb, sheet);
             dynamic rng = ws.Range[addr];
             var applied = new List<string>();
+            var hiddenWarning = "";
             foreach (var pair in style.Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
                 var kv = pair.Split('=', 2);
@@ -1602,7 +1685,16 @@ namespace Syn.Sidecar
                     case "bold": rng.Font.Bold = Truthy(v); applied.Add("bold"); break;
                     case "italic": rng.Font.Italic = Truthy(v); applied.Add("italic"); break;
                     case "size": rng.Font.Size = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("size"); break;
-                    case "numberformat": case "format": rng.NumberFormat = v; applied.Add("numberFormat"); break;
+                    case "numberformat": case "format":
+                    {
+                        SetNumberFormat(wb, rng, v);
+                        // What the first cell now shows, so a format that came out
+                        // wrong is seen in the reply and not in the finished file.
+                        string shown = "";
+                        try { shown = (string)rng.Cells[1, 1].Text; } catch (Exception) { }
+                        applied.Add(shown.Length > 0 ? $"numberFormat (first cell shows {shown})" : "numberFormat");
+                        break;
+                    }
                     case "width": rng.ColumnWidth = double.Parse(v, CultureInfo.InvariantCulture); applied.Add("width"); break;
                     case "autofit": rng.EntireColumn.AutoFit(); applied.Add("autofit"); break;
                     case "wrap": rng.WrapText = Truthy(v); applied.Add("wrap"); break;
@@ -1659,18 +1751,37 @@ namespace Syn.Sidecar
                     // Rows or columns, by the shape of the selector: 5:7 hides
                     // rows, C:E hides columns.
                     case "hidden":
-                        if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?\d+(:\$?\d+)?$")) rng.EntireRow.Hidden = Truthy(v);
-                        else if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?[A-Za-z]{1,3}(:\$?[A-Za-z]{1,3})?$")) rng.EntireColumn.Hidden = Truthy(v);
-                        else throw new InvalidOperationException("hidden hides whole rows (Sheet!5:7) or columns (Sheet!C:E)");
+                    {
+                        var isRows = System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?\d+(:\$?\d+)?$");
+                        if (!isRows && !System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\$?[A-Za-z]{1,3}(:\$?[A-Za-z]{1,3})?$"))
+                            throw new InvalidOperationException("hidden hides whole rows (Sheet!5:7) or columns (Sheet!C:E)");
+                        dynamic whole = isRows ? rng.EntireRow : rng.EntireColumn;
+                        // Excel plots visible cells only, so hiding a chart's
+                        // source empties the chart. A model hid the helper
+                        // columns behind a line chart to tidy the sheet: the chart
+                        // went blank on its sheet and on the dashboard, and the
+                        // reply said only "formatted". Asked before the hide, not
+                        // after: once all of a chart's data is hidden Excel drops
+                        // its series from the collection, and nothing reads it.
+                        if (Truthy(v))
+                        {
+                            var readers = ChartsReadingFrom((object)wb, (string)ws.Name, (object)whole);
+                            if (readers.Count > 0)
+                                hiddenWarning = $" -- WARNING: {readers.Count.ToString(CultureInfo.InvariantCulture)} chart(s) read from these cells " +
+                                    $"({string.Join(", ", readers.Take(6).Select(h => h.sheet + "!" + h.chart))}) and will draw nothing while they are hidden " +
+                                    "(a chart plots visible cells only). Show them again with hidden=0, or move the chart's data to cells that stay visible";
+                        }
+                        whole.Hidden = Truthy(v);
                         applied.Add("hidden");
                         break;
+                    }
                     default: throw new InvalidOperationException(
                         $"format does not know {k}: it takes bold, italic, underline, strike, size, numberFormat, width, height, "
                         + "autofit, autofitSheet, wrap, font, color, fill, merge, border, align, valign, indent, rotate, hidden, freeze");
                 }
             }
             if (applied.Count == 0) throw new InvalidOperationException("format was given no style: try bold=1;numberFormat=#,##0");
-            return Ok($"formatted {sheet}!{addr}: {string.Join(", ", applied)}");
+            return Ok($"formatted {sheet}!{addr}: {string.Join(", ", applied)}{hiddenWarning}");
         }
 
         // Excel wants BGR, and every colour anyone writes down is RGB.
@@ -1876,7 +1987,40 @@ namespace Syn.Sidecar
             slicer.Width = 180.0;
             slicer.Height = 200.0;
             slicer.Caption = field;
-            return Ok($"slicer on {field} at {dstSheet}!{dstAddr}, filtering {pt.Name}{linkedNote}");
+            // How much room it takes, and whom it lands on. A slicer is 180 x 200
+            // points, which is a dozen rows: two placed six rows apart sat on
+            // top of each other on a dashboard the user had asked to be "tidy,
+            // nothing overlapping", and the replies said only "slicer on ...".
+            var footprint = "";
+            try
+            {
+                dynamic sh = slicer.Shape;
+                string own = (string)sh.Name;
+                double sl = (double)sh.Left, st = (double)sh.Top, sw = (double)sh.Width, shh = (double)sh.Height;
+                var c2 = (int)cell.Column; var r2 = (int)cell.Row; double acc = 0;
+                while (c2 < 16384) { acc += (double)dws.Columns[c2].Width; if (acc >= sw - 0.5) break; c2++; }
+                acc = 0;
+                while (r2 < 1048576) { acc += (double)dws.Rows[r2].Height; if (acc >= shh - 0.5) break; r2++; }
+                var covers = ((string)dws.Range[cell, dws.Cells[r2, c2]].Address(false, false));
+                var clash = new List<string>();
+                for (var i = 1; i <= (int)dws.Shapes.Count; i++)
+                {
+                    dynamic o = dws.Shapes[i];
+                    try
+                    {
+                        if ((string)o.Name == own) continue;
+                        double ol = (double)o.Left, ot = (double)o.Top, ow = (double)o.Width, oh = (double)o.Height;
+                        if (Math.Min(sl + sw, ol + ow) - Math.Max(sl, ol) > 2 && Math.Min(st + shh, ot + oh) - Math.Max(st, ot) > 2)
+                            clash.Add((string)o.Name);
+                    }
+                    catch (COMException) { }
+                }
+                footprint = $", covering {covers}";
+                if (clash.Count > 0)
+                    footprint += $" -- WARNING: it overlaps {string.Join(", ", clash.Take(6))}; `undo` takes it off, then place it at a cell clear of {covers}";
+            }
+            catch (Exception) { }
+            return Ok($"slicer on {field} at {dstSheet}!{dstAddr}{footprint}, filtering {pt.Name}{linkedNote}");
         }
 
         /// <summary>The slicer cache on <paramref name="field"/> that filters
@@ -2034,6 +2178,7 @@ namespace Syn.Sidecar
                 return RedrawChart((object)old, (object)sws, kind, type, srcSheet, srcAddr, title, style, dstSheet, dstAddr, left, top, w, h);
             dynamic shape = dws.Shapes.AddChart2(-1, type, left, top, w, h);
             var note = "";
+            var pivotNote = "";
             try
             {
                 dynamic chart = shape.Chart;
@@ -2044,6 +2189,7 @@ namespace Syn.Sidecar
                     chart.ChartTitle.Text = title;
                 }
                 StyleChart(chart, style);
+                pivotNote = PivotChartNote(chart);
             }
             catch
             {
@@ -2053,7 +2199,7 @@ namespace Syn.Sidecar
                 throw;
             }
             return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr} "
-                      + $"({Math.Round(w)}x{Math.Round(h)}){note}");
+                      + $"({Math.Round(w)}x{Math.Round(h)}){note}{pivotNote}");
         }
 
         // legend, gridlines and axis titles, in the same k=v;k=v shape that
@@ -2293,6 +2439,7 @@ namespace Syn.Sidecar
             var dir = Path.GetDirectoryName(path) ?? ".";
             var stem = Path.GetFileNameWithoutExtension(path);
             var made = new List<string>();
+            var failed = new List<string>();
             for (var i = 1; i <= wb.Worksheets.Count; i++)
             {
                 dynamic ws = wb.Worksheets[i];
@@ -2305,12 +2452,39 @@ namespace Syn.Sidecar
                 {
                     var safe = string.Join("_", sheet.Split(Path.GetInvalidFileNameChars()));
                     var file = Path.Combine(dir, $"{stem}-{safe}-{c}.png");
-                    objs.Item(c).Chart.Export(file, "PNG");
+                    // Chart.Export answers False, or writes an empty file, for a
+                    // chart that has nothing to draw (no plottable data, or all of
+                    // it in hidden rows). It was reported as exported anyway, and
+                    // a 0-byte PNG went onto a slide as a picture frame with no
+                    // image in it. An empty file is removed, and named.
+                    bool drawn;
+                    try { drawn = (bool)objs.Item(c).Chart.Export(file, "PNG"); }
+                    catch (COMException) { drawn = false; }
+                    // A chart whose data is hidden exports as a blank white
+                    // picture, a few hundred bytes (482 for 576x440), where one
+                    // with a title and axes is several thousand. Judged by size
+                    // for any chart big enough to hold a title and an axis.
+                    var blank = false;
+                    try { blank = drawn && File.Exists(file) && new FileInfo(file).Length < 1024 && (double)objs.Item(c).Width * (double)objs.Item(c).Height >= 20000; }
+                    catch (COMException) { }
+                    if (!drawn || blank || !File.Exists(file) || new FileInfo(file).Length < 8)
+                    {
+                        try { File.Delete(file); } catch (IOException) { }
+                        string title = "";
+                        try { if ((bool)objs.Item(c).Chart.HasTitle) title = $" \"{(string)objs.Item(c).Chart.ChartTitle.Text}\""; } catch (COMException) { }
+                        failed.Add($"{SheetRef(sheet)} chart {c}{title}");
+                        continue;
+                    }
                     made.Add(Path.GetFileName(file));
                 }
             }
-            if (made.Count == 0) throw new InvalidOperationException("no charts in this workbook to export");
-            return Ok($"exported {made.Count} chart(s) to {dir}: {string.Join(", ", made)}");
+            var empty = failed.Count == 0 ? ""
+                : $"WARNING: {failed.Count} chart(s) drew nothing and were NOT exported: {string.Join("; ", failed)}. " +
+                  "Each has no plottable data, or reads from hidden rows or columns (a chart plots visible cells only): " +
+                  "read its source, show or move the data, and export again. ";
+            if (made.Count == 0 && failed.Count == 0) throw new InvalidOperationException("no charts in this workbook to export");
+            if (made.Count == 0) throw new InvalidOperationException(empty.TrimEnd());
+            return Ok($"{empty}exported {made.Count} chart(s) to {dir}: {string.Join(", ", made)}");
         }
 
         // A sheet name with a space is written the way Excel writes it,
@@ -2603,8 +2777,7 @@ namespace Syn.Sidecar
         {
             Snapshot(handle);
             dynamic slide = SlideOf((object)pres, selector).slide;
-            var full = Path.GetFullPath(path);
-            if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
+            var full = ImageFile(path);
             var (l, t, w, h) = Box(at, 60.0, 130.0, 600.0, 340.0);
             // A picture placed where a picture already is replaces it. There was no
             // way to take one off a slide, so a "the slide is too crowded, keep

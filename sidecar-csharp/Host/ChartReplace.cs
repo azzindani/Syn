@@ -129,10 +129,35 @@ namespace Syn.Sidecar
             dynamic rng = sws.Range[srcAddr];
             int rows = (int)rng.Rows.Count, cols = (int)rng.Columns.Count;
             const int xlXYScatter = -4169;
+            var warn = EmptyTextNote(rng, type);
+            // Years across the top, one entity per row (country, product, site):
+            // Excel takes the numeric header row as data, so the years came out
+            // as a line at 2,000 with each name a series of its own, and the
+            // real lines flattened to nothing beneath. That chart was then
+            // embedded in a report and a deck as it was.
+            if (type != xlXYScatter && rows >= 2 && cols >= 3 && HeaderRowIsLabels(rng, rows, cols))
+            {
+                dynamic hdr = rng.Offset(0, 1).Resize(1, cols - 1);
+                // Series built one by one, after the old ones are gone. On a chart
+                // being redrawn, SetSourceData kept the old series' value ranges
+                // (nine cells) under the new fourteen-year labels, so every line
+                // sat five years off its axis.
+                while ((int)chart.SeriesCollection().Count > 0) chart.SeriesCollection(1).Delete();
+                for (var r = 2; r <= rows; r++)
+                {
+                    dynamic s = chart.SeriesCollection().NewSeries();
+                    s.Values = rng.Offset(r - 1, 1).Resize(1, cols - 1);
+                    s.XValues = hdr;
+                    try { s.Name = "=" + (string)rng.Cells[r, 1].Address(true, true, 1, true); } catch (COMException) { }
+                }
+                var first = Convert.ToString(rng.Cells[1, 2].Value2, CultureInfo.InvariantCulture);
+                var last = Convert.ToString(rng.Cells[1, cols].Value2, CultureInfo.InvariantCulture);
+                return $"; its header row ({first} to {last}) is the axis labels, not plotted; each row of the table is a line named by its first column{warn}";
+            }
             if (type == xlXYScatter || cols < 2 || rows < 3 || !FirstColumnIsLabels(rng, rows))
             {
                 chart.SetSourceData(rng);
-                return "";
+                return warn;
             }
             string head = "";
             try { head = (string)rng.Cells[1, 1].Text; } catch (COMException) { }
@@ -141,7 +166,52 @@ namespace Syn.Sidecar
             chart.SetSourceData(values, 2); // xlColumns: one series per column
             int n = (int)chart.SeriesCollection().Count;
             for (var i = 1; i <= n; i++) chart.SeriesCollection(i).XValues = cats;
-            return $"; its first column ({(head.Length > 0 ? head : "A")}) is the axis labels, not plotted";
+            return $"; its first column ({(head.Length > 0 ? head : "A")}) is the axis labels, not plotted{warn}";
+        }
+
+        /// <summary>Cells holding empty text ("", what =IF(x,y,"") gives for
+        /// "no data"). A line plots them as 0, not as gaps: a chart of renewable
+        /// share put two countries at 0% for the years before they reported,
+        /// and Excel said nothing. Only line charts, where it misleads.</summary>
+        private static string EmptyTextNote(dynamic rng, int type)
+        {
+            if (type != 4 && type != 65) return "";
+            try
+            {
+                if (rng.Value2 is not object[,] a) return "";
+                var n = 0;
+                foreach (var v in a) if (v is string t && t.Length == 0) n++;
+                return n == 0 ? "" :
+                    $"; WARNING: {n.ToString(CultureInfo.InvariantCulture)} cell(s) in the source hold empty text (\"\"), which a line plots as 0, not as a gap: " +
+                    "leave them truly empty, or use =NA() where there is no data";
+            }
+            catch (Exception) { return ""; }
+        }
+
+        /// <summary>A text (or empty) corner, whole rising numbers after it
+        /// across the first row, and no numbers in the first column below it:
+        /// the shape of "countries down, years across".</summary>
+        private static bool HeaderRowIsLabels(dynamic rng, int rows, int cols)
+        {
+            try
+            {
+                if (rng.Cells[1, 1].Value2 is double) return false;
+                if (rng.Rows[1].Value2 is not object[,] h) return false;
+                double last = double.NegativeInfinity;
+                var numbers = 0;
+                for (var c = 2; c <= cols; c++)
+                {
+                    if (h[1, c] is not double d || d != Math.Floor(d) || d <= last) return false;
+                    last = d;
+                    numbers++;
+                }
+                if (numbers < 2) return false;
+                if (rng.Columns[1].Value2 is not object[,] a) return false;
+                for (var r = 2; r <= rows; r++)
+                    if (a[r, 1] is double) return false;
+                return true;
+            }
+            catch (Exception) { return false; }
         }
 
         private static bool FirstColumnIsLabels(dynamic rng, int rows)
@@ -153,12 +223,20 @@ namespace Syn.Sidecar
                 object cells = rng.Columns[1].Value2;
                 if (cells is not object[,] a) return false;
                 double last = double.NegativeInfinity;
+                var numbers = 0;
                 for (var r = 2; r <= rows; r++)
                 {
+                    // A gap marked =NA() (so a line skips the year) reads back as
+                    // a COM integer, not a double. A model that charted years
+                    // with gaps built exactly that helper column, one #N/A broke
+                    // this test, and the years were plotted as a second series
+                    // with the real line flattened beneath them.
+                    if (a[r, 1] is int) continue;
                     if (a[r, 1] is not double d || d != Math.Floor(d) || d <= last) return false;
                     last = d;
+                    numbers++;
                 }
-                return true;
+                return numbers >= 2;
             }
             catch (Exception) { return false; }
         }
@@ -196,6 +274,27 @@ namespace Syn.Sidecar
             _ => "chart",
         };
 
+        /// <summary>A chart whose source lies inside a pivot table is drawn by
+        /// Excel as a PivotChart: it shows every item of the pivot whatever cells
+        /// were named, ignores hidden rows, and follows the slicers. A model was
+        /// asked for "only Canada, Mexico and Saudi Arabia", named the three rows,
+        /// was told the chart was drawn, said it showed the three, and the report
+        /// and deck carried a chart of twenty-five countries.</summary>
+        private static string PivotChartNote(dynamic chart)
+        {
+            try
+            {
+                object layout = chart.PivotLayout;
+                if (layout == null) return "";
+                string pivot = "";
+                try { pivot = " (" + (string)chart.PivotLayout.PivotTable.Name + ")"; } catch (Exception) { }
+                return $"; WARNING: that range is inside a pivot table{pivot}, so Excel drew a PivotChart: it shows every item of the pivot, not just the cells named, " +
+                       "ignores hidden rows, and follows the slicers. To chart only some of the items, copy those rows' numbers to cells outside the pivot " +
+                       "(formulas such as =Sheet!A5 keep them live) and chart that range";
+            }
+            catch (Exception) { return ""; }
+        }
+
         /// <summary>Redraws an existing chart as the new one the call asked
         /// for. If anything fails half way, the chart goes back as it was.</summary>
         private static string RedrawChart(dynamic old, dynamic sws, string kind, int type, string srcSheet, string srcAddr,
@@ -204,6 +303,7 @@ namespace Syn.Sidecar
             var was = CaptureChart(old, dstSheet);
             dynamic chart = old.Chart;
             var note = "";
+            var pivotNote = "";
             try
             {
                 chart.ChartType = type;
@@ -214,6 +314,7 @@ namespace Syn.Sidecar
                     chart.ChartTitle.Text = title;
                 }
                 StyleChart(chart, style);
+                pivotNote = PivotChartNote(chart);
                 old.Left = left; old.Top = top; old.Width = w; old.Height = h;
             }
             catch
@@ -224,7 +325,7 @@ namespace Syn.Sidecar
             return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr} "
                       + $"({Math.Round(w).ToString(CultureInfo.InvariantCulture)}x{Math.Round(h).ToString(CultureInfo.InvariantCulture)}): "
                       + $"it REPLACED the {ChartKindName(was.Type)} chart that was already on those cells ({was.Series.Count} series) "
-                      + "instead of stacking a second chart on it; undo puts the old data, type, title and size back" + note);
+                      + "instead of stacking a second chart on it; undo puts the old data, type, title and size back" + note + pivotNote);
 
             static dynamic wbOf(dynamic shape) => shape.Parent.Parent;
         }

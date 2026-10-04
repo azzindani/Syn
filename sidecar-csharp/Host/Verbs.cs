@@ -272,6 +272,8 @@ namespace Syn.Sidecar
         {
             Snapshot(handle);
             var t = Target((object)wb, selector, "values");
+            var filteredNote = FilteredRowsNote(t.ws, t.rng, handle, (string)t.sheet);
+            if (filteredNote.Length > 0) throw new InvalidOperationException($"values: {filteredNote}");
             // Only what is a formula changes, and the number format stays with
             // the cell, so a date built by DATE() is still a date afterwards.
             double formulas = 0;
@@ -543,11 +545,127 @@ namespace Syn.Sidecar
             return Ok($"page setup for {(string)ws.Name}: {string.Join(", ", did)}");
         }
 
+        // Rows a filter has hidden are skipped by a whole-range write, silently:
+        // a Year column filled down 93,317 rows while a filter was on reached
+        // only the visible ones, the reply said "filled 93,317 cells", the
+        // hidden rows stayed blank, and a total "for 2022" came back 0. The
+        // model then spent 100 steps and two scratch sheets finding out why.
+        // So a write or fill that would cross hidden rows is refused, with the
+        // call that clears the filter.
+        private static string FilteredRowsNote(dynamic ws, dynamic target, string handle, string sheet)
+        {
+            try
+            {
+                if (!(bool)ws.FilterMode) return "";
+                int rows = (int)target.Rows.Count;
+                bool hidden;
+                // xlCellTypeVisible 12. Past a few thousand separate stretches
+                // Excel refuses to answer, which itself means rows are hidden.
+                try { hidden = (int)target.Columns[1].SpecialCells(12).Count < rows; }
+                catch (COMException) { hidden = true; }
+                if (!hidden) return "";
+                dynamic af = null, fr = null;
+                if ((bool)ws.AutoFilterMode) { af = ws.AutoFilter; fr = af.Range; }
+                else
+                {
+                    int lc = (int)ws.ListObjects.Count;
+                    for (var k = 1; k <= lc; k++)
+                    {
+                        try { if ((bool)ws.ListObjects[k].AutoFilter.FilterMode) { af = ws.ListObjects[k].AutoFilter; fr = af.Range; break; } }
+                        catch (COMException) { }
+                    }
+                }
+                string col = "", range = "";
+                var others = 0;
+                if (af != null)
+                {
+                    range = (string)fr.Address(false, false);
+                    int nf = (int)af.Filters.Count;
+                    for (var i = 1; i <= nf; i++)
+                    {
+                        if (!(bool)af.Filters[i].On) continue;
+                        if (col.Length == 0) col = Convert.ToString(fr.Cells[1, i].Value2) ?? "";
+                        else others++;
+                    }
+                }
+                var clear = col.Length == 0 ? "clear the filter" :
+                    $"clear it with struct {{\"handle\":\"{handle}\",\"verb\":\"filter\",\"selector\":\"{SheetRef(sheet)}!{range}\",\"name\":\"{col.Replace("\"", "'")}\",\"rule\":\"\"}}" +
+                    (others > 0 ? $" ({others} more filtered column(s) to clear the same way)" : "");
+                return $"rows in {SheetRef(sheet)} are hidden by a filter, and a write over a range that includes them skips them without saying so, " +
+                       $"so only the visible rows would change. Nothing was changed. Clear the filter first ({clear}), then repeat this call";
+            }
+            catch (COMException) { return ""; }
+        }
+
+        // Number formats are written the en-US way by everyone who calls Syn:
+        // #,##0.00, 0.0%. Excel on a machine whose separators are a decimal
+        // comma and a dot for thousands takes the NumberFormat property in the
+        // machine's own separators whatever the calling thread's culture, so
+        // "0.0%" was stored as "#.#00%" and "€#,##0.00" showed 1234.5 as
+        // "€1234,5000": in two 50-turn sessions on one machine every percent,
+        // thousands and euro format a model set came out wrong, and each
+        // reply said it was done. NumberFormatLocal takes it in the machine's
+        // separators, so the format is converted to them first. Where the
+        // separators are already . and , nothing changes.
+        private static void SetNumberFormat(dynamic wb, dynamic rng, string format)
+        {
+            string dec = ".", thou = ",";
+            try
+            {
+                dec = (string)wb.Application.International[3];   // xlDecimalSeparator
+                thou = (string)wb.Application.International[4];  // xlThousandsSeparator
+            }
+            catch (Exception) { }
+            if (dec == "." && thou == ",") { rng.NumberFormat = format; return; }
+            rng.NumberFormatLocal = LocalNumberFormat(format, dec, thou);
+        }
+
+        /// <summary>An en-US number format written with another machine's
+        /// decimal and thousands separators. Text in quotes, anything after a
+        /// backslash and [bracketed] parts (colours, conditions, locale codes)
+        /// are left as written.</summary>
+        internal static string LocalNumberFormat(string format, string dec, string thou)
+        {
+            var sb = new System.Text.StringBuilder(format.Length + 4);
+            for (var i = 0; i < format.Length; i++)
+            {
+                var c = format[i];
+                if (c == '\\' && i + 1 < format.Length) { sb.Append(c).Append(format[++i]); continue; }
+                if (c == '"' || c == '[')
+                {
+                    var end = format.IndexOf(c == '"' ? '"' : ']', i + 1);
+                    if (end < 0) end = format.Length - 1;
+                    sb.Append(format, i, end - i + 1);
+                    i = end;
+                    continue;
+                }
+                sb.Append(c == '.' ? dec : c == ',' ? thou : c.ToString());
+            }
+            return sb.ToString();
+        }
+
+        // The file a picture verb places. An export that failed leaves an empty
+        // file, and PowerPoint takes a 0-byte PNG without complaint: a slide
+        // came out with a picture frame holding no image while the reply said
+        // "Inserted a picture", and the model then told the user the chart was
+        // in. Nothing under eight bytes is an image in any format Office
+        // reads, so that is refused here, naming the likely cause.
+        private static string ImageFile(string path)
+        {
+            var full = Path.GetFullPath(path);
+            if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
+            if (new FileInfo(full).Length < 8)
+                throw new InvalidOperationException(
+                    $"{Path.GetFileName(full)} is empty, so there is no picture to place. The export that wrote it " +
+                    "drew nothing: a chart with no plottable data (check its source with read), or one over hidden rows. " +
+                    "Fix the chart, export again, and place the new file");
+            return full;
+        }
+
         private static string SheetPicture(dynamic wb, string handle, string selector, string path)
         {
             Snapshot(handle);
-            var full = Path.GetFullPath(path);
-            if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
+            var full = ImageFile(path);
             var (sheet, addr) = SplitRange(selector ?? "");
             if (string.IsNullOrEmpty(addr))
                 throw new InvalidOperationException("a picture on a sheet needs the range it fills in `selector`, like Dashboard!A1:H16");
@@ -746,9 +864,13 @@ namespace Syn.Sidecar
             }
             var (a, b) = ParaSpan((object)doc, selector, "delete");
             dynamic r = doc.Range(doc.Paragraphs[a + 1].Range.Start, doc.Paragraphs[b + 1].Range.End);
+            var held = InlineMarks(r);
             r.Delete();
             doc.Saved = false;
-            return Ok($"deleted {(a == b ? $"p{a}" : $"p{a} to p{b}")}; the paragraphs after moved up, so p{a} is now what followed");
+            // A figure is a paragraph with no words in it. Said in the reply, so
+            // taking one out by mistake is seen the turn it happens.
+            var lost = held.Length == 0 ? "" : $". WARNING: that took out {held} with it; `undo` puts it back";
+            return Ok($"deleted {(a == b ? $"p{a}" : $"p{a} to p{b}")}; the paragraphs after moved up, so p{a} is now what followed{lost}");
         }
 
         private static string WordFind(dynamic doc, string text)

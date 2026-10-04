@@ -285,7 +285,10 @@ PIVOT
 row and column fields are HEADER NAMES from the source, not cell addresses.
 It groups a column's values exactly as they are and CANNOT group dates into
 months or years — if you want a monthly view, pivot on a column that already
-holds the month, or total with SUMIFS. One value field per pivot.
+holds the month, or total with SUMIFS. One value field per pivot. It has no
+top-N filter: a pivot lists every item, and rows hidden to show only the first
+few stay hidden by position, so a slicer that re-lays the pivot out hides the
+wrong items.
 
 HOW A PIVOT TOTALS: `values` is summed when it is a column of numbers and
 COUNTED when it is a column of text, and the reply says which. `rule` picks it:

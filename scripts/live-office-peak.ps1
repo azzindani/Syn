@@ -114,6 +114,35 @@ function Step([string]$label, [string]$tool, [hashtable]$arguments, [string]$Exp
     return $text
 }
 
+# A check on something Syn does not report, such as the XML in a saved file.
+function Verify([string]$label, [bool]$ok, [string]$text) {
+    $flat = ($text -replace '\s+', ' ').Trim()
+    if ($flat.Length -gt 170) { $flat = $flat.Substring(0, 170) + '...' }
+    $tag = if ($ok) { 'PASS' } else { 'FAIL' }
+    $colour = if ($ok) { 'Green' } else { 'Red' }
+    Write-Host ("{0}  {1,-44} {2}" -f $tag, $label, $flat) -ForegroundColor $colour
+    [void]$script:results.Add([pscustomobject]@{ Ok = $ok; Label = $label; Text = $text })
+}
+
+# The paragraph styles in the first table of a saved .docx, as 'Heading1=16', or '' for none.
+function TableStyles([string]$docx) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # A copy, because Word still has the original open.
+    $copy = Join-Path ([IO.Path]::GetTempPath()) ('peak-' + [guid]::NewGuid().ToString('N') + '.docx')
+    [IO.File]::Copy($docx, $copy)
+    try {
+        $zip = [IO.Compression.ZipFile]::OpenRead($copy)
+        try {
+            $reader = New-Object IO.StreamReader($zip.GetEntry('word/document.xml').Open())
+            $xml = $reader.ReadToEnd(); $reader.Close()
+        } finally { $zip.Dispose() }
+    } finally { [IO.File]::Delete($copy) }
+    $t = [regex]::Match($xml, '<w:tbl>.*?</w:tbl>', 'Singleline')
+    if (-not $t.Success) { return 'no table' }
+    $names = [regex]::Matches($t.Value, '<w:pStyle w:val="([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
+    ($names | Group-Object | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ','
+}
+
 function Skip([string]$label, [string]$why) {
     Write-Host ("SKIP  {0,-44} {1}" -f $label, $why) -ForegroundColor Yellow
 }
@@ -135,6 +164,9 @@ Step '  West is first, header stayed' 'read' @{ handle = $x; selector = 'Sheet1!
 # Some columns of a table sorted alone would pull them out of line with the rest of each row.
 Step '  sorting only B:C of the table is refused' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Sheet1!B1:C5'; name = 'Q3 Revenue'; rule = 'asc' } -Fails -Expect 'only some of the columns of the table Sheet1!A1:C5' | Out-Null
 Step 'filter Region = North' 'struct' @{ handle = $x; verb = 'filter'; selector = 'Sheet1!A1:C5'; name = 'Region'; rule = 'North' } -Expect '1 row' | Out-Null
+# A write over rows a filter has hidden reached only the visible ones, and said it had filled them all.
+Step '  a fill beside the filtered rows is refused, not done to the visible ones' 'write' @{ handle = $x; selector = 'Sheet1!E2:E5'; values = '=ROW()' } -Fails -Expect 'hidden by a filter.*Nothing was changed' | Out-Null
+Step '  so is values' 'struct' @{ handle = $x; verb = 'values'; selector = 'Sheet1!A2:C5' } -Fails -Expect 'hidden by a filter' | Out-Null
 Step 'clear the filter' 'struct' @{ handle = $x; verb = 'filter'; selector = 'Sheet1!A1:C5'; name = 'Region'; rule = '' } -Expect 'cleared' | Out-Null
 Step 'write a duplicate row' 'write' @{ handle = $x; selector = 'Sheet1!A6:C6'; values = 'West|501200|0.19' } | Out-Null
 Step 'dedupe' 'struct' @{ handle = $x; verb = 'dedupe'; selector = 'Sheet1!A1:C6' } -Expect '5 data row\(s\) before, 4 after' | Out-Null
@@ -193,6 +225,10 @@ Step '  a name that does not exist is refused, with the way out' 'struct' @{ han
 Step 'a two-line note on A1' 'struct' @{ handle = $x; verb = 'comment'; selector = 'Sheet1!A1'; text = "first line`nsecond line" } | Out-Null
 Step 'a link on A8' 'struct' @{ handle = $x; verb = 'link'; selector = 'Sheet1!A8'; text = 'https://example.com'; title = 'Example' } | Out-Null
 Step 'format keys: underline, valign, height' 'format' @{ handle = $x; selector = 'Sheet1!A1:C1'; style = 'underline=1;valign=center;height=24' } | Out-Null
+# Excel read NumberFormat in the machine's own separators where those are not . and ,: 0.0% was stored as #.#00% and a euro format showed 1234.5 as 1234,5000. The reply now says what the cell shows.
+Step 'numbers to format' 'write' @{ handle = $x; selector = 'Sheet1!K1:K2'; values = '1234.5;0.4173' } | Out-Null
+Step '  thousands and two decimals, as written everywhere' 'format' @{ handle = $x; selector = 'Sheet1!K1'; style = 'numberFormat=#,##0.00' } -Expect 'first cell shows 1[.,]234[.,]50\)' | Out-Null
+Step '  a percent with one decimal' 'format' @{ handle = $x; selector = 'Sheet1!K2'; style = 'numberFormat=0.0%' } -Expect 'first cell shows 41[.,]7%\)' | Out-Null
 Step 'a designed table over Copied!B2:D6, in one call' 'struct' @{ handle = $x; verb = 'table'; source = 'Copied!B2:D6'; name = 'Regions'; style = 'Medium 9' } -Expect 'TableStyleMedium9' | Out-Null
 Step '  undo: the table is cells again' 'undo' @{ handle = $x } -Expect 'undid' | Out-Null
 Step '  a Word table style is refused for Excel' 'struct' @{ handle = $x; verb = 'table'; source = 'Copied!B2:D6'; name = 'Regions'; style = 'Grid Table 4 - Accent 1' } -Fails -Expect 'TableStyleMedium1-28' | Out-Null
@@ -205,8 +241,8 @@ Step 'doughnut chart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'doughnut'
 # is only one), and the field is any column of the source, not only one the
 # pivot shows. Growth is not in this pivot.
 Step 'pivot: revenue by region' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Q3 Revenue'; at = 'Copied!A20' } -Expect 'sum of Q3 Revenue by Region' | Out-Null
-Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Growth'; at = 'Copied!F34' } -Expect 'slicer on Growth' | Out-Null
-Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region' | Out-Null
+Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Growth'; at = 'Copied!F34' } -Expect 'slicer on Growth at Copied!F34, covering F34:' | Out-Null
+Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region.*WARNING: it overlaps' | Out-Null
 Step '  the same field again is refused in words' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!L34' } -Fails -Expect 'already has a slicer on Region' | Out-Null
 Step '  the same field on another sheet joins the slicer, linked' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Sheet1!K1' } -Expect 'linked to it' | Out-Null
 Step '  undo the linked slicer' 'undo' @{ handle = $x } -Expect 'undid slicer' | Out-Null
@@ -222,6 +258,14 @@ Step '  and by its row labels' 'struct' @{ handle = $x; verb = 'sort'; selector 
 Step '  a column it does not have is refused, naming what it can sort by' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Nope'; rule = 'desc' } -Fails -Expect 'sorts its rows by its totals' | Out-Null
 Step '  undo the label sort' 'undo' @{ handle = $x } -Expect 'undid sort' | Out-Null
 Step '  undo the totals sort' 'undo' @{ handle = $x } -Expect 'undid sort' | Out-Null
+# A range written as the formula (=Sheet1!A2:A5) is ONE array that spills; it cannot be sorted or deleted by the piece. The write says so, and values makes it plain.
+Step 'a range as a formula in one cell says it became one array' 'write' @{ handle = $x; selector = 'Copied!AQ1'; values = '=Sheet1!A2:A5' } -Expect 'WARNING: that formula returns several values.*ONE array formula' | Out-Null
+Step 'the same formula filled over several cells says every one shows #SPILL!' 'write' @{ handle = $x; selector = 'Copied!AS1:AS4'; values = '=Sheet1!A2:A5' } -Expect 'WARNING: that formula returns several values.*#SPILL!' | Out-Null
+Step '  values turns the whole block into plain cells' 'struct' @{ handle = $x; verb = 'values'; selector = 'Copied!AQ1:AQ4' } -Expect 'converted' | Out-Null
+Step '  one formula per row, written for the first row, raises no warning' 'write' @{ handle = $x; selector = 'Copied!AR1:AR4'; values = '=Sheet1!A2' } -Expect '^Wrote Copied!AR1:AR4(?![\s\S]*ONE array)' | Out-Null
+# A chart over cells inside a pivot is a PivotChart: it shows every item and ignores the cells named. The reply now says so.
+Step 'a chart over cells inside a pivot says it is a PivotChart' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!A20:B26'; at = 'Copied!AN1:AU16'; title = 'Pivot' } -Expect 'WARNING: that range is inside a pivot table.*PivotChart' | Out-Null
+Step '  undo it' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
 Step 'export the charts as png' 'export' @{ handle = $x; format = 'png'; path = (Join-Path $out 'peak-charts.png') } | Out-Null
 $png = Get-ChildItem $out -Filter 'peak-charts*.png' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($png) {
@@ -258,6 +302,22 @@ Step '  charted as it is, the years are the axis' 'struct' @{ handle = $x; verb 
 Step '  deleting the counts says which chart reads them' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copied!T:T' } -Expect 'WARNING: 1 chart\(s\) read from these cells' | Out-Null
 Step '  undo puts the cells back' 'undo' @{ handle = $x } -Expect 'undid delete' | Out-Null
 Step '  and undo the chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+# Years across the top and a name down the side: the numeric header row was plotted as data, and each name became a series.
+Step 'a wide table: names down, years across' 'write' @{ handle = $x; selector = 'Copied!S30:V32'; values = 'Region|2019|2020|2021;North|1|=T(1)|3;South|2|3|5' } | Out-Null
+Step '  charted as it is, the header row is the axis' 'struct' @{ handle = $x; verb = 'chart'; kind = 'line'; source = 'Copied!S30:V32'; at = 'Copied!AE1:AL16'; title = 'Wide' } -Expect 'header row \(2019 to 2021\) is the axis labels.*WARNING: 1 cell\(s\).*empty text' | Out-Null
+Step '  undo the wide chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+# A year column with a gap marked =NA() (so a line skips it) is still the axis: the #N/A read back as a COM integer and failed the test.
+Step 'years with a gap marked #N/A' 'write' @{ handle = $x; selector = 'Copied!S10:T15'; values = 'Year|Count;2019|5;=NA()|9;2021|14;2022|20;2023|31' } | Out-Null
+Step '  an #N/A in the year column does not make the years data' 'struct' @{ handle = $x; verb = 'chart'; kind = 'line'; source = 'Copied!S10:T15'; at = 'Copied!V20:AC34'; title = 'With a gap' } -Expect 'first column \(Year\) is the axis labels' | Out-Null
+Step '  undo the gap chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+# A chart plots visible cells only: hiding its data blanked a chart on its sheet and on the dashboard, and said only "formatted".
+Step '  a chart to hide the data of' 'struct' @{ handle = $x; verb = 'chart'; kind = 'line'; source = 'Copied!S10:T15'; at = 'Copied!V20:AC34'; title = 'Hidden soon' } -Expect 'line chart at' | Out-Null
+Step '  hiding the columns it reads names the chart' 'format' @{ handle = $x; selector = 'Copied!S:T'; style = 'hidden=1' } -Expect 'WARNING: 1 chart\(s\) read from these cells' | Out-Null
+Step '  exporting it reports a chart that drew nothing' 'export' @{ handle = $x; format = 'png'; path = (Join-Path $out 'peak-blank.png') } -Expect 'drew nothing and were NOT exported' | Out-Null
+Step '  show the columns again' 'format' @{ handle = $x; selector = 'Copied!S:T'; style = 'hidden=0' } -Expect 'hidden' | Out-Null
+Step '  undo showing them' 'undo' @{ handle = $x } -Expect 'undid format' | Out-Null
+Step '  undo hiding them' 'undo' @{ handle = $x } -Expect 'undid format' | Out-Null
+Step '  undo the chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
 Step 'a chart in green, by name' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; title = 'Green'; style = 'color=green' } -Expect 'column chart at' | Out-Null
 Step '  recoloured by redrawing it, in hex' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; title = 'Green'; style = 'color=#1F4E79' } -Expect 'REPLACED' | Out-Null
 Step '  a colour that is not one is refused, with the ones it knows' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; style = 'color=chartreuse' } -Fails -Expect 'six-digit hex' | Out-Null
@@ -302,7 +362,7 @@ Step '  the body is p1 again' 'read' @{ handle = $w; selector = 'p1' } -Expect '
 Step 'a bullet (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Bullet'; text = 'first point' } -Expect '\[List Bullet\]' | Out-Null
 Step 'a numbered item (built-in style)' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'List Number'; text = 'step one' } -Expect '\[List Number\]' | Out-Null
 Step 'a paragraph to undo' 'struct' @{ handle = $w; verb = 'insertParagraph'; text = 'undo me please' } | Out-Null
-Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid insertParagraph' | Out-Null
+Step '  undo it (Word''s own undo, one record)' 'undo' @{ handle = $w } -Expect 'undid the insertParagraph; ' | Out-Null
 Step '  it is gone, step one is not' 'read' @{ handle = $w; selector = 'body' } -Expect '^(?![\s\S]*undo me please)[\s\S]*step one' | Out-Null
 Step 'sort on a document is refused, with the list' 'struct' @{ handle = $w; verb = 'sort'; selector = 'p1'; name = 'x' } -Fails -Expect 'Excel only.*insertParagraph' | Out-Null
 Step 'a table before p1' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Site|Score;North|3;South|4'; at = 'p1' } -Expect 'table t1 added, 3x2.*as p1:p\d+' | Out-Null
@@ -314,8 +374,22 @@ Step '  its second column' 'format' @{ handle = $w; selector = 't1.c2'; style = 
 Step '  a table key on a row is refused' 'format' @{ handle = $w; selector = 't1.r1'; style = 'banded=1' } -Fails -Expect 'whole table' | Out-Null
 Step 'format a range of paragraphs' 'format' @{ handle = $w; selector = 'p0:p1'; style = 'spaceAfter=6' } -Expect 'p0:p1' | Out-Null
 Step 'a real chart from the workbook' 'struct' @{ handle = $w; verb = 'embedChart'; from = $x; source = 'Copied!1'; name = '400' } -Expect 'a chart linked to the workbook' | Out-Null
+# Word gives a figure's paragraph the text "/", so it read as a stray slash and a model tidying "blank" paragraphs deleted a chart.
+$figRead = Step '  a chart reads as [chart], not a stray slash' 'read' @{ handle = $w; selector = 'body' } -Expect 'p\d+(?: \[[^\]]+\])?: \[chart\]'
+if ($figRead -match 'p(\d+)(?: \[[^\]]+\])?: \[chart\]') {
+    Step '  deleting its paragraph says a chart went with it' 'struct' @{ handle = $w; verb = 'delete'; selector = "p$($Matches[1])" } -Expect 'WARNING: that took out \[chart\]' | Out-Null
+    Step '  undo brings the chart back' 'undo' @{ handle = $w } -Expect 'undid the delete' | Out-Null
+    Step '  and it reads as a chart again' 'read' @{ handle = $w; selector = 'body' } -Expect 'p\d+(?: \[[^\]]+\])?: \[chart\]' | Out-Null
+} else { Skip '  delete a chart paragraph, then undo' 'the chart did not read back as [chart]' }
 Step '  a chart past the last is refused' 'struct' @{ handle = $w; verb = 'embedChart'; from = $x; source = 'Copied!40' } -Fails -Expect 'chart\(s\)' | Out-Null
 Step '  a workbook never opened is refused' 'struct' @{ handle = $w; verb = 'embedChart'; from = 'excel:nothere.xlsx:workbook'; source = 'Copied!1' } -Fails -Expect 'nothere' | Out-Null
+# Tables.Add copies the paragraph at the insertion point, so a table put in front of a heading came out Heading 1 in every cell
+# (EV r9: 44 of them, and the first fix passed a step that only read "table t1 added"). The summary skips table cells, so look at the saved file.
+Step 'a heading for a table to go in front of' 'struct' @{ handle = $w; verb = 'insertParagraph'; name = 'Heading 1'; text = 'Fence heading'; at = 'p1' } -Expect '\[Heading 1\]' | Out-Null
+Step '  a table placed in front of that heading' 'struct' @{ handle = $w; verb = 'insertTable'; rows = 'Zone|Count;East|5;West|7'; at = 'p1' } -Expect 'table t1 added, 3x2' | Out-Null
+Step '  save it, so the file can be looked at' 'struct' @{ handle = $w; verb = 'save' } -Expect 'saved' | Out-Null
+$cellStyles = TableStyles (Join-Path $docs 'report.docx')
+Verify '  its cells carry no heading style' ($cellStyles -notmatch 'Heading') "cell paragraph styles: $(if ($cellStyles) { $cellStyles } else { 'none (all Normal)' })"
 Step 'find Placeholder' 'struct' @{ handle = $w; verb = 'find'; text = 'Placeholder' } -Expect 'paragraph' | Out-Null
 Step 'replace Placeholder with Draft' 'struct' @{ handle = $w; verb = 'replace'; text = 'Placeholder'; with = 'Draft' } -Expect '1 time' | Out-Null
 Step 'a two-line comment on p0' 'struct' @{ handle = $w; verb = 'comment'; selector = 'p0'; text = "check this`nand this" } | Out-Null
@@ -346,6 +420,10 @@ $pn = 'ppt:peak-new.pptx:deck'
 Step 'create a new deck' 'open' @{ app = 'powerpoint'; path = (Join-Path $out 'peak-new.pptx'); create = $true } -Expect '^Created in PowerPoint' | Out-Null
 Step '  a title slide in it' 'struct' @{ handle = $pn; verb = 'createSlide'; name = 'title'; title = 'New deck' } | Out-Null
 Step '  it reads back' 'read' @{ handle = $pn; selector = 'deck' } -Expect 's1: New deck' | Out-Null
+# A failed export leaves an empty file, and PowerPoint takes it as a picture frame with no image in it.
+$emptyPng = Join-Path $out 'peak-empty.png'
+[IO.File]::WriteAllBytes($emptyPng, [byte[]]@())
+Step '  an empty picture file is refused, not placed blank' 'struct' @{ handle = $pn; verb = 'picture'; selector = 's1'; name = '70,120,300,200'; text = $emptyPng } -Fails -Expect 'is empty' | Out-Null
 if ($png) {
     Step '  a picture on its slide' 'struct' @{ handle = $pn; verb = 'picture'; selector = 's1'; name = '70,120,300,200'; text = $png.FullName } -Expect 'picture on s1' | Out-Null
     Step '  the same place again replaces it, never stacks' 'struct' @{ handle = $pn; verb = 'picture'; selector = 's1'; name = '70,120,300,200'; text = $png.FullName } -Expect 'REPLACED 1 picture' | Out-Null

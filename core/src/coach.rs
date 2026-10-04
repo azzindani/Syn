@@ -71,6 +71,17 @@ pub const RULES: &[Rule] = &[
         advice: "Excel is busy: usually a cell is still being edited or a dialog is open. Ask the user to press Esc in Excel, then repeat the call.",
         mcp: None,
     },
+    Rule {
+        // Excel's own words, seen seven times in one turn on a `chart` call
+        // that drew fine on the same workbook afterwards: the call was
+        // refused with nothing to act on, and the run spent about 85 steps
+        // finding a way round it.
+        needle: "This object is no longer valid",
+        from: "com",
+        apps: &["excel"],
+        advice: "Excel let go of an object this call needed (a chart, slicer or pivot that was changed or replaced a moment ago). Nothing was changed. Read what the workbook holds now with export format=summary, then repeat the call once. If it is refused again, put a copy of the data on the sheet the chart is going to and draw it from there.",
+        mcp: None,
+    },
     // ---- the application went away -------------------------------------
     Rule {
         // RPC_S_SERVER_UNAVAILABLE: the process is gone.
@@ -174,6 +185,17 @@ pub const RULES: &[Rule] = &[
         from: "com",
         apps: &["excel"],
         advice: "Excel could not change the page setup. It asks the printer for every page setting, so this usually means no printer is installed; ask the user to add one (Microsoft Print to PDF is enough), then repeat the call.",
+        mcp: None,
+    },
+    Rule {
+        // Excel's own words, on a sort or delete over cells a formula fills as
+        // one block. Eight refusals in two sessions came back with the generic
+        // advice below (formula syntax, protected sheet), which was not the
+        // cause, so it is matched before that one.
+        needle: "change part of an array",
+        from: "com",
+        apps: &["excel"],
+        advice: "A cell in that range belongs to an array formula (one formula that fills a block of cells, such as =routes!A2:A61, or a spilled UNIQUE, FILTER or SORT), and Excel will not sort, delete or edit a piece of one. Nothing was changed. Turn the whole block into plain values first (struct verb values over all the cells it fills), then repeat the call. For one formula per row next time, write it for the first row alone, like =routes!A2, and fill it down.",
         mcp: None,
     },
     Rule {
@@ -322,6 +344,8 @@ mod tests {
         let cases = [
             ("excel", "live app refused the op: com 0x800A03EC: Exception from HRESULT: 0x800A03EC", "English with commas"),
             ("excel", "live app refused the op: com 0x800AC472: Exception from HRESULT: 0x800AC472", "press Esc"),
+            ("excel", "live app refused the op: com 0x800A03EC: You can't change part of an array.", "array formula"),
+            ("excel", "live app refused the op: com: This object is no longer valid.", "export format=summary"),
             ("excel", "live app refused the op: modal dialog or busy app: human confirm required (call cancelled after 15000ms, app untouched)", "close the dialog"),
             ("word", "live app refused the op: com 0x800A1066: Command failed", "Protected View"),
             ("excel", "live app refused the op: com 0x800A03EC: The cell or chart you're trying to change is on a protected sheet.", "Unprotect"),

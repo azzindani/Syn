@@ -715,6 +715,7 @@ fn main() {
                     cols: cols.into(),
                     values: values.into(),
                     at: at.into(),
+                    rule: String::new(),
                 });
                 run_op(&mut runner, &mut relay, h, "pivot", call);
             }

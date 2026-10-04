@@ -60,7 +60,7 @@ namespace Syn.Sidecar
                 if (!addr.Contains(':')) addr = $"{addr}:{addr}";
             }
             dynamic ws = Sheet(wb, sheet);
-            return (ws, ws.Range[addr], kind, sheet, addr);
+            return (ws, RangeOf((object)ws, addr), kind, sheet, addr);
         }
 
         /// Quote a sheet name the way a selector needs it.
@@ -124,10 +124,19 @@ namespace Syn.Sidecar
                 }
             }
             catch (Exception) { }
+            // Charts keep references, not numbers: say which ones read from what
+            // is about to go (ChartDeps.cs).
+            var chartWarning = "";
+            try
+            {
+                dynamic gone = t.kind == "rows" ? t.rng.EntireRow : t.kind == "columns" ? t.rng.EntireColumn : t.rng;
+                chartWarning = ChartWarning(ChartsReadingFrom((object)wb, (string)t.sheet, (object)gone));
+            }
+            catch (Exception) { }
             if (t.kind == "rows") t.rng.EntireRow.Delete();
             else if (t.kind == "columns") t.rng.EntireColumn.Delete();
             else t.rng.Delete(xlShiftUp);
-            return Ok($"deleted {t.kind} {SheetRef(t.sheet)}!{t.addr}{held}; what was after them moved {(t.kind == "columns" ? "left" : "up")}");
+            return Ok($"deleted {t.kind} {SheetRef(t.sheet)}!{t.addr}{held}; what was after them moved {(t.kind == "columns" ? "left" : "up")}{chartWarning}");
         }
 
         private static string ExcelSort(dynamic wb, string handle, string selector, string header, string order)
@@ -407,11 +416,14 @@ namespace Syn.Sidecar
                     // Delete asks first when alerts are on. Off for this one
                     // call, then back to whatever they were.
                     dynamic app = wb.Application;
+                    // Charts on other sheets that read from this one lose their data
+                    // with it: said in the reply (ChartDeps.cs).
+                    var chartWarning = ChartWarning(ChartsReadingFrom((object)wb, (string)ws.Name, null));
                     bool alerts = app.DisplayAlerts;
                     app.DisplayAlerts = false;
                     try { ws.Delete(); }
                     finally { app.DisplayAlerts = alerts; }
-                    return Ok($"sheet {sheetName} deleted");
+                    return Ok($"sheet {sheetName} deleted{chartWarning}");
                 }
                 case "copy":
                 {

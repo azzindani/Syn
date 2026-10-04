@@ -97,13 +97,94 @@ namespace Syn.Sidecar
             foreach (var f in st.Series)
             {
                 dynamic s = c.SeriesCollection().NewSeries();
-                s.Formula = f;
+                // Name, Values and XValues, not `.Formula`: a series given its
+                // references through Formula left Excel refusing Worksheet.Copy of
+                // the sheet it reads ("Unable to get the Copy property"), which is
+                // what undoing the deletion of that sheet needs.
+                var parts = SplitSeriesFormula(f);
+                if (parts == null) { s.Formula = f; continue; }
+                var (name, cats, values) = parts.Value;
+                if (values.Length > 0) s.Values = "=" + values;
+                if (cats.Length > 0) s.XValues = "=" + cats;
+                if (name.Length > 0) s.Name = name.StartsWith('"') ? name.Trim('"') : "=" + name;
             }
             c.ChartType = st.Type;
             c.HasTitle = st.HasTitle;
             if (st.HasTitle) c.ChartTitle.Text = st.Title;
             try { c.HasLegend = st.HasLegend; } catch (COMException) { }
             shape.Left = st.Left; shape.Top = st.Top; shape.Width = st.Width; shape.Height = st.Height;
+        }
+
+        /// <summary>Feeds a chart its source. A first column of whole numbers
+        /// that only go up (years, months, ranks) is the axis labels, not a
+        /// series: Excel's own rule plots a numeric first column as data, so a
+        /// chart "of vehicles by model year" came out with the years as a row
+        /// of identical bars beside the counts and an axis reading 1 to 15, and
+        /// a model that could not fix it built a helper copy of the table,
+        /// charted that, then deleted it. A first column of text, a scatter
+        /// chart, or anything that is not strictly rising whole numbers is left
+        /// to Excel as before. Returns a sentence for the reply, or nothing.</summary>
+        private static string SetChartData(dynamic chart, dynamic sws, string srcAddr, int type)
+        {
+            dynamic rng = sws.Range[srcAddr];
+            int rows = (int)rng.Rows.Count, cols = (int)rng.Columns.Count;
+            const int xlXYScatter = -4169;
+            if (type == xlXYScatter || cols < 2 || rows < 3 || !FirstColumnIsLabels(rng, rows))
+            {
+                chart.SetSourceData(rng);
+                return "";
+            }
+            string head = "";
+            try { head = (string)rng.Cells[1, 1].Text; } catch (COMException) { }
+            dynamic values = rng.Offset(0, 1).Resize(rows, cols - 1);
+            dynamic cats = rng.Offset(1, 0).Resize(rows - 1, 1);
+            chart.SetSourceData(values, 2); // xlColumns: one series per column
+            int n = (int)chart.SeriesCollection().Count;
+            for (var i = 1; i <= n; i++) chart.SeriesCollection(i).XValues = cats;
+            return $"; its first column ({(head.Length > 0 ? head : "A")}) is the axis labels, not plotted";
+        }
+
+        private static bool FirstColumnIsLabels(dynamic rng, int rows)
+        {
+            try
+            {
+                object header = rng.Cells[1, 1].Value2;
+                if (header is double) return false;
+                object cells = rng.Columns[1].Value2;
+                if (cells is not object[,] a) return false;
+                double last = double.NegativeInfinity;
+                for (var r = 2; r <= rows; r++)
+                {
+                    if (a[r, 1] is not double d || d != Math.Floor(d) || d <= last) return false;
+                    last = d;
+                }
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>=SERIES(name, categories, values, order) split into its
+        /// first three arguments, or null when it does not look like that.
+        /// Commas inside quotes or parentheses do not split.</summary>
+        private static (string name, string cats, string values)? SplitSeriesFormula(string f)
+        {
+            var t = f.Trim();
+            if (!t.StartsWith("=SERIES(", StringComparison.OrdinalIgnoreCase) || !t.EndsWith(')')) return null;
+            var inner = t["=SERIES(".Length..^1];
+            var args = new List<string>();
+            var sb = new System.Text.StringBuilder();
+            int depth = 0; bool quoted = false;
+            foreach (var ch in inner)
+            {
+                if (ch == '"') quoted = !quoted;
+                if (!quoted && ch == '(') depth++;
+                if (!quoted && ch == ')') depth--;
+                if (!quoted && depth == 0 && ch == ',') { args.Add(sb.ToString().Trim()); sb.Clear(); continue; }
+                sb.Append(ch);
+            }
+            args.Add(sb.ToString().Trim());
+            if (args.Count < 3) return null;
+            return (args[0], args[1], args[2]);
         }
 
         /// <summary>What kind of chart an Excel ChartType is, in the words
@@ -122,10 +203,11 @@ namespace Syn.Sidecar
         {
             var was = CaptureChart(old, dstSheet);
             dynamic chart = old.Chart;
+            var note = "";
             try
             {
                 chart.ChartType = type;
-                chart.SetSourceData(sws.Range[srcAddr]);
+                note = SetChartData(chart, sws, srcAddr, type);
                 if (!string.IsNullOrWhiteSpace(title))
                 {
                     chart.HasTitle = true;
@@ -142,7 +224,7 @@ namespace Syn.Sidecar
             return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr} "
                       + $"({Math.Round(w).ToString(CultureInfo.InvariantCulture)}x{Math.Round(h).ToString(CultureInfo.InvariantCulture)}): "
                       + $"it REPLACED the {ChartKindName(was.Type)} chart that was already on those cells ({was.Series.Count} series) "
-                      + "instead of stacking a second chart on it; undo puts the old data, type, title and size back");
+                      + "instead of stacking a second chart on it; undo puts the old data, type, title and size back" + note);
 
             static dynamic wbOf(dynamic shape) => shape.Parent.Parent;
         }

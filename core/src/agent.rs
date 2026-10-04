@@ -215,14 +215,56 @@ const BUDGET_SPENT: &str = "MAXIMUM STEPS REACHED. The step budget for this task
 4. what the next run should do first.
 Be specific. Someone who cannot see this transcript has to pick the work up from your answer alone.";
 
-/// Today, as `YYYY-MM-DD`, from the system clock.
+/// Today, as `YYYY-MM-DD`: the person's own date, the one on their clock.
+///
+/// It used to be the UTC date, and a model asked for "today's date" in a
+/// document header wrote 3 October on a machine at UTC+7 where it was already
+/// the 4th, from midnight until seven in the morning. `std` has no time zone,
+/// so Windows asks for its local time (one call, no crate, as `auth.rs` does
+/// for DPAPI), elsewhere `date +%F` answers, and only if that fails does the
+/// UTC date below stand in.
+fn today() -> String {
+    local_today().unwrap_or_else(utc_today)
+}
+
+#[cfg(windows)]
+fn local_today() -> Option<String> {
+    #[repr(C)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        millis: u16,
+    }
+    unsafe extern "system" {
+        fn GetLocalTime(out: *mut SystemTime);
+    }
+    let mut t = SystemTime { year: 0, month: 0, day_of_week: 0, day: 0, hour: 0, minute: 0, second: 0, millis: 0 };
+    unsafe { GetLocalTime(&mut t) };
+    (t.year >= 2000 && (1..=12).contains(&t.month) && (1..=31).contains(&t.day))
+        .then(|| format!("{:04}-{:02}-{:02}", t.year, t.month, t.day))
+}
+
+#[cfg(not(windows))]
+fn local_today() -> Option<String> {
+    let out = std::process::Command::new("date").arg("+%F").output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    let b = s.as_bytes();
+    (b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b.iter().filter(|c| c.is_ascii_digit()).count() == 8).then_some(s)
+}
+
+/// The UTC date, from the system clock.
 ///
 /// `core` has no dependencies and `std` has no calendar, so this is
 /// Howard Hinnant's `civil_from_days` -- the standard shift-the-epoch-to-
 /// March trick that makes leap years fall out of the arithmetic. Dates
 /// before 1970 cannot occur here (the clock would have to be broken) and
 /// are clamped rather than handled.
-fn today() -> String {
+fn utc_today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -2188,6 +2230,38 @@ mod tests {
         assert!((2024..2100).contains(&y), "year out of range: {d:?}");
         assert!((1..=12).contains(&m), "month out of range: {d:?}");
         assert!((1..=31).contains(&day), "day out of range: {d:?}");
+    }
+
+    #[test]
+    fn today_is_the_date_on_the_persons_clock_not_the_utc_one() {
+        // The machine's own answer, asked a different way from the code under
+        // test: PowerShell on Windows, `date` elsewhere. Between midnight and
+        // the UTC offset the two dates differ, which is the bug this pins.
+        #[cfg(windows)]
+        let theirs = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-Date -Format yyyy-MM-dd"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        #[cfg(not(windows))]
+        let theirs = std::process::Command::new("date")
+            .arg("+%F")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if theirs.len() == 10 {
+            // A clock that ticks past midnight between the two calls is the one
+            // way these can differ, so the answer may be either side of it.
+            let again = today();
+            assert!(today() == theirs || again == theirs, "today() {} but the machine says {theirs}", today());
+        }
+        // And never more than a day from UTC: no zone is further away.
+        let (l, u) = (today(), utc_today());
+        let days = |d: &str| -> i64 {
+            let p: Vec<i64> = d.split('-').map(|x| x.parse().unwrap()).collect();
+            p[0] * 372 + p[1] * 31 + p[2]
+        };
+        assert!((days(&l) - days(&u)).abs() <= 31 + 1, "local {l} is not within a day of UTC {u}");
     }
 
     #[test]

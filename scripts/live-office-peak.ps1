@@ -162,6 +162,12 @@ Step '  clear it for good' 'struct' @{ handle = $x; verb = 'delete'; selector = 
 # Formulas into the values they show, in place: how a computed column becomes the
 # column. A model once spent 100 steps without this.
 Step 'fill a formula' 'write' @{ handle = $x; selector = 'Copy!N1:N3'; values = '=ROW()*2' } -Expect 'filled' | Out-Null
+# An error cell reads as its name, not as its COM code (-2146826281).
+Step 'an error value' 'write' @{ handle = $x; selector = 'Copy!P1'; values = '=1/0' } | Out-Null
+Step '  reads as #DIV/0!, not a number' 'read' @{ handle = $x; selector = 'Copy!P1' } -Expect '= #DIV/0!' | Out-Null
+Step '  and #N/A' 'write' @{ handle = $x; selector = 'Copy!P2'; values = '=NA()' } | Out-Null
+Step '  reads as #N/A' 'read' @{ handle = $x; selector = 'Copy!P2' } -Expect '= #N/A' | Out-Null
+Step '  clear them' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copy!P1:P2' } | Out-Null
 Step 'values turns formulas into values' 'struct' @{ handle = $x; verb = 'values'; selector = 'Copy!N1:N3' } -Expect 'converted 3 formula' | Out-Null
 Step '  and has nothing left to do' 'struct' @{ handle = $x; verb = 'values'; selector = 'Copy!N1:N3' } -Expect 'nothing to do' | Out-Null
 Step '  the values are what the formulas showed' 'read' @{ handle = $x; selector = 'Copy!N1:N3' } -Expect '2;4;6' | Out-Null
@@ -202,10 +208,15 @@ Step 'pivot: revenue by region' 'struct' @{ handle = $x; verb = 'pivot'; source 
 Step 'slicer on a field the pivot does not show' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Growth'; at = 'Copied!F34' } -Expect 'slicer on Growth' | Out-Null
 Step 'slicer with a name that is no pivot, one pivot' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!H34' } -Expect 'slicer on Region' | Out-Null
 Step '  the same field again is refused in words' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Copied!L34' } -Fails -Expect 'already has a slicer on Region' | Out-Null
+Step '  the same field on another sheet joins the slicer, linked' 'struct' @{ handle = $x; verb = 'slicer'; name = 'my slicer'; rows = 'Region'; at = 'Sheet1!K1' } -Expect 'linked to it' | Out-Null
+Step '  undo the linked slicer' 'undo' @{ handle = $x } -Expect 'undid slicer' | Out-Null
 Step 'a second pivot' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A30' } -Expect 'sum of Growth by Region' | Out-Null
+Step '  a pivot over a text column counts, and says so' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Region'; at = 'Copied!A50' } -Expect 'count of Region by Region \(Region holds text' | Out-Null
+Step '  an average, by rule' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Growth'; at = 'Copied!A60'; rule = 'average' } -Expect 'average of Growth by Region' | Out-Null
+Step '  a sum of text is refused, pointing at count' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Region'; values = 'Region'; at = 'Copied!A70'; rule = 'sum' } -Fails -Expect 'holds no numbers.*rule count' | Out-Null
 Step '  a pivot with a misspelt header is refused, naming the headers, and leaves nothing behind' 'struct' @{ handle = $x; verb = 'pivot'; source = 'Sheet1!A1:C5'; rows = 'Regoin'; values = 'Growth'; at = 'Copied!A40' } -Fails -Expect 'no column headed Regoin.*headers are Region' | Out-Null
 Step '  the summary lists what each sheet holds, pivots and slicers too' 'export' @{ handle = $x; format = 'summary' } -Expect 'pivot table\(s\), \d slicer\(s\)' | Out-Null
-Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '2 pivot tables \(Pivot\d+, Pivot\d+\)' | Out-Null
+Step '  a slicer with two pivots and no name is refused, naming both' 'struct' @{ handle = $x; verb = 'slicer'; rows = 'Region'; at = 'Copied!J34' } -Fails -Expect '\d+ pivot tables \(Pivot\d+, Pivot\d+' | Out-Null
 Step 'sort a pivot by its totals' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Grand Total'; rule = 'desc' } -Expect 'by its totals' | Out-Null
 Step '  and by its row labels' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Region'; rule = 'asc' } -Expect 'by its row labels' | Out-Null
 Step '  a column it does not have is refused, naming what it can sort by' 'struct' @{ handle = $x; verb = 'sort'; selector = 'Copied!A20:B26'; name = 'Nope'; rule = 'desc' } -Fails -Expect 'sorts its rows by its totals' | Out-Null
@@ -241,6 +252,18 @@ Step 'a chart on cells nothing covers' 'struct' @{ handle = $x; verb = 'chart'; 
 Step '  drawn again over it, it is redrawn, not stacked' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Sheet1!A1:C5'; at = 'Copied!F34:M48'; title = 'Second' } -Expect 'REPLACED the line chart' | Out-Null
 Step '  undo puts the first one back' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
 Step '  and undo removes it' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+# A first column of years is the axis, not a series; a chart keeps references, so a delete says who reads the cells.
+Step 'a table of years and counts' 'write' @{ handle = $x; selector = 'Copied!S1:T6'; values = 'Year|Count;2019|5;2020|9;2021|14;2022|20;2023|31' } | Out-Null
+Step '  charted as it is, the years are the axis' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; title = 'By year' } -Expect 'first column \(Year\) is the axis labels' | Out-Null
+Step '  deleting the counts says which chart reads them' 'struct' @{ handle = $x; verb = 'delete'; selector = 'Copied!T:T' } -Expect 'WARNING: 1 chart\(s\) read from these cells' | Out-Null
+Step '  undo puts the cells back' 'undo' @{ handle = $x } -Expect 'undid delete' | Out-Null
+Step '  and undo the chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+Step 'a chart in green, by name' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; title = 'Green'; style = 'color=green' } -Expect 'column chart at' | Out-Null
+Step '  recoloured by redrawing it, in hex' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; title = 'Green'; style = 'color=#1F4E79' } -Expect 'REPLACED' | Out-Null
+Step '  a colour that is not one is refused, with the ones it knows' 'struct' @{ handle = $x; verb = 'chart'; kind = 'column'; source = 'Copied!S1:T6'; at = 'Copied!V1:AC16'; style = 'color=chartreuse' } -Fails -Expect 'six-digit hex' | Out-Null
+Step '  undo the recolour' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+Step '  undo the green chart' 'undo' @{ handle = $x } -Expect 'undid chart' | Out-Null
+Step 'a read past the last row is refused in words' 'read' @{ handle = $x; selector = 'Sheet1!A1:A2000000' } -Fails -Expect 'row 2,000,000 is past the last row' | Out-Null
 Step 'addSheet Temp, then undo' 'struct' @{ handle = $x; verb = 'addSheet'; name = 'Temp' } | Out-Null
 Step '  undo the addSheet' 'undo' @{ handle = $x } -Expect 'undid addSheet' | Out-Null
 Step '  Temp is gone' 'read' @{ handle = $x; selector = 'Temp!A1' } -Fails -Expect 'no sheet named' | Out-Null
@@ -323,6 +346,10 @@ $pn = 'ppt:peak-new.pptx:deck'
 Step 'create a new deck' 'open' @{ app = 'powerpoint'; path = (Join-Path $out 'peak-new.pptx'); create = $true } -Expect '^Created in PowerPoint' | Out-Null
 Step '  a title slide in it' 'struct' @{ handle = $pn; verb = 'createSlide'; name = 'title'; title = 'New deck' } | Out-Null
 Step '  it reads back' 'read' @{ handle = $pn; selector = 'deck' } -Expect 's1: New deck' | Out-Null
+if ($png) {
+    Step '  a picture on its slide' 'struct' @{ handle = $pn; verb = 'picture'; selector = 's1'; name = '70,120,300,200'; text = $png.FullName } -Expect 'picture on s1' | Out-Null
+    Step '  the same place again replaces it, never stacks' 'struct' @{ handle = $pn; verb = 'picture'; selector = 's1'; name = '70,120,300,200'; text = $png.FullName } -Expect 'REPLACED 1 picture' | Out-Null
+}
 Step '  save it' 'struct' @{ handle = $pn; verb = 'save' } | Out-Null
 Step '  close it (Syn made it)' 'struct' @{ handle = $pn; verb = 'close' } -Expect 'closed' | Out-Null
 Step 'a slide with bullets' 'struct' @{ handle = $p; verb = 'createSlide'; title = 'Body'; bullets = 'one|two|>two a'; name = 'titleContent' } | Out-Null

@@ -924,6 +924,26 @@ namespace Syn.Sidecar
             if (method == "filter" && cells is { } fc)
                 filterWas = (bool)Sheet(wb, fc.sheet).AutoFilterMode;
 
+            // Charts that read from cells or a sheet this call deletes: Excel turns
+            // their series into #REF! and does not mend them when the cells come
+            // back, so they are kept and put back by undo (ChartDeps.cs).
+            List<ChartState>? chartsLinked = null;
+            try
+            {
+                if (method == "delete")
+                {
+                    var td = Target((object)wb, selector, "delete");
+                    dynamic gone = td.kind == "rows" ? td.rng.EntireRow : td.kind == "columns" ? td.rng.EntireColumn : td.rng;
+                    chartsLinked = CaptureCharts((object)wb, ChartsReadingFrom((object)wb, (string)td.sheet, (object)gone));
+                }
+                else if (method == "sheet" && JsonField(args, "action").ToLowerInvariant() == "delete")
+                {
+                    var (sn, _) = SplitRange(selector);
+                    chartsLinked = CaptureCharts((object)wb, ChartsReadingFrom((object)wb, (string)Sheet(wb, sn).Name, null));
+                }
+            }
+            catch (Exception) { }
+
             // A chart the call redraws in place (ChartReplace.cs), as it was.
             ChartState? chartWas = null;
             if (method == "chart")
@@ -1020,6 +1040,7 @@ namespace Syn.Sidecar
                         if (filterWas == false && cells is { } f2) Sheet(book, f2.sheet).AutoFilterMode = false;
                         if (snap != null) RestoreRange(appO, (object)book, snap);
                         if (chartWas != null) RestoreChart(book, chartWas);
+                        if (chartsLinked != null) foreach (var cs in chartsLinked) try { RestoreChart(book, cs); } catch (Exception) { }
                         if (pivotSortWas != null) RestorePivotSort(book, pivotSortWas);
                         if (page != null)
                             foreach (var (sheetName2, props) in page)

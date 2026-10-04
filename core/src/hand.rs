@@ -192,16 +192,17 @@ pub fn envelope_for(call: &Call, handle: &str) -> Option<String> {
         Call::Struct(StructArgs::AddSheet { name }) => {
             Some(envelope("addSheet", handle, &format!("{{\"name\":\"{}\"}}", esc(name)), None))
         }
-        Call::Struct(StructArgs::Pivot { source, rows, cols, values, at }) => Some(envelope(
+        Call::Struct(StructArgs::Pivot { source, rows, cols, values, at, rule }) => Some(envelope(
             "pivot",
             handle,
             &format!(
-                "{{\"source\":\"{}\",\"rows\":\"{}\",\"cols\":\"{}\",\"values\":\"{}\",\"at\":\"{}\"}}",
+                "{{\"source\":\"{}\",\"rows\":\"{}\",\"cols\":\"{}\",\"values\":\"{}\",\"at\":\"{}\",\"rule\":\"{}\"}}",
                 esc(source),
                 esc(rows),
                 esc(cols),
                 esc(values),
-                esc(at)
+                esc(at),
+                esc(rule)
             ),
             None,
         )),
@@ -738,6 +739,27 @@ mod tests {
     }
 
     #[test]
+    fn a_pivot_carries_how_to_total_to_the_helper() {
+        use crate::ops::StructArgs;
+        let wire = |rule: &str| {
+            envelope_for(
+                &Call::Struct(StructArgs::Pivot {
+                    source: "d!A1:C9".into(),
+                    rows: "a".into(),
+                    cols: String::new(),
+                    values: "b".into(),
+                    at: "P!A1".into(),
+                    rule: rule.into(),
+                }),
+                "excel:p.xlsx:S",
+            )
+            .unwrap()
+        };
+        assert!(wire("count").contains(r#""rule":"count""#), "{}", wire("count"));
+        assert!(wire("").contains("\"rule\":\"\""), "an empty rule still goes, the helper chooses: {}", wire(""));
+    }
+
+    #[test]
     fn the_analyst_verbs_reach_the_wire() {
         use crate::ops::{FormatArgs, StructArgs};
         // An analyst job needs a sheet, a style, a summary and a picture.
@@ -761,6 +783,7 @@ mod tests {
                 cols: String::new(),
                 values: "kWh".into(),
                 at: "Summary!F1".into(),
+                rule: String::new(),
             }),
             "excel:p.xlsx:S",
         )

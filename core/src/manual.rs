@@ -196,6 +196,11 @@ read the single answer. SUMIF, SUMIFS, AVERAGEIF, COUNTIF, MAXIFS, MEDIAN,
 PERCENTILE.INC all work. A read is capped at 200 cells and a larger range
 returns only its shape.
 
+A cell that shows an error reads as its name: #DIV/0!, #N/A, #REF!, #NAME?,
+#VALUE!, #NUM!. An AVERAGEIFS with nothing to average is #DIV/0! (wrap it in
+IFERROR to show a blank), a lookup with no match is #N/A: it is not a number
+and not a bug in the read, so look at what the formula was given.
+
 One shape of formula is not cheap: a COUNTIF of a column against itself,
 such as SUMPRODUCT(1/COUNTIF(A2:A200000,A2:A200000)) for a count of
 distinct values, compares every row with every other row. Over a large sheet
@@ -282,6 +287,13 @@ It groups a column's values exactly as they are and CANNOT group dates into
 months or years — if you want a monthly view, pivot on a column that already
 holds the month, or total with SUMIFS. One value field per pivot.
 
+HOW A PIVOT TOTALS: `values` is summed when it is a column of numbers and
+COUNTED when it is a column of text, and the reply says which. `rule` picks it:
+sum, count, average, max or min. "How many X by Y and Z" is a pivot with rows
+Y, cols Z, `values` any column (every row has one) and rule count: never a
+helper column of ones on the data, and never a COUNTIFS table in place of the
+pivot. A sum of a text column would be zero everywhere, so it is refused.
+
 TO SORT A PIVOT use `sort` on its range: name "Grand Total" sorts the rows by
 their totals, the row field's name sorts by the labels, and a column heading
 (a year, say) sorts by that column; rule is asc or desc. The pivot keeps the
@@ -304,9 +316,22 @@ new source, kind and title, same place, and the reply says so. Never draw a
 second one on top to "update" the first: the first would stay underneath (in
 LibreOffice it does: there a chart is only ever added). `undo` puts the old
 one back. A chart that should sit beside another gets its own range.
+
+AXIS LABELS: a first column of whole numbers that only goes up (years, months,
+ranks) is used as the chart's axis labels, not plotted as a series, and the
+reply says so. A first column of text already is the labels. So chart the
+table as it is, header row and all, e.g. source "Growth!A1:B16": do not build
+a second copy of it just to get the years onto the axis.
+
+A CHART READS ITS CELLS, it does not copy them. Deleting rows, columns or a
+sheet that a chart reads from leaves the chart empty (`#REF!`), and the reply
+to the delete names the charts that read from what went; `undo` puts the cells
+and the chart's links back. Helper cells that feed a chart are not scratch work
+to tidy away afterwards.
 Kinds: line, bar, column, pie, scatter, area, doughnut, stackedColumn,
 stackedBar, lineMarkers, radar. Style keys: legend, gridlines, xTitle,
-yTitle, dataLabels.
+yTitle, dataLabels, color (every series: a name such as green, or hex such as
+#2E7D32; "make it green" is `color=green` on the same chart, redrawn).
 
 CONDITIONAL, SLICER
 
@@ -316,6 +341,12 @@ greaterThan=N, lessThan=N. Distinct kinds are distinct rules.
 FIRST. Its field (`rows`) is the header of any column in the pivot's
 source: it need not be one the pivot shows. `name` is the pivot's name,
 and can be left out when the workbook has only one.
+A SLICER ON A DASHBOARD does not need a pivot of its own: slicers can sit on
+any sheet. Call `slicer` with the pivot's `name`, the field and `at` on the
+Dashboard; if that field already has a slicer on another sheet the new one is
+LINKED to it (choosing in either filters both) and the reply says so. Never
+build a second pivot just to have something to hang a slicer on. Asked twice
+for the same field on the same sheet, it is refused and says where the first is.
 
 FORMAT
 
@@ -629,6 +660,12 @@ full-width figure below a title is about 70,120,580,300.
   struct {verb:"picture", selector:"s4", name:"70,120,580,300", text:"C:\\...\\fig.png"}
   struct {verb:"insertTable", selector:"s6", name:"55,140,610,170", rows:"A|B;1|2"}
 
+A picture placed where a picture already is (80% of the smaller one covered)
+REPLACES it, and the reply says so: to change a figure on a slide, export the
+chart again and place the new picture in the same box. Never leave the old one
+underneath, and do not place a second picture to "make room"; `undo` brings
+the old one back.
+
 A table on a slide arrives already designed by the deck's theme: a shaded
 header row and banded rows. Put all its rows in the one call; there is no
 per-cell format on a slide table, so do not try to build one cell by cell.
@@ -867,6 +904,11 @@ mod tests {
         assert!(excel.contains("RANGE and it fills exactly those cells"));
         // A slicer needs its pivot first.
         assert!(excel.contains("PIVOT MUST EXIST"));
+        // Two runs built a second pivot on the Dashboard to hang slicers on,
+        // because "use that one" pointed at a slicer on another sheet.
+        assert!(excel.contains("A SLICER ON A DASHBOARD does not need a pivot of its own"));
+        // "Keep only the top five" re-inserted a chart under three old ones.
+        assert!(lookup("powerpoint").contains("A picture placed where a picture already is"));
         // A pivot cannot group dates.
         assert!(excel.contains("CANNOT group dates"));
         // A check that returns 0 must show it could have returned more, and
@@ -889,8 +931,20 @@ mod tests {
         // A chart cannot be edited, so a model drew a new one over the old each
         // time it changed its mind: three charts stacked on one range.
         assert!(excel.contains("TO CHANGE A CHART, DRAW IT AGAIN ON THE SAME RANGE"));
+        // A chart of counts by model year plotted the years as a series of
+        // identical bars, and the fix a model found was a helper copy it later
+        // deleted, which killed the chart.
+        assert!(excel.contains("AXIS LABELS: a first column of whole numbers that only goes up"));
+        // "Change the chart colour to green" was answered "my chart tool cannot".
+        assert!(excel.contains("`color=green` on the same chart"));
+        // An error cell read as -2146826281; a run spent 40 steps on it.
+        assert!(excel.contains("A cell that shows an error reads as its name"));
+        assert!(excel.contains("A CHART READS ITS CELLS, it does not copy them"));
         // A pivot could not be sorted, so a run rebuilt it as a grid of SUMIFS.
         assert!(excel.contains("TO SORT A PIVOT use `sort` on its range"));
+        // "Vehicle counts by county and type" came back as a table of zeros
+        // (a sum of a text column), and the pivot was given up for COUNTIFS.
+        assert!(excel.contains("HOW A PIVOT TOTALS: `values` is summed when it is a column of numbers"));
         // A dashboard was described as holding a slicer the workbook did not hold.
         assert!(excel.contains("how many charts, pivot tables and slicers are on each"));
         // Opening the workbook before closing the CSV keeps Excel's window from

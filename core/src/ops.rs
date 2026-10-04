@@ -76,7 +76,7 @@ pub enum StructArgs {
     /// Live-only, like Invoke: the in-memory model holds a grid of strings
     /// and has no aggregation in it, so pretending to pivot there would
     /// report a table that does not exist.
-    Pivot { source: String, rows: String, cols: String, values: String, at: String },
+    Pivot { source: String, rows: String, cols: String, values: String, at: String, rule: String },
     /// Draw a chart over a range and anchor it on a sheet. Live-only for the
     /// same reason.
     Chart { kind: String, source: String, title: String, at: String, style: String },

@@ -1333,7 +1333,8 @@ namespace Syn.Sidecar
                                      JsonField(args, "title"), JsonField(line, "payload")),
                     "addSheet" => AddSheet(wb, handle, JsonField(args, "name")),
                     "pivot" => Pivot(wb, handle, JsonField(args, "source"), JsonField(args, "rows"),
-                                     JsonField(args, "cols"), JsonField(args, "values"), JsonField(args, "at")),
+                                     JsonField(args, "cols"), JsonField(args, "values"), JsonField(args, "at"),
+                                     JsonField(args, "rule")),
                     "chart" => Chart(wb, handle, JsonField(args, "kind"), JsonField(args, "source"),
                                      JsonField(args, "title"), JsonField(args, "at"),
                                      JsonField(line, "payload")),
@@ -1429,7 +1430,7 @@ namespace Syn.Sidecar
         {
             var (sheet, addr) = SplitRange(selector);
             dynamic ws = Sheet(wb, sheet);
-            dynamic rng = string.IsNullOrEmpty(addr) ? ws.UsedRange : ws.Range[addr];
+            dynamic rng = string.IsNullOrEmpty(addr) ? ws.UsedRange : RangeOf((object)ws, addr);
             int rows = rng.Rows.Count, cols = rng.Columns.Count;
             // A header read from column A that ends before the data does: a model
             // asked for A1:Z1, got 26 names, called it "26 columns", took AA for an
@@ -1475,8 +1476,22 @@ namespace Syn.Sidecar
                 if (looksLikeDate && d > 0) return DateTime.FromOADate(d).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
                 return d.ToString(CultureInfo.InvariantCulture);
             }
+            // An error cell hands back its COM code, an int: -2146826281 for a
+            // #DIV/0!. Read as a number it told a model nothing, and it spent about
+            // 40 steps and two scratch sheets finding out why an average came back
+            // as that.
+            if (v is int code && code >= -2146826288 && code <= -2146826241) return ExcelErrorName(code);
             return Convert.ToString(v, CultureInfo.InvariantCulture) ?? "";
         }
+
+        /// <summary>The name of an Excel error from its COM code (CVErr(n) =
+        /// -2146828288 + n).</summary>
+        private static string ExcelErrorName(int code) => (code + 2146828288) switch
+        {
+            2000 => "#NULL!", 2007 => "#DIV/0!", 2015 => "#VALUE!", 2023 => "#REF!", 2029 => "#NAME?",
+            2036 => "#NUM!", 2042 => "#N/A", 2043 => "#GETTING_DATA", 2045 => "#SPILL!", 2046 => "#CALC!",
+            2047 => "#BLOCKED!", var n => $"#ERROR({n})",
+        };
 
         private static string EscapeCell(string s) =>
             s.Replace("\\", "\\\\").Replace("|", "\\|").Replace(";", "\\;");
@@ -1488,7 +1503,7 @@ namespace Syn.Sidecar
             if (string.IsNullOrEmpty(addr)) throw new InvalidOperationException("write needs Sheet!A1:B2");
             dynamic ws = Sheet(wb, sheet);
             var rows = ParseGrid(payload);
-            dynamic target = ws.Range[addr];
+            dynamic target = RangeOf((object)ws, addr);
 
             // One value into a range of many cells means fill, not "write to
             // the corner". This is the only way to put a derived column
@@ -1828,14 +1843,26 @@ namespace Syn.Sidecar
 
             // Add2 on newer Excels, Add on older ones.
             dynamic cache;
+            var linkedNote = "";
             try { cache = wb.SlicerCaches.Add2(pt, field); }
             catch (RuntimeBinderException) { cache = wb.SlicerCaches.Add(pt, field); }
             catch (COMException e) when (e.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
             {
                 // 0x800A03EC "This slicer cache already exists" told a model nothing
-                // it could act on.
-                throw new InvalidOperationException(
-                    $"slicer: this pivot already has a slicer on {field}. Use that one (it is already on the sheet), or give a different field");
+                // it could act on. And "use that one" is no answer when that one is
+                // on another sheet: a Dashboard wanted the slicers that sat beside
+                // the pivot, and two runs in a row built a second pivot on the
+                // Dashboard just to have something to hang them on. A slicer for a
+                // field that already has one, on a different sheet, is a second
+                // view of the same slicer: they filter together.
+                dynamic? existing = FindSlicerCache((object)wb, (object)pt, field);
+                var on = existing == null ? new List<string>() : SlicerSheets((object)existing);
+                if (existing == null || on.Contains(dstSheet, StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"slicer: this pivot already has a slicer on {field}{(on.Count > 0 ? $", on {string.Join(", ", on)}" : "")}. " +
+                        "Use that one (it is already on the sheet), or give a different field");
+                cache = existing;
+                linkedNote = $" -- {pt.Name} already had a slicer on {field} (on {string.Join(", ", on)}); this one is linked to it, so choosing in either filters both";
             }
 
             // Only the destination. Passing Type.Missing for the optional
@@ -1849,11 +1876,46 @@ namespace Syn.Sidecar
             slicer.Width = 180.0;
             slicer.Height = 200.0;
             slicer.Caption = field;
-            return Ok($"slicer on {field} at {dstSheet}!{dstAddr}, filtering {pt.Name}");
+            return Ok($"slicer on {field} at {dstSheet}!{dstAddr}, filtering {pt.Name}{linkedNote}");
+        }
+
+        /// <summary>The slicer cache on <paramref name="field"/> that filters
+        /// this pivot, if there is one.</summary>
+        private static dynamic? FindSlicerCache(object wbO, object ptO, string field)
+        {
+            dynamic wb = wbO, pt = ptO;
+            int n = (int)wb.SlicerCaches.Count;
+            for (var i = 1; i <= n; i++)
+            {
+                dynamic sc = wb.SlicerCaches[i];
+                string src;
+                try { src = (string)sc.SourceName; } catch (Exception) { continue; }
+                if (!src.Equals(field, StringComparison.OrdinalIgnoreCase)) continue;
+                int np = 0;
+                try { np = (int)sc.PivotTables.Count; } catch (Exception) { }
+                for (var j = 1; j <= np; j++)
+                    if ((string)sc.PivotTables[j].Name == (string)pt.Name) return sc;
+            }
+            return null;
+        }
+
+        /// <summary>The sheets this slicer cache's slicers sit on.</summary>
+        private static List<string> SlicerSheets(object cacheO)
+        {
+            dynamic cache = cacheO;
+            var sheets = new List<string>();
+            try
+            {
+                int ns = (int)cache.Slicers.Count;
+                for (var k = 1; k <= ns; k++)
+                    try { sheets.Add((string)cache.Slicers[k].Shape.Parent.Name); } catch (Exception) { }
+            }
+            catch (Exception) { }
+            return sheets;
         }
 
         private static string Pivot(dynamic wb, string handle, string source, string rowField,
-                                   string colField, string valueField, string at)
+                                   string colField, string valueField, string at, string rule)
         {
             Snapshot(handle);
             var (srcSheet, srcAddr) = SplitRange(source);
@@ -1882,6 +1944,31 @@ namespace Syn.Sidecar
             rowField = Exact(rowField);
             valueField = Exact(valueField);
             if (!string.IsNullOrWhiteSpace(colField)) colField = Exact(colField);
+            // How the values are totalled. A pivot over a column of text can only
+            // count: summed, it is a table of zeros, and a run asked for "vehicle
+            // counts by county" got exactly that, gave up the pivot, and built a
+            // helper column of ones and a COUNTIFS table instead. With no rule
+            // the column decides: numbers are summed, anything else is counted.
+            var wanted = (rule ?? "").Trim().ToLowerInvariant();
+            if (wanted is not ("" or "sum" or "count" or "average" or "avg" or "max" or "min"))
+                throw new InvalidOperationException($"pivot: rule is sum, count, average, max or min, not {rule}");
+            dynamic body = sws.Range[srcAddr];
+            double numbers = 0;
+            try
+            {
+                int col = headers.IndexOf(valueField) + 1;
+                dynamic data = body.Offset(1, 0).Resize((int)body.Rows.Count - 1, (int)body.Columns.Count).Columns[col];
+                numbers = wb.Application.WorksheetFunction.Count(data);
+            }
+            catch (Exception) { numbers = 1; }
+            var counted = wanted == "" && numbers == 0;
+            if (wanted == "") wanted = numbers == 0 ? "count" : "sum";
+            if (wanted != "count" && numbers == 0)
+                throw new InvalidOperationException(
+                    $"pivot: {valueField} holds no numbers, so its {wanted} would be zero everywhere. To count the rows, use rule count");
+            // xlSum -4157, xlCount -4112, xlAverage -4106, xlMax -4136, xlMin -4139
+            int function = wanted switch { "count" => -4112, "average" or "avg" => -4106, "max" => -4136, "min" => -4139, _ => -4157 };
+            if (wanted == "avg") wanted = "average";
             // xlDatabase = 1
             dynamic cache = wb.PivotCaches().Create(1, sws.Range[srcAddr]);
             var name = "Pivot" + (DateTime.UtcNow.Ticks % 1000000);
@@ -1893,7 +1980,7 @@ namespace Syn.Sidecar
                 if (!string.IsNullOrWhiteSpace(colField)) pt.PivotFields(colField).Orientation = 2;
                 dynamic data = pt.PivotFields(valueField);
                 data.Orientation = 4;
-                data.Function = -4157;
+                data.Function = function;
             }
             catch
             {
@@ -1902,7 +1989,8 @@ namespace Syn.Sidecar
                 throw;
             }
             var across = string.IsNullOrWhiteSpace(colField) ? "" : $" x {colField}";
-            return Ok($"pivot {name} at {dstSheet}!{dstAddr}: sum of {valueField} by {rowField}{across}");
+            var why = counted ? $" ({valueField} holds text, so this is a count of rows, not a total)" : "";
+            return Ok($"pivot {name} at {dstSheet}!{dstAddr}: {wanted} of {valueField} by {rowField}{across}{why}");
         }
 
         private static string Chart(dynamic wb, string handle, string kind, string source, string title, string at,
@@ -1945,10 +2033,11 @@ namespace Syn.Sidecar
             if (old != null)
                 return RedrawChart((object)old, (object)sws, kind, type, srcSheet, srcAddr, title, style, dstSheet, dstAddr, left, top, w, h);
             dynamic shape = dws.Shapes.AddChart2(-1, type, left, top, w, h);
+            var note = "";
             try
             {
                 dynamic chart = shape.Chart;
-                chart.SetSourceData(sws.Range[srcAddr]);
+                note = SetChartData(chart, (object)sws, srcAddr, type);
                 if (!string.IsNullOrWhiteSpace(title))
                 {
                     chart.HasTitle = true;
@@ -1964,11 +2053,28 @@ namespace Syn.Sidecar
                 throw;
             }
             return Ok($"{kind} chart at {dstSheet}!{dstAddr} over {srcSheet}!{srcAddr} "
-                      + $"({Math.Round(w)}x{Math.Round(h)})");
+                      + $"({Math.Round(w)}x{Math.Round(h)}){note}");
         }
 
         // legend, gridlines and axis titles, in the same k=v;k=v shape that
         // `format` already uses, so there is one convention to learn.
+        /// <summary>A chart colour as the BGR integer Office wants: a six-digit
+        /// hex (#2E7D32) or a plain colour name.</summary>
+        private static int ChartColor(string v)
+        {
+            var named = v.Trim().ToLowerInvariant() switch
+            {
+                "green" => "2E7D32", "blue" => "1F4E79", "red" => "C62828", "orange" => "EF6C00",
+                "yellow" => "F9A825", "purple" => "6A1B9A", "grey" or "gray" => "757575", "black" => "000000",
+                "teal" => "00796B", "pink" => "D81B60", "brown" => "6D4C41", _ => null,
+            };
+            var hex = (named ?? v.Trim()).TrimStart('#');
+            if (hex.Length != 6 || !int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+                throw new InvalidOperationException(
+                    $"chart color is a six-digit hex like #2E7D32 or one of green, blue, red, orange, yellow, purple, grey, black, teal, pink, brown, not {v}");
+            return ((rgb >> 16) & 255) | (((rgb >> 8) & 255) << 8) | ((rgb & 255) << 16);
+        }
+
         private static void StyleChart(dynamic chart, string style)
         {
             if (string.IsNullOrWhiteSpace(style)) return;
@@ -2001,9 +2107,33 @@ namespace Syn.Sidecar
                     case "datalabels":
                         if (on) chart.ApplyDataLabels(2); else chart.ApplyDataLabels(-4142);
                         break;
+                    case "color":
+                    case "colour":
+                    {
+                        // "Change the chart colour to green" had no answer: the model said
+                        // so and left the default blue. Every series takes the colour (a
+                        // line chart's line and markers, anything else its fill).
+                        var rgb = ChartColor(val);
+                        int ct = (int)chart.ChartType;
+                        if (ct is 5 or -4120 or 80 or 69 or 70 or 71)
+                            throw new InvalidOperationException("chart color: a pie or doughnut has a colour per slice, not one for the chart");
+                        bool lineLike = ct is 4 or 63 or 64 or 65 or 66 or 67 or 72 or 73 or 74 or 75 or -4169 or -4151 or 81 or 82 or 83;
+                        int n = (int)chart.SeriesCollection().Count;
+                        for (var s = 1; s <= n; s++)
+                        {
+                            dynamic series = chart.SeriesCollection(s);
+                            if (lineLike)
+                            {
+                                series.Format.Line.ForeColor.RGB = rgb;
+                                try { series.MarkerBackgroundColor = rgb; series.MarkerForegroundColor = rgb; } catch (COMException) { }
+                            }
+                            else series.Format.Fill.ForeColor.RGB = rgb;
+                        }
+                        break;
+                    }
                     default:
                         throw new InvalidOperationException(
-                            $"chart style does not know {key}: it knows legend, gridlines, xTitle, yTitle, dataLabels");
+                            $"chart style does not know {key}: it knows legend, gridlines, xTitle, yTitle, dataLabels, color");
                 }
             }
         }
@@ -2476,10 +2606,35 @@ namespace Syn.Sidecar
             var full = Path.GetFullPath(path);
             if (!File.Exists(full)) throw new InvalidOperationException($"no picture at {full}");
             var (l, t, w, h) = Box(at, 60.0, 130.0, 600.0, 340.0);
+            // A picture placed where a picture already is replaces it. There was no
+            // way to take one off a slide, so a "the slide is too crowded, keep
+            // only the top five" turn re-inserted a chart and left the old ones
+            // underneath: three pictures at one position, in a deck that was
+            // meant to lose clutter. (`undo` restores the slide as it was.)
+            var replaced = 0;
+            for (var i = (int)slide.Shapes.Count; i >= 1; i--)
+            {
+                dynamic s = slide.Shapes[i];
+                try
+                {
+                    if ((int)s.Type != 13) continue; // msoPicture
+                    double sl = (double)s.Left, st = (double)s.Top, sw = (double)s.Width, sh = (double)s.Height;
+                    var ix = Math.Max(0, Math.Min(l + w, sl + sw) - Math.Max(l, sl));
+                    var iy = Math.Max(0, Math.Min(t + h, st + sh) - Math.Max(t, st));
+                    var smaller = Math.Min(w * h, sw * sh);
+                    if (smaller <= 0 || ix * iy / smaller < 0.8) continue;
+                    s.Delete();
+                    replaced++;
+                }
+                catch (COMException) { }
+            }
             // msoFalse 0, msoTrue -1: do not link, do save with the document.
             dynamic pic = slide.Shapes.AddPicture(full, 0, -1, l, t, w, h);
             try { pic.LockAspectRatio = -1; } catch { }
-            return Ok($"picture on {selector} from {Path.GetFileName(full)} at {l},{t} {w}x{h}");
+            var said = replaced > 0
+                ? $"; it REPLACED {replaced} picture(s) already in that place on the slide instead of stacking on them; undo puts them back"
+                : "";
+            return Ok($"picture on {selector} from {Path.GetFileName(full)} at {l},{t} {w}x{h}{said}");
         }
 
         // "left,top,width,height" in points, any of them omitted. A deck that

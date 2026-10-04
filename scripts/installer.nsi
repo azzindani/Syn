@@ -53,7 +53,7 @@ VIAddVersionKey "LegalCopyright" "See LICENSE"
 !define MUI_UNICON "${P}syn.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "Syn lets a language model work in the Excel, Word and PowerPoint you already have open, while you watch.$\r$\n$\r$\nIt needs Windows 10 or 11 and desktop Microsoft Office. Nothing else is installed with it.$\r$\n$\r$\nClose Syn if it is running, then continue."
-!define MUI_FINISHPAGE_RUN "$INSTDIR\Syn.cmd"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\syn.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Start Syn now"
 !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\START HERE.txt"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Show START HERE.txt"
@@ -72,10 +72,12 @@ Section "Syn" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   ; A running Syn holds these open; NSIS then offers Retry once it is closed.
+  File "${P}syn.exe"
   File "${P}ui.exe"
   File "${P}cli.exe"
   File "${P}mcpgate.exe"
   File "${P}office-host.exe"
+  File "${P}syn-window.exe"
   File "${P}Syn.cmd"
   File "${P}syn.ico"
   File "${P}LICENSE"
@@ -86,8 +88,8 @@ Section "Syn" SecMain
   SetOverwrite on
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  CreateShortcut "$SMPROGRAMS\Syn.lnk" "$INSTDIR\Syn.cmd" "" "$INSTDIR\syn.ico" 0 SW_SHOWMINIMIZED "" "Syn: Excel, Word and PowerPoint, driven by a model"
-  CreateShortcut "$DESKTOP\Syn.lnk" "$INSTDIR\Syn.cmd" "" "$INSTDIR\syn.ico" 0 SW_SHOWMINIMIZED "" "Syn: Excel, Word and PowerPoint, driven by a model"
+  CreateShortcut "$SMPROGRAMS\Syn.lnk" "$INSTDIR\syn.exe" "" "$INSTDIR\syn.ico" 0 SW_SHOWNORMAL "" "Syn: Excel, Word and PowerPoint, driven by a model"
+  CreateShortcut "$DESKTOP\Syn.lnk" "$INSTDIR\syn.exe" "" "$INSTDIR\syn.ico" 0 SW_SHOWNORMAL "" "Syn: Excel, Word and PowerPoint, driven by a model"
 
   WriteRegStr HKCU "Software\Syn" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "Syn"
@@ -104,10 +106,12 @@ Section "Syn" SecMain
 SectionEnd
 
 Section "Uninstall"
+  Delete "$INSTDIR\syn.exe"
   Delete "$INSTDIR\ui.exe"
   Delete "$INSTDIR\cli.exe"
   Delete "$INSTDIR\mcpgate.exe"
   Delete "$INSTDIR\office-host.exe"
+  Delete "$INSTDIR\syn-window.exe"
   Delete "$INSTDIR\Syn.cmd"
   Delete "$INSTDIR\syn.ico"
   Delete "$INSTDIR\LICENSE"

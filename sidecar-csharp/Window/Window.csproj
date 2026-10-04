@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>syn-window</AssemblyName>
+    <!-- The window's icon, the taskbar's and the file's own, from the one icon
+         the installer uses. -->
+    <ApplicationIcon>..\..\scripts\assets\syn.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- WebView2 ships a WPF assembly this project does not use; its reference to
+         WindowsBase is the only thing the build ever has to say. -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <!-- The only package: Microsoft's WebView2 SDK, which is how a program
+         shows a page in a window of its own with the web component Windows
+         ships. The Office helper has none; this one needs it. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+</Project>

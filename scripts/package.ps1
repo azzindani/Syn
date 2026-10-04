@@ -43,7 +43,7 @@ try {
     cargo build --release --bins
     if ($LASTEXITCODE) { throw "cargo build failed" }
 } finally { Pop-Location }
-foreach ($bin in 'ui', 'cli', 'mcpgate') {
+foreach ($bin in 'syn', 'ui', 'cli', 'mcpgate') {
     Copy-Item (Join-Path $repo "core\target\release\$bin.exe") $stage
 }
 
@@ -60,6 +60,21 @@ dotnet publish (Join-Path $repo 'sidecar-csharp\Host\Host.csproj') -c Release -r
     -p:Version=$version --nologo -o $pub
 if ($LASTEXITCODE) { throw "dotnet publish failed" }
 Copy-Item (Join-Path $pub 'office-host.exe') $stage
+Remove-Item -Recurse -Force $pub
+
+# --- Syn's own window, self-contained ----------------------------------------
+# The program that shows the console as a window of its own (WebView2, the web
+# component Windows ships). Carries its own .NET like the helper above, and
+# the WebView2 loader, which unpacks beside it on first run. Without it, or on
+# a machine with no WebView2, the console opens as a browser's app window.
+$pub = Join-Path $Out 'syn-window-publish'
+if (Test-Path $pub) { Remove-Item -Recurse -Force $pub }
+dotnet publish (Join-Path $repo 'sidecar-csharp\Window\Window.csproj') -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+    -p:PublishTrimmed=false `
+    -p:Version=$version --nologo -o $pub
+if ($LASTEXITCODE) { throw "dotnet publish (window) failed" }
+Copy-Item (Join-Path $pub 'syn-window.exe') $stage
 Remove-Item -Recurse -Force $pub
 
 # --- what a person reads and double-clicks -----------------------------------
@@ -80,13 +95,14 @@ AGENT_PIPE_WORD=hand-word
 AGENT_PIPE_PPT=hand-powerpoint
 "@ | Set-Content -Encoding ascii (Join-Path $stage '.env')
 
-# The launcher: the console, with its page opened. Closing the window that
-# appears stops Syn and every helper it started.
+# For the zip: syn.exe starts the console with no terminal window and opens
+# its page as an application window; closing that window stops Syn and every
+# helper it started. This is the same thing from a double-clicked .cmd, which
+# does not leave its own window open behind it.
 @"
 @echo off
 cd /d "%~dp0"
-title Syn
-ui.exe --open
+start "" "%~dp0syn.exe"
 "@ | Set-Content -Encoding ascii (Join-Path $stage 'Syn.cmd')
 
 @"
@@ -96,11 +112,14 @@ START
   1. From the installer: start Syn from the Start menu or the desktop.
      From the zip: unzip it somewhere you own (Documents is fine; not
      Program Files, which Syn cannot write its chats into) and
-     double-click Syn.cmd.
-  2. Syn opens in a window of its own, titled Syn: no tabs, no address bar.
-     It uses the Edge that comes with Windows, so no browser of yours is
-     needed (with no Edge it opens in your default browser instead). A
-     minimized console window sits in the taskbar beside it.
+     double-click syn.exe (Syn.cmd does the same).
+  2. Syn opens in a window of its own, titled Syn, with its own icon and
+     taskbar button: no tabs, no address bar, and no terminal window. It
+     shows the page with WebView2, the web component that comes with Windows
+     10 and 11, so no browser of yours is needed. Without WebView2 it uses
+     Edge as an application window, and with neither it opens in your
+     default browser and keeps a console window: closing that stops Syn.
+     Starting Syn again while it runs brings its window to the front.
   3. Add an API key: the key icon at the bottom of the sidebar.
   4. Ask for something: "open C:\...\budget.xlsx and total column C".
   Closing the Syn window stops Syn and anything it started. Your Office
@@ -117,12 +136,16 @@ FROM AN MCP CLIENT (Claude Desktop, OpenCode, ...)
   AGENT_MCP_ROOTS=C:\Users\you\Documents to .env.
 
 FILES
-  ui.exe           the console (Syn.cmd starts it)
+  syn.exe          what the Start menu shortcut runs: starts ui.exe with no
+                   terminal window
+  syn-window.exe   Syn's own window: shows the console page with Windows'
+                   WebView2, so it needs no browser of yours
+  ui.exe           the console (syn.exe starts it)
   cli.exe          the agent the console drives; also a terminal REPL
   mcpgate.exe      the MCP server
   office-host.exe  the Office helper: started by the others when needed
   .env             settings; chats and saved keys go in .agent\ beside it
-  Syn.cmd          what the Start menu shortcut runs
+  Syn.cmd          the same as syn.exe, for the zip
 
 More: https://github.com/azzindani/Syn (docs\setup-windows.md, docs\mcp.md)
 "@ | Set-Content -Encoding ascii (Join-Path $stage 'START HERE.txt')

@@ -18,8 +18,8 @@ the run → Artifacts), or build it: `powershell -File scripts\package.ps1`.
       **no Rust, no .NET SDK and no `.env`** from the repository. No
       administrator prompt; SmartScreen warns about an unsigned program
       (More info → Run anyway) -- note that it did.
-- [ ] "Start Syn now" on the last page: a minimised Syn window and the
-      console in the browser. Next time, the Start menu or desktop "Syn".
+- [ ] "Start Syn now" on the last page: one Syn window, and **no terminal
+      window** on the taskbar. Next time, the Start menu or desktop "Syn".
 - [ ] The key icon in the sidebar opens Settings; paste a key; the "Add an
       API key" notice goes away.
 - [ ] Ask: `open <full path>\testbed\docs\plan.xlsx`. Excel opens it (or
@@ -37,9 +37,16 @@ the run → Artifacts), or build it: `powershell -File scripts\package.ps1`.
       programs and shortcuts go, `.agent\` and `.env` stay. Uninstall again
       after reinstalling, answering Yes: the folder is gone.
 - [ ] Start Syn from the Start menu: it opens in a window of its own titled
-      Syn (no tabs, no address bar), whatever the default browser is.
-      Closing that window leaves no `ui`, `cli` or `office-host` process.
-- [ ] The zip: unzip into `Documents\Syn-test`, double-click `Syn.cmd`,
+      Syn (no tabs, no address bar, no terminal window), with the Syn icon
+      on the taskbar, whatever the default browser is. Start it again from the desktop icon: the same
+      window comes to the front, and no second one opens.
+- [ ] Minimise the window and start Syn again: it comes back.
+- [ ] Move and resize the window, close it, start Syn again: it opens where
+      it was.
+- [ ] A link in a reply opens in your own browser, not in the Syn window.
+- [ ] On a machine with no WebView2 runtime (an older Windows 10): Syn still
+      opens, as an Edge application window.
+- [ ] The zip: unzip into `Documents\Syn-test`, double-click `syn.exe`,
       and it works the same.
 
 ## 2. Every Office verb, through the real helper

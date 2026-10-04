@@ -13,12 +13,18 @@ administrator prompt, adds Syn to the Start menu and the desktop, and
 appears in Settings > Apps to uninstall; uninstalling asks before it
 deletes your chats and saved keys. The same files come as
 `Syn-<version>-win-x64.zip` for anyone who would rather unzip and
-double-click `Syn.cmd`. The installer is not code-signed yet, so Windows
+double-click `syn.exe`. The installer is not code-signed yet, so Windows
 SmartScreen warns the first time: More info, then Run anyway. Syn opens in
-a window of its own, titled Syn, with no tabs or address bar. It uses the
-Edge that ships with Windows 10 and 11, so no browser of yours is needed;
-with no Edge it opens in the default browser instead. Closing that window
-stops Syn and everything it started. The package is Office only: the console, the CLI, the MCP server
+a window of its own, titled Syn, with no tabs, no address bar and no
+terminal window, and with its own icon and taskbar button. The Start menu
+runs `syn.exe`, which starts the console (`ui.exe`) with none, and
+`syn-window.exe` shows its page with WebView2, the web component that ships
+with Windows 11 and nearly every Windows 10 machine, so no browser of yours
+is needed. Without WebView2 it uses Edge as an application window, and with
+neither it opens in the default browser and keeps a console window, which is
+then the way to stop it. Closing the Syn window stops Syn and everything it
+started. Starting it again while it runs brings that window to the front. The
+package is Office only: the console, the CLI, the MCP server
 and a self-contained Office helper, which carries its own .NET. It needs
 Windows 10 or 11 and desktop Office, nothing else.
 

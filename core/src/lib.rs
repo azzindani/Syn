@@ -4,6 +4,7 @@
 
 pub mod acp;
 pub mod agent;
+pub mod appwin;
 pub mod auth;
 pub mod batch;
 pub mod bus;

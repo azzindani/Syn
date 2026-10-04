@@ -298,74 +298,13 @@ fn refuse_too_big(s: &mut TcpStream) {
     }
 }
 
-/// Where a browser that can show a page as an application window might be,
-/// best first. Edge comes first because Windows 10 and 11 both ship it: a
-/// machine whose default browser is anything else, or none, still gets the
-/// window, and the person needs no browser of their own for Syn.
-#[cfg(any(windows, test))]
-fn app_browser_candidates(env: impl Fn(&str) -> Option<String>) -> Vec<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let mut out = Vec::new();
-    for var in ["ProgramFiles(x86)", "ProgramFiles"] {
-        if let Some(d) = env(var) {
-            out.push(PathBuf::from(&d).join(r"Microsoft\Edge\Application\msedge.exe"));
-        }
-    }
-    for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
-        if let Some(d) = env(var) {
-            out.push(PathBuf::from(&d).join(r"Google\Chrome\Application\chrome.exe"));
-        }
-    }
-    out
-}
-
-/// The flags that make Edge or Chrome show `url` as a window of its own: no
-/// tabs, no address bar. A profile of Syn's own keeps it a separate browser
-/// process, so it neither folds into whatever the person has open nor
-/// hands the page to it and exits, and so its window closing means
-/// something.
-#[cfg(any(windows, test))]
-fn app_window_args(url: &str, profile: &std::path::Path) -> Vec<String> {
-    vec![
-        format!("--app={url}"),
-        format!("--user-data-dir={}", profile.display()),
-        "--no-first-run".into(),
-        "--no-default-browser-check".into(),
-        "--window-size=1280,860".into(),
-    ]
-}
-
 /// Show the console as an application window and stop Syn when that window
-/// is closed, which is what closing the window of an application does. True
-/// if a window was started.
-#[cfg(windows)]
+/// is closed (see `core::appwin`). True if a window was started.
 fn open_app_window(url: &str) -> bool {
-    let env = |k: &str| std::env::var(k).ok();
-    let Some(browser) = app_browser_candidates(env).into_iter().find(|p| p.is_file()) else {
-        return false;
-    };
     // Beside the program, with the chats and keys: `.agent` is what the
     // launcher's working directory holds.
     let profile = std::env::current_dir().unwrap_or_default().join(".agent").join("app-profile");
-    let started = Instant::now();
-    let Ok(mut child) = Command::new(browser).args(app_window_args(url, &profile)).spawn() else {
-        return false;
-    };
-    std::thread::spawn(move || {
-        let _ = child.wait();
-        // A browser that hands the page to one already running exits at
-        // once. That is not the window being closed, and ending Syn then
-        // would end it before anyone saw it.
-        if started.elapsed() > Duration::from_secs(5) {
-            std::process::exit(0);
-        }
-    });
-    true
-}
-
-#[cfg(not(windows))]
-fn open_app_window(_url: &str) -> bool {
-    false
+    core::appwin::open(url, &profile, true)
 }
 
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &str) -> std::io::Result<()> {
@@ -942,35 +881,6 @@ mod tests {
         t.join().unwrap();
         let r = read_request(&s).unwrap();
         assert!(r.too_big && r.body.is_empty());
-    }
-
-    #[test]
-    fn the_app_window_tries_edge_first_and_needs_no_browser_of_the_users() {
-        let env = |k: &str| match k {
-            "ProgramFiles(x86)" => Some("PF86".to_string()),
-            "ProgramFiles" => Some("PF".to_string()),
-            "LOCALAPPDATA" => Some("LOCAL".to_string()),
-            _ => None,
-        };
-        let c: Vec<String> = app_browser_candidates(env).iter().map(|p| p.to_string_lossy().into_owned()).collect();
-        let first_chrome = c.iter().position(|p| p.ends_with("chrome.exe")).unwrap();
-        let last_edge = c.iter().rposition(|p| p.ends_with("msedge.exe")).unwrap();
-        assert!(c[0].starts_with("PF86") && c[0].ends_with("msedge.exe"), "{c:?}");
-        assert!(last_edge < first_chrome, "every Edge path before any Chrome path: {c:?}");
-        // No Program Files known: nothing to try, so the page goes to the
-        // default browser rather than a path guessed from nothing.
-        assert!(app_browser_candidates(|_| None).is_empty());
-    }
-
-    #[test]
-    fn the_app_window_flags_give_a_page_its_own_window() {
-        let profile = std::path::Path::new(r"C:\Program Files\Syn\.agent\app-profile");
-        let a = app_window_args("http://127.0.0.1:7777/", profile);
-        assert!(a.contains(&"--app=http://127.0.0.1:7777/".to_string()), "{a:?}");
-        // One argument for a profile path with spaces in it: Command passes
-        // each as it is, so nothing is split at "Program Files".
-        assert!(a.iter().any(|x| x.starts_with("--user-data-dir=") && x.ends_with("app-profile") && x.contains("Program Files")), "{a:?}");
-        assert!(a.contains(&"--no-first-run".to_string()));
     }
 
     #[test]

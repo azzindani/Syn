@@ -269,6 +269,35 @@ fn param<'a>(path: &'a str, key: &str) -> Option<&'a str> {
     path.split_once('?')?.1.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))
 }
 
+/// The most of an oversized upload that is read and thrown away after the
+/// refusal. A paste is a few megabytes at most; a client sending more than
+/// this is not going to see the refusal, and that is fine.
+const DRAIN_CAP: usize = 16 * 1024 * 1024;
+
+/// Refuse a body over the cap in words the page can show. Closing the
+/// connection with the rest of the upload unread makes the OS reset it, and
+/// on Windows the browser then reports "Failed to fetch" and never shows the
+/// 413: a 70 KB paste read as "Console unreachable" (the audit caught it; the
+/// Linux sandbox delivered the response anyway and never saw it). So the
+/// response is finished with a FIN first, and the upload is read to the end.
+fn refuse_too_big(s: &mut TcpStream) {
+    let _ = respond(
+        s,
+        "413 Content Too Large",
+        "text/plain",
+        &format!("the message is over {} KB: send it in parts, or put it in a file and name the file", MAX_BODY / 1024),
+    );
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let mut sink = [0u8; 8192];
+    let mut left = DRAIN_CAP;
+    while left > 0 {
+        match s.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
+    }
+}
+
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &str) -> std::io::Result<()> {
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -410,12 +439,7 @@ fn main() {
                 return;
             }
             if req.too_big {
-                let _ = respond(
-                    &mut s,
-                    "413 Content Too Large",
-                    "text/plain",
-                    &format!("the message is over {} KB: send it in parts, or put it in a file and name the file", MAX_BODY / 1024),
-                );
+                refuse_too_big(&mut s);
                 return;
             }
 
@@ -846,6 +870,43 @@ mod tests {
         t.join().unwrap();
         let r = read_request(&s).unwrap();
         assert!(r.too_big && r.body.is_empty());
+    }
+
+    #[test]
+    fn a_refused_upload_still_gets_its_refusal() {
+        use std::io::{Read as _, Write as _};
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = l.local_addr().unwrap();
+        // A browser sends the whole body and only then reads the answer. If
+        // the server closes with that body unread, Windows resets the
+        // connection and the answer is lost.
+        let client = std::thread::spawn(move || {
+            let mut c = TcpStream::connect(at).unwrap();
+            // A server that stops reading must fail this test, not hang it.
+            c.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let size = MAX_BODY * 4;
+            write!(c, "POST /cmd HTTP/1.1\r\nHost: {at}\r\nContent-Length: {size}\r\n\r\n").unwrap();
+            let chunk = vec![b'x'; 8192];
+            let mut sent = 0;
+            while sent < size {
+                // The server may stop reading once it has refused; a failed
+                // write is not the thing under test, the answer is.
+                if c.write_all(&chunk).is_err() {
+                    break;
+                }
+                sent += chunk.len();
+            }
+            let mut answer = String::new();
+            c.read_to_string(&mut answer).map(|_| answer)
+        });
+        let (mut s, _) = l.accept().unwrap();
+        let r = read_request(&s).unwrap();
+        assert!(r.too_big);
+        refuse_too_big(&mut s);
+        let answer = client.join().unwrap().expect("the refusal must arrive, not a reset");
+        assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+        assert!(answer.contains("64 KB"), "{answer}");
     }
 
     /// The rule the token used to share: a command may only come from this

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 
 use crate::protocol::{DOOM_LOOP_THRESHOLD, Error, Result, new_handle};
 
+/// Between a call and what it answered, in the key the repeat gate keeps.
+const OUTCOME_MARK: &str = " \u{1f}=> ";
+
 pub use crate::protocol::new_handle as make_handle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,11 +247,36 @@ impl Relay {
         let n = s.calls.len();
         if n >= DOOM_LOOP_THRESHOLD {
             let last = &s.calls[n - DOOM_LOOP_THRESHOLD..];
-            if last.iter().all(|c| c == &last[0]) {
+            // The same call, whatever it came back with.
+            let call = |c: &(String, String)| (c.0.clone(), c.1.split(OUTCOME_MARK).next().unwrap_or("").to_string());
+            let outcome = |c: &(String, String)| c.1.split_once(OUTCOME_MARK).map_or("", |(_, o)| o).to_string();
+            let same_call = last.iter().all(|c| call(c) == call(&last[0]));
+            // And, for the calls that have already answered, the same answer.
+            // Pressing Next three times is three different pages; pressing a
+            // button that does nothing three times is a loop. Calls that
+            // record no outcome (every Office call) all read as "" and are
+            // judged by the call alone, as they always were.
+            let before: Vec<String> = last[..last.len() - 1].iter().map(outcome).collect();
+            if same_call && before.windows(2).all(|w| w[0] == w[1]) {
                 return Err(Error::DoomLoop(op.to_string()));
             }
         }
         Ok(())
+    }
+
+    /// Say what the last call came back with, so the gate can tell a loop
+    /// from progress. Only a page's calls are noted: what a click on a page
+    /// does is the page changing, and the same click on a page that changed
+    /// is not the model going in circles.
+    pub fn note_outcome(&mut self, session: &str, outcome: &str) {
+        use std::hash::{Hash, Hasher};
+        if let Ok(s) = self.session_mut(session)
+            && let Some(last) = s.calls.last_mut()
+        {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            outcome.hash(&mut h);
+            last.1.push_str(&format!("{OUTCOME_MARK}{:x}", h.finish()));
+        }
     }
 
     /// Start the repeat count again. Called when a frozen run is thawed:

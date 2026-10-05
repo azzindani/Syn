@@ -7,6 +7,7 @@ pub mod agent;
 pub mod appwin;
 pub mod auth;
 pub mod batch;
+pub mod browser;
 pub mod bus;
 pub mod catalog;
 pub mod cdp;

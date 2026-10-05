@@ -14,7 +14,10 @@ failing run does not leave this machine worse than it found it.
      spending tokens for nobody;
   3. the MCP server, with a helper and an office it started: both must go
      (needs LibreOffice and python3-uno; skipped otherwise, and on
-     Windows, where the helper drives Office itself).
+     Windows, where the helper drives Office itself);
+  4. the MCP server, with Syn's own browser open on a page: every browser
+     process on its profile must go (needs Chrome, Edge or Chromium;
+     skipped otherwise).
 
 Exit 1 if anything was left. Needs `cli`, `ui` and `mcpgate` built.
 """
@@ -157,11 +160,52 @@ def mcpgate_with_helper(r):
     survivors(r, "MCP server killed with a helper leaves nothing", pipe, grace=10)
 
 
+def mcpgate_with_browser(r):
+    # The browser is the one child that is not Syn's own program and has
+    # a dozen processes of its own: a killed Syn that left even the
+    # renderers would leave a window on the person's screen, signed in.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("syn_fixture_site", os.path.join(REPO, "tests", "browser", "site.py"))
+    site = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(site)
+    server, base = site.start()
+    home = scratch("browser")
+    env = dict(os.environ, AGENT_ENV_FILE=home + "/no.env", AGENT_HOME=home + "/h", AGENT_CDP="",
+               AGENT_BROWSER_HEADLESS="1", AGENT_MCP_ROOTS=home)
+    srv = subprocess.Popen([binary("mcpgate")], cwd=REPO, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, text=True)
+    try:
+        def rpc(n, method, params):
+            srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": n, "method": method, "params": params}) + "\n")
+            srv.stdin.flush()
+            return json.loads(srv.stdout.readline())
+
+        rpc(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "devcheck", "version": "1"}})
+        got = rpc(2, "tools/call", {"name": "open", "arguments": {"app": "browser", "path": base + "/form"}})
+        said = json.dumps(got)
+        if "no Chrome or Edge" in said or "turned off" in said:
+            r.skip("MCP server killed with a browser open leaves nothing", "no Chrome, Edge or Chromium here")
+            return
+        profile = os.path.join(home, "h", "browser-profile")
+        started = matching(profile)
+        if not started:
+            r.check("MCP server killed with a browser open leaves nothing", False, "no browser started: " + said[:200])
+            return
+        r.note("%d browser processes started" % len(started))
+        srv.kill()
+        srv.wait()
+        survivors(r, "MCP server killed with a browser open leaves nothing", profile, grace=5)
+    finally:
+        srv.kill()
+        server.shutdown()
+
+
 def main():
     r = Report("what survives when Syn is killed")
     cli_mid_request(r)
     console_mid_turn(r)
     mcpgate_with_helper(r)
+    mcpgate_with_browser(r)
     return r.done()
 
 

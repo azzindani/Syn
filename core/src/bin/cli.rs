@@ -530,6 +530,10 @@ fn main() {
                 }
                 if let Some(a) = config::cdp_addr() {
                     pr!("WIRE {{\"kind\":\"cdp\",\"app\":\"web\",\"at\":\"{a}\"}}");
+                } else if core::browser::available() {
+                    // Nothing in `.env` names it: Syn starts a Chrome or Edge
+                    // of its own when a page is first wanted.
+                    pr!("WIRE {{\"kind\":\"browser\",\"app\":\"web\",\"at\":\"Syn's own browser\"}}");
                 }
                 pr!("RECEIPT wiring");
             }

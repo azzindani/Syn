@@ -9,8 +9,24 @@
 //! Generic over the stream, like `hand::Hand`, so every line below except
 //! the connect path is exercised by the tests on any OS with no network.
 
-use std::io::{BufReader, Read, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How long a read may block once a message has started arriving. A wedged
+/// renderer must surface as an error, not a hung session.
+pub const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A stream whose next read can be given a deadline. Only a socket has one;
+/// it is a trait so the framing tests keep running on a plain byte cursor.
+pub trait Deadline {
+    fn set_read_deadline(&self, wait: Option<Duration>) -> std::io::Result<()>;
+}
+
+impl Deadline for std::net::TcpStream {
+    fn set_read_deadline(&self, wait: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(wait)
+    }
+}
 
 /// The RFC 6455 handshake constant.
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -287,6 +303,11 @@ impl<S: Read + Write> Ws<S> {
         }
     }
 
+    /// Whether a message is already waiting in what was read ahead.
+    pub fn has_buffered(&self) -> bool {
+        !self.io.buffer().is_empty()
+    }
+
     fn read_frame(&mut self) -> std::io::Result<(bool, u8, Vec<u8>)> {
         let mut head = [0u8; 2];
         self.io.read_exact(&mut head)?;
@@ -321,6 +342,31 @@ impl<S: Read + Write> Ws<S> {
             }
         }
         Ok((fin, opcode, payload))
+    }
+}
+
+impl<S: Read + Write + Deadline> Ws<S> {
+    /// Wait up to `wait` for the next message, and say `None` if none came.
+    ///
+    /// The wait covers only the first byte of a message. Once one has
+    /// started, the rest is read under `FRAME_TIMEOUT`, because a deadline
+    /// that fired between two halves of a frame would leave the stream
+    /// mid-frame and every message after it unreadable. This is how a
+    /// client sees the events a page sends on its own (a dialog opening, a
+    /// navigation starting) without sending anything.
+    pub fn poll_text(&mut self, wait: Duration) -> std::io::Result<Option<String>> {
+        if self.io.buffer().is_empty() {
+            self.io.get_ref().set_read_deadline(Some(wait.max(Duration::from_millis(1))))?;
+            let got = self.io.fill_buf().map(|b| b.is_empty());
+            self.io.get_ref().set_read_deadline(Some(FRAME_TIMEOUT))?;
+            match got {
+                Ok(true) => return Err(eof("peer closed the websocket")),
+                Ok(false) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return Ok(None),
+                Err(e) => return Err(e),
+            }
+        }
+        self.recv_text().map(Some)
     }
 }
 
@@ -616,6 +662,84 @@ Sec-WebSocket-Accept: {}
         inbound.extend(body.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
         let (mut w, _) = ws(inbound);
         assert_eq!(w.recv_text().unwrap(), "hi");
+    }
+
+    /// A socket that has nothing to say until bytes are pushed into it, and
+    /// reports that the way a real one does when a read deadline passes.
+    #[derive(Debug, Clone)]
+    struct Quiet {
+        queue: Rc<RefCell<std::collections::VecDeque<u8>>>,
+        closed: Rc<RefCell<bool>>,
+    }
+
+    impl Read for Quiet {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut q = self.queue.borrow_mut();
+            if q.is_empty() {
+                return if *self.closed.borrow() {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+                };
+            }
+            let n = buf.len().min(q.len());
+            for slot in buf.iter_mut().take(n) {
+                *slot = q.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+    }
+
+    impl Write for Quiet {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Deadline for Quiet {
+        fn set_read_deadline(&self, _: Option<Duration>) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn quiet() -> (Ws<Quiet>, Quiet) {
+        let q = Quiet { queue: Rc::default(), closed: Rc::default() };
+        (Ws { io: BufReader::new(q.clone()), rng: Rng(1), max_message: MAX_MESSAGE }, q)
+    }
+
+    #[test]
+    fn poll_says_none_when_nothing_arrives_and_the_stream_stays_usable() {
+        let (mut w, q) = quiet();
+        assert_eq!(w.poll_text(Duration::from_millis(5)).unwrap(), None);
+        // A deadline that passed must not have damaged the framing: a
+        // message sent afterwards is read whole.
+        q.queue.borrow_mut().extend(server_text("{\"method\":\"Page.loadEventFired\"}"));
+        assert_eq!(w.poll_text(Duration::from_millis(5)).unwrap().as_deref(), Some("{\"method\":\"Page.loadEventFired\"}"));
+        assert_eq!(w.poll_text(Duration::from_millis(5)).unwrap(), None);
+    }
+
+    #[test]
+    fn poll_returns_what_was_read_ahead_without_waiting() {
+        // Two messages arrive in one read; the second sits in the buffer and
+        // must come back from the buffer, not be waited for.
+        let (mut w, q) = quiet();
+        let mut both = server_text("one");
+        both.extend(server_text("two"));
+        q.queue.borrow_mut().extend(both);
+        assert_eq!(w.poll_text(Duration::from_millis(5)).unwrap().as_deref(), Some("one"));
+        assert!(w.has_buffered());
+        assert_eq!(w.poll_text(Duration::from_millis(5)).unwrap().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn poll_on_a_closed_socket_is_an_error_not_silence() {
+        let (mut w, q) = quiet();
+        *q.closed.borrow_mut() = true;
+        let e = w.poll_text(Duration::from_millis(5)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
     #[test]

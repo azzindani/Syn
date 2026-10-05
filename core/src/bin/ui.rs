@@ -342,6 +342,14 @@ fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(7777);
 
+    // Told to the CLI, and through it to the browser hand, which must never
+    // point a page at the console: the console takes commands from a page on
+    // its own origin, and a model that is told to visit it would be talking
+    // to the thing that runs it.
+    // SAFETY: before any thread exists in this process, so nothing reads the
+    // environment while it is written.
+    unsafe { std::env::set_var("SYN_CONSOLE_PORT", port.to_string()) };
+
     // The CLI sits next to this binary unless told otherwise.
     let exe = match args.iter().position(|a| a == "--cli").and_then(|i| args.get(i + 1)) {
         Some(p) => std::path::PathBuf::from(p),

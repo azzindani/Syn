@@ -51,6 +51,9 @@ pub struct Rule {
 const HOST: &str = "sidecar-csharp/Host/Program.cs";
 const UIA: &str = "sidecar-csharp/Uia/Program.cs";
 const CDP: &str = "core/src/cdp.rs";
+/// What runs inside a page, and words an error from it carries.
+const PAGE: &str = "core/src/page.js";
+const WS: &str = "core/src/ws.rs";
 
 /// First match wins, so the specific come before the general.
 pub const RULES: &[Rule] = &[
@@ -275,16 +278,37 @@ pub const RULES: &[Rule] = &[
     // ---- web pages -------------------------------------------------------
     Rule {
         needle: "no element matches",
-        from: CDP,
+        from: PAGE,
         apps: &["web"],
-        advice: "Nothing on the page matches that CSS selector. Pages change as they load and after every click. Read selector body to see what is there now, then use a selector that exists.",
+        advice: "Nothing on the page matches that selector. Pages change as they load and after every click. Read selector :map to see what can be pressed or filled now, each with its selector, or use text=Words or label=Words for what you can see on the page.",
         mcp: None,
     },
     Rule {
         needle: "unit not found",
         from: CDP,
         apps: &["web"],
-        advice: "The part of the page this handle points at is gone; the page probably navigated. Read the page with selector body to see where it is now.",
+        advice: "The part of the page this handle points at is gone; the page probably navigated. Read the page with selector :map to see where it is now, and use :doc as the unit.",
+        mcp: None,
+    },
+    Rule {
+        needle: "no open tab matches",
+        from: CDP,
+        apps: &["web"],
+        advice: "That tab is closed, or the name is wrong. Open the page again with its address, open{\"app\":\"browser\",\"path\":\"https://...\"}, or by part of the title of a tab that is listed above.",
+        mcp: None,
+    },
+    Rule {
+        needle: "peer closed the websocket",
+        from: WS,
+        apps: &["web"],
+        advice: "The browser window was closed. Syn's browser starts again with the next open, and what the person signed in to is kept: open the page again by its address. If the person closed it on purpose, ask before reopening.",
+        mcp: None,
+    },
+    Rule {
+        needle: "frame is from another site",
+        from: PAGE,
+        apps: &["web"],
+        advice: "The page keeps that frame from scripts (it belongs to another site: an embedded sign-in, payment or video box). Syn cannot press inside it. Ask the person to do that step in the browser window, then carry on.",
         mcp: None,
     },
 ];
@@ -329,7 +353,7 @@ pub fn selectors(app: &str) -> &'static str {
         "excel" => "Excel selectors name the sheet: Sheet1!A1:D10, or 'Q3 sales'!B2 when the name has a space.",
         "word" => "Word selectors are body (the text, numbered), p3 for one paragraph or p3:p9 for several; p0 is the first. t2 is the second table, t2.r1 its first row, t2.c3 a column.",
         "ppt" => "PowerPoint selectors are deck, or s1, s2 ... for one slide, s2.notes for its notes.",
-        "web" => "Selectors on a web page are CSS: h1, #total, table tr:nth-child(2).",
+        "web" => "Selectors on a web page are CSS (h1, #total, input[name=q]), or text=Visible words, or label=Field label; frame >>> inner goes into a frame or shadow root. read selector :map lists what can be pressed or filled, each with its selector.",
         "ui" => "Window selectors are :tree for the control list, or id=..., name=..., type=... joined by commas.",
         _ => "",
     }
@@ -351,7 +375,10 @@ mod tests {
             ("excel", "live app refused the op: com 0x800A03EC: The cell or chart you're trying to change is on a protected sheet.", "Unprotect"),
             ("ppt", "live app refused the op: presentation not open for ppt:deck.pptx:deck", "open it again"),
             ("ui", "live app refused the op: no control matches name=Save", ":tree"),
-            ("web", "live app refused the op: no element matches #total in :doc", "selector body"),
+            ("web", "live app refused the op: no element matches #total in :doc", "selector :map"),
+            ("web", "live app refused the op: no open tab matches \"tab-9zzzz\". The tabs open are: none", "Open the page again"),
+            ("web", "transport peer closed the websocket", "window was closed"),
+            ("web", "that frame is from another site, and the page does not let a script reach inside it", "Ask the person"),
         ];
         for (app, err, want) in cases {
             let got = advice(app, err, Caller::CannotOpen).unwrap_or_else(|| panic!("no advice for {err}"));

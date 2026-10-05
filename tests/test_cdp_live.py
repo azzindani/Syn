@@ -10,6 +10,10 @@ of reach for good; what a page says comes back fenced, flagged when it reads
 like an instruction; and ending Syn leaves the browser, which is the
 person's, running.
 
+This is the mode where the person started the browser and pointed Syn at it
+(AGENT_CDP): Syn attaches and never starts or closes it. The mode where Syn
+starts a browser of its own is tests/browser/test_browser_live.py.
+
 The browser gets its own throwaway profile and a free port: a debugging port
 on an everyday profile would expose logged-in sessions to anything local.
 
@@ -197,7 +201,9 @@ class BrowserThroughMcp(unittest.TestCase):
         self.assertIn("no browser tab has", text)
         self.assertIn("Syn CDP testbed", text, "the refusal lists the tabs there are")
         h = self.page()
-        self.assertTrue(h.startswith("web:Syn CDP testbed"), h)
+        # A tab is named from the browser's own id for it, not from its title,
+        # which changes with every page.
+        self.assertRegex(h, r"^web:tab-[0-9a-z]{5}::doc$")
 
     def test_2_read_fill_click_and_see_the_page_react(self):
         h = self.page()

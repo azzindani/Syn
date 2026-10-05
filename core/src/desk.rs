@@ -233,6 +233,12 @@ impl Desk {
             [] if open.is_empty() => Err(format!(
                 "handle {asked:?} is not open, and nothing is open yet. Call `open` with the app and the file's full path; it returns the handle to use."
             )),
+            // A page's handle is gone because its tab was closed (by Syn, by
+            // the person, or by the page): say so, and how to get one back.
+            [] if want.starts_with("web:") => Err(format!(
+                "handle {asked:?} is not open: that tab was closed, or never opened. Open handles: {}. Copy one exactly, or open the page again: open{{\"app\":\"browser\",\"path\":\"https://example.com\"}}",
+                open.join(", ")
+            )),
             [] => Err(format!(
                 "handle {asked:?} is not open. Open handles: {}. Copy one exactly, or call `open` for another file.",
                 open.join(", ")
@@ -266,7 +272,13 @@ impl Doors {
             return Ok(None);
         }
         let c = self.connector.connect(app)?;
-        let note = c.launched.then(|| format!("started {}'s helper", app_name(app)));
+        let note = c.launched.then(|| {
+            if app == "web" {
+                "opened Syn's browser, a window of its own with its own sign-ins, apart from the person's".to_string()
+            } else {
+                format!("started {}'s helper", app_name(app))
+            }
+        });
         runner.attach_hand_as(&c.name, c.apps, c.hand);
         // A hand is (re)connected, so a run frozen by the one whose pipe
         // died can go again. Without this an MCP session whose helper
@@ -504,45 +516,65 @@ impl Doors {
         Ok(doc)
     }
 
-    /// Register a browser page or a window by what its title (or address)
-    /// contains. Nothing is opened: these are things the human has open.
+    /// Register a window by what its title contains. Nothing is opened: these
+    /// are things the human has open. (A web page is `open_page`.)
     fn open_view(&mut self, relay: &mut Relay, runner: &mut Runner, app: &str, target: &str) -> Result<Doc, String> {
+        if app == "web" {
+            return self.open_page(relay, runner, target);
+        }
         if target.contains(':') {
-            return Err(format!(
-                "{target:?} contains ':', which separates the parts of a handle. Use part of the title, or the address without its scheme (example.com/report)"
-            ));
+            return Err(format!("{target:?} contains ':', which separates the parts of a handle. Use part of the title"));
         }
         let mut notes = Vec::new();
         notes.extend(self.ensure_hand(relay, runner, app)?);
         let handle = new_handle(app, target, unit_for(app));
         self.register(relay, runner, &handle, app)?;
-        // A page is looked at once, like a document: "opened" used to be
-        // said for any words at all, matching tab or not, and the failure
-        // came on the next call. Asked now, through the gates, a miss is
-        // refused here with the tabs there are. (Windows are left as they
-        // were: their hand exists only on Windows.)
-        let seen = if app == "web" {
-            let look = runner.run(
-                relay,
-                &handle,
-                "desk:open",
-                crate::ops::Call::Export(crate::ops::ExportArgs { format: "title".into(), path: None, sheet: None }),
-            );
-            match look {
-                Ok(Some(crate::ops::OpOut::Text { detail })) => format!("page: {}", detail.replace('\n', " — ")),
-                Err(e) if e.to_string().contains("no debuggable target") => {
-                    self.unregister(relay, runner, &handle);
-                    return Err(format!(
-                        "no browser tab has {target:?} in its title or address. {}",
-                        e.to_string().split("open targets: ").nth(1).map(|t| format!("The tabs open are: {t}. Use part of one of those.")).unwrap_or_default()
-                    ));
+        let doc = Doc { handle, app: app.into(), summary: join_notes(notes, "matched by window title"), sheets: vec![] };
+        self.remember(doc.clone());
+        Ok(doc)
+    }
+
+    /// Open a web page: an address opens it in a tab of Syn's own browser
+    /// (which starts if it is not running), and part of a title, an address
+    /// or a tab's name finds a tab that is open. The browser hand does the
+    /// choosing and answers with the tab's name, `tab-xxxxx|what is on it`;
+    /// the handle is built from the name, because a title changes with every
+    /// page and a handle that found its tab by title stopped matching.
+    fn open_page(&mut self, relay: &mut Relay, runner: &mut Runner, target: &str) -> Result<Doc, String> {
+        let mut notes = Vec::new();
+        // A title or a tab's name can only find a tab in a browser that is
+        // already open. Starting a window to say "no tab has that" is a
+        // window opened for nothing.
+        let names_an_address = crate::cdp::has_scheme(target) || crate::cdp::host_like(target);
+        if !runner.serves("web") && !names_an_address {
+            match self.connector.connect_running("web") {
+                Some(c) => {
+                    runner.attach_hand_as(&c.name, c.apps, c.hand);
+                    runner.thaw(relay);
                 }
-                _ => "matched by title or address".to_string(),
+                None => {
+                    return Err("no browser page is open yet, so no tab has that in its title. To open a page give its address: open{\"app\":\"browser\",\"path\":\"https://example.com\"}".into());
+                }
             }
-        } else {
-            "matched by window title".to_string()
+        }
+        notes.extend(self.ensure_hand(relay, runner, "web")?);
+        let said = match runner.open_file("web", target) {
+            // The browser went away since this session last used it (the
+            // person closed its window): start it again rather than report
+            // the same broken socket.
+            Err(Error::Transport(_)) => {
+                notes.extend(self.reconnect(relay, runner, "web")?);
+                runner.open_file("web", target)
+            }
+            other => other,
         };
-        let doc = Doc { handle, app: app.into(), summary: join_notes(notes, &seen), sheets: vec![] };
+        let said = said.map_err(|e| explain("web", e))?;
+        let Some((alias, summary)) = said.split_once('|') else {
+            return Err(format!("the browser answered an open with something that names no tab: {said}"));
+        };
+        let handle = new_handle("web", alias, unit_for("web"));
+        self.register(relay, runner, &handle, "web")?;
+        let doc = Doc { handle, app: "web".into(), summary: join_notes(notes, summary), sheets: vec![] };
         self.remember(doc.clone());
         Ok(doc)
     }
@@ -676,7 +708,8 @@ impl Doors {
         for app in APPS {
             let how = match (self.connector.wired(app), self.connector.can_launch(app), runner.permits(app)) {
                 (_, _, Err(e)) => format!("not allowed: {e}"),
-                (None, _, _) if *app == "web" => "not wired: the human starts Chrome or Edge with --remote-debugging-port and sets AGENT_CDP".into(),
+                (None, _, _) if *app == "web" => "not available: no Chrome or Edge was found, or AGENT_BROWSER is off".into(),
+                (Some(_), true, _) if *app == "web" => "yes (Syn's own browser, opened with the first page; the person signs in to a site in its window)".into(),
                 (None, _, _) => format!("not wired: the human sets {} in .env", crate::config::pipe_env_key(if *app == "ui" { "uia" } else { app })),
                 (Some(at), true, _) => format!("yes ({at}; its helper starts on demand)"),
                 (Some(at), false, _) if runner.serves(app) => format!("yes ({at}, connected)"),
@@ -725,6 +758,11 @@ impl crate::runner::Door for Doors {
 /// Put a hand failure in words a model can act on.
 pub fn explain(app: &str, e: Error) -> String {
     match e {
+        // The browser is a window the person can close. Say that, and that
+        // what they signed in to is kept, rather than "the helper broke".
+        Error::Transport(d) if app_key(app) == Some("web") => format!(
+            "the browser window was closed, or the browser stopped ({d}). Call `open` with the page's address to open it again; what the person signed in to is kept. If they closed it on purpose, ask before opening it again."
+        ),
         Error::Transport(d) => format!(
             "the connection to {}'s helper broke ({d}). Call `open` again to reconnect.",
             app_name(app)
@@ -750,7 +788,7 @@ pub fn next_step(d: &Doc) -> String {
         }
         "word" => format!("{} for the text, numbered p0 (the first), p1 ...; p3:p9 reads a stretch of a long one.", call("body")),
         "ppt" => format!("{} for the slides, then s1, s2 ... for one slide.", call("deck")),
-        "web" => format!("{} -- selectors on a page are CSS.", call("h1")),
+        "web" => format!("{} for the page's text. What can be pressed or filled is listed above, each with a selector; a selector is CSS, or text=Words, or label=Words.", call("body")),
         _ => format!("{} for the window's controls, then struct invoke to press one by id.", call(":tree")),
     }
 }
@@ -885,20 +923,21 @@ impl EnvConnector {
 
 impl Connector for EnvConnector {
     fn connect_running(&mut self, app: &str) -> Option<Connected> {
-        let at = self.wired(app)?;
         if app == "web" {
-            // A browser answers on its port or does not; there is nothing
-            // of ours to start for it. Knocked first with a short timeout:
-            // on Windows a connect to a closed local port is not refused at
-            // once but retried for two seconds, and this runs before every
-            // turn and every status check. A browser that is listening
-            // answers a loopback knock in well under a millisecond.
-            use std::net::ToSocketAddrs;
-            let knock = at.to_socket_addrs().ok()?.next()?;
-            std::net::TcpStream::connect_timeout(&knock, std::time::Duration::from_millis(150)).ok()?;
+            // A browser answers on its port or does not; nothing is started
+            // here. The one the person pointed Syn at, else one already
+            // running on Syn's own profile (the profile says where). Knocked
+            // first with a short timeout: on Windows a connect to a closed
+            // local port is not refused at once but retried for two seconds,
+            // and this runs before every turn and every status check.
+            let at = crate::config::cdp_addr().or_else(|| crate::browser::running_on(&crate::browser::profile_dir()))?;
+            if !crate::browser::alive(&at) {
+                return None;
+            }
             let c = crate::cdp::Cdp::connect(&at).ok()?;
             return Some(Connected { name: format!("cdp-{at}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
         }
+        let at = self.wired(app)?;
         if app == "ui" && !cfg!(windows) {
             return None;
         }
@@ -907,21 +946,49 @@ impl Connector for EnvConnector {
     }
 
     fn wired(&self, app: &str) -> Option<String> {
-        if app == "web" { crate::config::cdp_addr() } else { crate::config::pipe_for(Self::pipe_key(app)) }
+        if app == "web" {
+            // The person's own browser if they named one; else Syn's, which
+            // needs only that Chrome or Edge is on the computer.
+            return crate::config::cdp_addr().or_else(|| crate::browser::available().then(|| "Syn's own browser".to_string()));
+        }
+        crate::config::pipe_for(Self::pipe_key(app))
     }
 
     fn can_launch(&self, app: &str) -> bool {
-        self.launch && app != "web" && self.wired(app).is_some() && Self::helper(app).is_some()
+        if app == "web" {
+            return self.launch && crate::config::cdp_addr().is_none() && crate::browser::available();
+        }
+        self.launch && self.wired(app).is_some() && Self::helper(app).is_some()
     }
 
     fn connect(&mut self, app: &str) -> Result<Connected, String> {
         if app == "web" {
-            let addr = self.wired("web").ok_or(
-                "no browser is wired. The human starts Chrome or Edge with --remote-debugging-port=9222 and its own --user-data-dir, and sets AGENT_CDP=127.0.0.1:9222 in .env",
-            )?;
-            let c = crate::cdp::Cdp::connect(&addr)
-                .map_err(|e| format!("cannot reach the browser at {addr}: {e}. Is it running with --remote-debugging-port?"))?;
-            return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
+            // A browser the person pointed Syn at is attached and left
+            // alone: never started, never closed.
+            if let Some(addr) = crate::config::cdp_addr() {
+                let c = crate::cdp::Cdp::connect(&addr)
+                    .map_err(|e| format!("cannot reach the browser at {addr}: {e}. Is it running with --remote-debugging-port?"))?;
+                return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
+            }
+            let profile = crate::browser::profile_dir();
+            let (addr, child) = match crate::browser::running_on(&profile) {
+                Some(addr) => (addr, None),
+                None => {
+                    if !self.launch {
+                        return Err("starting the browser is off (AGENT_MCP_LAUNCH=0): the human starts it".into());
+                    }
+                    let exe = crate::browser::find()?;
+                    let started = crate::browser::start(&exe, &profile, crate::browser::headless())?;
+                    (started.addr, started.child)
+                }
+            };
+            let mut c = crate::cdp::Cdp::connect(&addr).map_err(|e| format!("cannot reach the browser at {addr}: {e}"))?;
+            let launched = child.is_some();
+            if let Some(child) = child {
+                // From here it is this hand's to end, with Syn.
+                c.own(child);
+            }
+            return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched });
         }
         if app == "ui" && !cfg!(windows) {
             return Err("windows are driven through UI Automation, which only Windows has".into());
@@ -980,7 +1047,7 @@ impl Drop for EnvConnector {
 }
 
 #[cfg(windows)]
-mod no_inherit {
+pub(crate) mod no_inherit {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
 
@@ -1015,7 +1082,7 @@ mod no_inherit {
 }
 
 #[cfg(not(windows))]
-mod no_inherit {
+pub(crate) mod no_inherit {
     /// Rust's own spawn marks its pipes close-on-exec, and this server's
     /// stdio is replaced by /dev/null for the child: nothing leaks here.
     pub fn prepare(_cmd: &mut std::process::Command) {}

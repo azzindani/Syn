@@ -155,14 +155,31 @@ fn the_struct_verbs_the_model_can_call_all_reach_the_wire() {
     // These are handled by the in-memory model or by the relay and never
     // become an office-rpc method of their own.
     let not_on_the_wire = ["transfer"];
+    // A web page's own verbs never go to office-host: the browser hand
+    // answers them, which the next test holds to the same list.
+    let a_pages: Vec<&str> = core::tools::WEB_VERBS.iter().map(|v| v.name).collect();
     let missing: Vec<&&str> = core::tools::STRUCT_VERBS
         .iter()
-        .filter(|v| !wire.contains(&v.to_string()) && !not_on_the_wire.contains(*v))
+        .filter(|v| !wire.contains(&v.to_string()) && !not_on_the_wire.contains(*v) && !a_pages.contains(*v))
         .collect();
     assert!(
         missing.is_empty(),
         "these struct verbs are offered to the model but never reach a hand: {missing:?}"
     );
+}
+
+#[test]
+fn the_verbs_only_a_web_page_has_are_answered_by_the_browser_hand_and_by_no_office_helper() {
+    // The other side of the exemption above: a verb that is not on the
+    // Office wire must be one the browser hand really does, and must not
+    // have been given a handler in an Office helper by mistake.
+    let mut handled = methods_a_sidecar_handles("sidecar-csharp/Host/Program.cs");
+    handled.extend(methods_a_sidecar_handles("sidecar-csharp/Uia/Program.cs"));
+    for v in core::tools::WEB_VERBS {
+        assert!(core::cdp::VERBS.contains(&v.name), "{} is offered for a page and the browser hand does not answer it", v.name);
+        assert!(!methods_rust_can_send().contains(&v.name.to_string()), "{} would be sent to an Office helper", v.name);
+        assert!(!handled.contains(&v.name.to_string()), "{} is handled by an Office helper too: one of them is wrong", v.name);
+    }
 }
 
 #[test]

@@ -98,6 +98,17 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("theme", ("Apply", "Applying", "Applied", "a theme")),
     ("save", ("Save", "Saving", "Saved", "the document")),
     ("close", ("Close", "Closing", "Closed", "the document")),
+    // A web page.
+    ("goto", ("Go", "Going", "Went", "to a page")),
+    ("type", ("Type", "Typing", "Typed", "into a field")),
+    ("press", ("Press", "Pressing", "Pressed", "a key")),
+    ("scroll", ("Scroll", "Scrolling", "Scrolled", "the page")),
+    ("hover", ("Point", "Pointing", "Pointed", "at a control")),
+    ("choose", ("Choose", "Choosing", "Chose", "an option")),
+    ("wait", ("Wait", "Waiting", "Waited", "for the page")),
+    ("back", ("Go", "Going", "Went", "back")),
+    ("forward", ("Go", "Going", "Went", "forward")),
+    ("reload", ("Reload", "Reloading", "Reloaded", "the page")),
 ];
 
 /// `macro` is four different sentences depending on its `action`, because
@@ -211,6 +222,13 @@ fn target(name: &str, args: &str) -> Option<String> {
             "insertParagraph" | "createSlide" => named("title").or_else(|| named("text")),
             "macro" => named("name").or_else(|| named("title")),
             "transfer" => named("from"),
+            // A page: the address went to, the words typed for, the key
+            // pressed, the option chosen.
+            "goto" | "press" | "choose" => named("text"),
+            "wait" => named("selector").or_else(|| named("text")),
+            "scroll" => named("selector").or_else(|| named("text")),
+            "type" | "hover" => named("selector"),
+            "back" | "forward" | "reload" => None,
             // The workbook it came from: "Inserted a chart from plan.xlsx".
             "embedChart" => field(args, "from").and_then(|h| file(&h)),
             _ => named("selector").or_else(where_),
@@ -245,6 +263,10 @@ fn preposition(name: &str, args: &str) -> &'static str {
         "struct" => match verb.as_str() {
             "pivot" | "chart" | "picture" | "insertTable" => "on",
             "transfer" | "embedChart" => "from",
+            "goto" => "to",
+            "type" => "into",
+            "hover" => "at",
+            "wait" => "for",
             _ => "",
         },
         _ => "",
@@ -291,7 +313,12 @@ fn keeps_noun(name: &str, args: &str) -> bool {
     if name != "struct" {
         return false;
     }
-    !matches!(verb.as_str(), "addSheet" | "table" | "name" | "slicer" | "save" | "close")
+    // A page's verbs are whole sentences with their target: "Went to
+    // https://...", "Typed into #email", not "Went to a page to https://...".
+    !matches!(
+        verb.as_str(),
+        "addSheet" | "table" | "name" | "slicer" | "save" | "close" | "goto" | "type" | "press" | "hover" | "choose" | "wait" | "scroll"
+    )
 }
 
 fn forms_for(name: &str, args: &str) -> Forms {
@@ -330,7 +357,19 @@ pub enum Group {
     Open,
     Search,
     Service,
+    /// Anything done to a web page: reading it, pressing on it, typing into
+    /// it. Twelve steps on three pages is "browsed 3 pages", not twelve
+    /// documents restructured.
+    Web,
     Other,
+}
+
+/// The bucket for a call, knowing where it was made: a call on a web page
+/// is browsing, whichever of the six tools it is.
+fn group_in(name: &str, args: &str) -> Group {
+    let g = group(name);
+    let on_a_page = field(args, "handle").is_some_and(|h| h.starts_with("web:"));
+    if on_a_page && matches!(g, Group::Read | Group::Write | Group::Format | Group::Structure | Group::Export) { Group::Web } else { g }
 }
 
 /// Which bucket a call belongs to.
@@ -358,7 +397,7 @@ pub fn group(name: &str) -> Group {
 /// what happened as far as the human is concerned. t3code counts distinct
 /// files for the same reason; everything else counts calls.
 fn counts_handles(g: Group) -> bool {
-    matches!(g, Group::Write | Group::Format | Group::Structure)
+    matches!(g, Group::Write | Group::Format | Group::Structure | Group::Web)
 }
 
 fn phrase(g: Group, n: usize, now: bool) -> String {
@@ -382,6 +421,7 @@ fn phrase(g: Group, n: usize, now: bool) -> String {
         Group::Service => {
             format!("{} the plan and manual {n} {}", verb("Checked", "Checking"), plural("time", "times"))
         }
+        Group::Web => format!("{} {n} {}", verb("Browsed", "Browsing"), plural("page", "pages")),
         Group::Other => format!("{} {n} {}", verb("Used", "Using"), plural("tool", "tools")),
     }
 }
@@ -408,7 +448,7 @@ fn group_sentence(calls: &[(String, String)], now: bool) -> String {
     let mut order: Vec<Group> = Vec::new();
     let mut members: Vec<Vec<(String, String)>> = Vec::new();
     for (name, args) in calls {
-        let g = group(name);
+        let g = group_in(name, args);
         match order.iter().position(|x| *x == g) {
             Some(i) => members[i].push((name.clone(), args.clone())),
             None => {

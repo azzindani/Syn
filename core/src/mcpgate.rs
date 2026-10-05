@@ -431,7 +431,10 @@ impl Server {
     }
 
     fn refuse(&self, def: &Def, verb: Option<&str>, why: &str) -> Value {
-        let ex = example_of(&def.description, verb).map(|e| format!("\n{e}")).unwrap_or_default();
+        // The examples in a description are an Excel workbook's; shown after
+        // a refusal about a web page they point the wrong way.
+        let ex = if why.contains("web:") { None } else { example_of(&def.description, verb) };
+        let ex = ex.map(|e| format!("\n{e}")).unwrap_or_default();
         text_result(&format!("Not run: {why}{ex}"), true)
     }
 

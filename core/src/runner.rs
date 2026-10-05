@@ -608,6 +608,9 @@ impl Runner {
             .expect("hand_for() proved the bound hand is still attached");
         match hand.hand.dispatch_call(&job.call, &job.handle) {
             Ok(reply) if reply.ok => {
+                if app_of(&job.handle) == "web" {
+                    relay.note_outcome(&self.session, &reply.preview);
+                }
                 let preview = security::truncate_output(&reply.preview);
                 relay.emit(&self.session, "step.done", &job.handle, format!("{preview} live"))?;
                 if matches!(&job.call, Call::Struct(crate::ops::StructArgs::Office { verb, .. }) if verb == "close") {
@@ -616,6 +619,9 @@ impl Runner {
                 Ok(OpOut::Text { detail: reply.preview })
             }
             Ok(reply) => {
+                if app_of(&job.handle) == "web" {
+                    relay.note_outcome(&self.session, &reply.error);
+                }
                 let err = security::truncate_output(&reply.error);
                 relay.emit(&self.session, "step.error", &job.handle, err)?;
                 Err(Error::Live(reply.error))

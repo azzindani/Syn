@@ -73,7 +73,9 @@ namespace SynWindow
             Text = "Syn";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             AutoScaleMode = AutoScaleMode.Dpi;
-            MinimumSize = new Size(720, 480);
+            // Small on purpose: Settings > Appearance can make the page usable at
+            // this size, and a person who chose that should not be held back by the frame.
+            MinimumSize = new Size(440, 320);
             ClientSize = new Size(1280, 860);
             StartPosition = FormStartPosition.CenterScreen;
             _view.Dock = DockStyle.Fill;
@@ -164,7 +166,7 @@ namespace SynWindow
                 var onScreen = false;
                 foreach (var sc in Screen.AllScreens)
                     if (sc.WorkingArea.IntersectsWith(new Rectangle(r.X, r.Y, Math.Min(r.Width, 200), Math.Min(r.Height, 100)))) onScreen = true;
-                if (!onScreen || r.Width < 720 || r.Height < 480) return;
+                if (!onScreen || r.Width < 440 || r.Height < 320) return;
                 StartPosition = FormStartPosition.Manual;
                 Bounds = r;
                 if (p[4] == "1") WindowState = FormWindowState.Maximized;

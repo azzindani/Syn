@@ -151,6 +151,41 @@ try {
     }
     await page.close();
   }
+
+  // 5. Settings > Appearance: the same run at the smallest, the default and
+  // the largest of the five levels (text and layout moved together), at a
+  // desktop, a phone and the smallest window Syn's own frame allows, with
+  // the Appearance section itself on screen. The level is set the way a
+  // person's choice arrives, from storage before the page loads.
+  for (const [lvl, sizes] of [
+    [1, [[1440, 900, ""], [420, 860, "-narrow"], [440, 320, "-tiny"]]],
+    [4, [[1440, 900, ""], [420, 860, "-narrow"], [440, 320, "-tiny"]]],
+    [5, [[1440, 900, ""], [420, 860, "-narrow"]]],
+  ]) {
+    for (const [w, h, tag] of sizes) {
+      const page = await browser.newPage({ viewport: { width: w, height: h } });
+      await page.addInitScript((n) => localStorage.setItem("syn.look", JSON.stringify({ text: n, density: n })), lvl);
+      await page.goto(c.url);
+      await page.waitForFunction(() => !!window.live);
+      await page.evaluate(() => window.live.quiet());
+      await page.waitForTimeout(300);
+      await page.evaluate(
+        ([t, l, lines]) => {
+          window.live.render(t, l);
+          window.live.step("RECEIPT say model=deepseek/deepseek-chat open=3");
+          for (const x of lines) window.live.step(x);
+        },
+        [transcript, labels, live],
+      );
+      await page.evaluate(() => (document.getElementById("scroll").scrollTop = 1e9));
+      await stage(page, `level${lvl}-run${tag}`);
+      await page.evaluate(() => document.getElementById("setgear").click());
+      await page.waitForTimeout(250);
+      await page.evaluate(() => document.getElementById("look").scrollIntoView({ block: "end" }));
+      await stage(page, `level${lvl}-settings${tag}`);
+      await page.close();
+    }
+  }
 } finally {
   await browser.close();
   c.stop();

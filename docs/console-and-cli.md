@@ -70,6 +70,7 @@ port).
   and links to Settings, and a provider in the model list with no key has
   an "Add key" button. See [configuration.md](configuration.md#api-keys)
   for where keys are kept.
+  Below the keys is [Appearance](#appearance): text size and layout density.
 - **Runs from elsewhere show up too.** A run started from a terminal or by an
   MCP client writes to the same live log, and the console shows it as it
   happens.
@@ -80,6 +81,43 @@ its last line if the connection drops, and polls in the meantime.
 The console binds 127.0.0.1 only, and refuses any command whose `Origin` is
 not its own page (and any with no `Origin`), so neither another machine nor a
 web page you happen to visit can send it commands.
+
+### Appearance
+
+Settings (the key icon in the sidebar, or Settings in the status menu) has an
+**Appearance** section for using Syn as small as the window allows. It has
+two scales of five levels each, a Reset button, and applies at once with no
+reload.
+
+| level | 1 | 2 | 3 | **4** | 5 |
+|---|---|---|---|---|---|
+| **Text size** | 72% | 80% | 90% | **100%** | 115% |
+| **Layout density** | 50% | 65% | 82% | **100%** | 118% |
+
+- **Text size** scales every font. Nothing is drawn under 9 px, so at the
+  smallest levels the finest print stops at 9 px instead of shrinking
+  further. The reading column and the pop-up panels follow it, so a line
+  holds the same number of words at every level.
+- **Layout density** scales spacing, gaps, the height of a row, button or
+  chip, corner radii, icons, the top bar, and the sidebar (which narrows only
+  partway, to 70% at level 1, so a chat title still fits). A row never gets
+  shorter than its own text needs, so large text on a tight layout stops at
+  the height of the text.
+- **Level 4 on both is the page as it was** before the setting existed:
+  nothing changes for anyone who never opens it. Levels 1-3 are smaller than
+  that and 5 is larger.
+- The controls are radio groups: Tab stops once on each, and the arrow keys,
+  Home and End choose a level.
+- Syn's own window can be sized down to 440 x 320. At level 1 on both, the
+  composer, its chips, the pickers and Settings all fit that size, and the
+  sidebar is a drawer.
+
+The choice is stored in the browser's local storage under the key `syn.look`,
+as `{"text":2,"density":3}`, and is read by a script at the top of the page
+before anything is drawn, so a small page never flashes at full size on start.
+A missing, empty or unreadable value means level 4. Reset removes the key; so
+does deleting it by hand (in a browser, developer tools, Application, Local
+Storage). Each browser, and Syn's own window, keeps its own choice.
 
 ## The CLI
 

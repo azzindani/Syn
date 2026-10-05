@@ -25,7 +25,9 @@ line; copying `.env.example` to `.env` is enough.
 **Looking at it.** `node showcase.mjs` starts a console of its own, stages
 the states a person actually sees — the first screen, a run in progress, an
 approval, the status menu — and writes a PNG of each in dark and light, at
-desktop and phone width, to `testbed/shots/showcase`. It asserts nothing;
+desktop and phone width, to `testbed/shots/showcase`. It also writes the run
+and Settings at levels 1, 4 and 5 of Settings > Appearance (`level1-*`,
+`level4-*`, `level5-*`; `-tiny` is a 440x320 window). It asserts nothing;
 it is for judging the design by eye, which no spec can do.
 
 **Checking how it behaves.** `npm run audit` (`node audit.mjs`) starts a
@@ -55,6 +57,7 @@ the binary, because that failure is silent and completely convincing.
 | `concurrent.spec.mjs` | do two runs at once each keep their own view | nothing | |
 | `shell.spec.mjs` | do the minimap, banners, budget meter, contrast and folding work | nothing | |
 | `models.spec.mjs` | does the model picker list, search and choose models | nothing (a local fake provider) | |
+| `appearance.spec.mjs` | do Settings > Appearance's two five-level scales change the page the right way, keep their choice, work from the keyboard, never draw text under 9px, and fit a 440x320 window | nothing | ~30s |
 | `chat.spec.mjs` | does a typed prompt reach a model and come back | `AGENT_API_KEY` and whichever model `.env` wires to the current slot | one model call |
 
 Everything but `chat.spec.mjs` is offline: no key, no network, no Office.

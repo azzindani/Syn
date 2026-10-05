@@ -516,6 +516,19 @@ class SynsOwnBrowser(unittest.TestCase):
         self.assertIn("tab-", why, "the tabs there are are named by what to use")
         self.assertIn("open{", why, "and how to open an address is a call to copy")
 
+    def test_23b_a_key_aimed_at_a_field_the_page_replaced_goes_to_the_one_that_took_its_place(self):
+        self.page("/typeahead")
+        self.verb("type", selector="#q", text="ada")
+        # The box the model named is gone from the page; the key is still meant
+        # for the one the page put there, and is said to have gone there.
+        said = self.verb("press", selector="#q", text="Enter")
+        self.assertIn("redrew the field", said)
+        self.assertIn("searched for ada", self.read("#out"))
+        # Once: a selector that is gone is refused when nothing was typed into it.
+        refusal = self.verb_refused("press", selector="#q", text="Enter")
+        self.assertIn("no element matches #q", refusal)
+        self.assertIn("without a selector", refusal)
+
     def test_24_zz_sign_ins_are_kept_the_browser_goes_with_syn_and_comes_back_when_wanted(self):
         self.page("/cookie")
         self.assertIn("first visit", self.read("#state"))

@@ -685,6 +685,12 @@ pub struct Cdp<S: Read + Write + Deadline> {
     /// a screenshot of it could not be taken. Before a call on a tab, it is
     /// brought forward, and only when it is not already.
     active: Option<String>,
+    /// The field `type` last wrote into, as (tab session, the selector it was
+    /// given), until the next call that is not a key press. A page that
+    /// completes as you type may replace that field with a new one, and the
+    /// key that follows (Enter to search) is then aimed at a selector that no
+    /// longer exists though the person can see exactly what is meant.
+    typed: Option<(String, String)>,
     /// The browser, when Syn started it: ended with this hand.
     child: Option<Child>,
     /// How long it is given to close by itself before it is told.
@@ -708,8 +714,13 @@ impl<S: Read + Write + Deadline> Cdp<S> {
             loading: HashMap::new(),
             notes: Vec::new(),
             active: None,
+            typed: None,
             child: None,
-            grace: Duration::from_secs(4),
+            // A browser closes in about a second, but Edge was measured taking
+            // 5 s after a page that did not resolve, and a browser told at 4 s
+            // had not yet written the cookie of a sign-in made a moment before.
+            // The console waits a little longer than this for its CLI.
+            grace: Duration::from_secs(10),
             policy: Policy::default(),
         }
     }
@@ -1312,6 +1323,7 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         };
         self.type_text(session, text)?;
         self.settle(session, Duration::from_millis(80), LOAD_MAX)?;
+        self.typed = Some((session.to_string(), selector.trim().to_string()));
         let mut said = format!("typed {} characters into {}", text.chars().count(), jstr(&before_field, "d"));
         if let Ok(st) = self.page(session, unit, &format!("S.state({})", js_string(&jstr(&before_field, "sel"))))?
             && !jstr(&st, "now").is_empty()
@@ -1322,21 +1334,35 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         Ok(good(said))
     }
 
-    fn press(&mut self, session: &str, handle: &str, unit: &str, selector: &str, spec: &str) -> std::io::Result<Reply> {
+    fn press(&mut self, session: &str, handle: &str, unit: &str, selector: &str, spec: &str, typed: Option<(String, String)>) -> std::io::Result<Reply> {
         let (mods, key) = match parse_key(spec) {
             Ok(k) => k,
             Err(e) => return Ok(bad(e)),
         };
+        // Where the key went, when that was not the field named.
+        let mut redrawn = String::new();
         if !selector.trim().is_empty() {
             match self.page(session, unit, &format!("S.focus({})", js_string(selector)))? {
                 Err(e) if e.contains("no element matches") => {
                     // Seen on a search box with suggestions: typing into it
                     // made the page build a new field and drop the one that
-                    // was typed into, and the model's next call named the
-                    // old one. The key it wants goes where the focus is.
-                    return Ok(bad(format!(
-                        "{e}. If you were typing into a field and the page redrew it as you typed (a search box with suggestions does), press the key without a selector: it goes to whatever has the focus"
-                    )));
+                    // was typed into, and the next call named the old one.
+                    // When that is the field just typed into and a field has
+                    // the focus now, the key is meant for it: nothing else is
+                    // plausible, and a refusal cost the model a step in every
+                    // real search it ran. Otherwise, say what to do.
+                    let meant = typed.is_some_and(|(s, sel)| s == session && sel == selector.trim());
+                    let now = if meant { self.page(session, unit, "S.focused()")?.ok() } else { None };
+                    match now {
+                        Some(f) if jbool(&f, "field") => {
+                            redrawn = format!(" The page redrew the field you typed into as you typed, so the key went to {}, which has the focus.", jstr(&f, "d"));
+                        }
+                        _ => {
+                            return Ok(bad(format!(
+                                "{e}. If you were typing into a field and the page redrew it as you typed (a search box with suggestions does), press the key without a selector: it goes to whatever has the focus"
+                            )));
+                        }
+                    }
                 }
                 Err(e) => return Ok(bad(e)),
                 Ok(v) if !jbool(&v, "ok") => return Ok(bad(jstr(&v, "say"))),
@@ -1346,7 +1372,7 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         let before = self.snapshot(session)?;
         self.press_key(session, mods, &key)?;
         self.settle(session, NAV_LOOK, LOAD_MAX)?;
-        let mut said = format!("pressed {spec}.");
+        let mut said = format!("pressed {spec}.{redrawn}");
         said.push_str(&self.arrived(session, handle, &before)?);
         Ok(good(said))
     }
@@ -1556,6 +1582,11 @@ impl<S: Read + Write + Deadline + std::fmt::Debug> LiveHand for Cdp<S> {
             },
             Call::Struct(StructArgs::Office { verb, args, .. }) => {
                 let (selector, text) = (arg(args, "selector"), arg(args, "text"));
+                // Only a key press may use what was typed, and only the next one.
+                let typed = if verb == "press" { self.typed.take() } else { None };
+                if verb != "type" {
+                    self.typed = None;
+                }
                 match verb.as_str() {
                     "goto" => match check_url(text, &self.policy) {
                         Err(e) => bad(e),
@@ -1571,7 +1602,7 @@ impl<S: Read + Write + Deadline + std::fmt::Debug> LiveHand for Cdp<S> {
                         }
                     },
                     "type" => self.do_type(&session, unit, selector, text)?,
-                    "press" => self.press(&session, handle, unit, selector, text)?,
+                    "press" => self.press(&session, handle, unit, selector, text, typed)?,
                     "scroll" => self.scroll(&session, unit, selector, text)?,
                     "hover" => self.hover(&session, unit, selector)?,
                     "choose" => self.choose(&session, handle, unit, selector, text)?,
@@ -2600,6 +2631,37 @@ mod tests {
         assert!(keys[0].contains("\"type\":\"rawKeyDown\"") && keys[0].contains("\"modifiers\":2") && !keys[0].contains("\"text\""), "{}", keys[0]);
         let r = c.dispatch_call(&verb("press", &[("text", "Wiggle")]), H).unwrap();
         assert!(!r.ok && r.error.contains("not a key I know"), "{}", r.error);
+    }
+
+    #[test]
+    fn a_key_aimed_at_the_field_just_typed_into_follows_it_when_the_page_redrew_it() {
+        let (mut c, st) = one_tab(vec![
+            ("S.field(", "{\"ok\":true,\"d\":\"input#q\",\"sel\":\"#q\"}"),
+            ("S.state(", "{\"now\":\"ada\"}"),
+            ("S.page(", PAGE_A),
+            ("S.focus(", "{\"threw\":\"no element matches #q\"}"),
+            ("S.focused(", "{\"d\":\"input[title=Search]\",\"field\":true,\"sel\":\"input\"}"),
+        ]);
+        let t = c.dispatch_call(&verb("type", &[("selector", "#q"), ("text", "ada")]), H).unwrap();
+        assert!(t.ok, "{t:?}");
+        let r = c.dispatch_call(&verb("press", &[("text", "Enter"), ("selector", "#q")]), H).unwrap();
+        assert!(r.ok && r.preview.contains("redrew the field") && r.preview.contains("input[title=Search]"), "{r:?}");
+        let log = st.borrow().log.clone();
+        let enters = log.iter().filter(|(m, p, _)| m == "Input.dispatchKeyEvent" && p.contains("\"key\":\"Enter\"")).count();
+        assert!(enters >= 2, "the key went down and up on the focus: {log:?}");
+        // Used once: the next press at that selector is refused again.
+        let again = c.dispatch_call(&verb("press", &[("text", "Enter"), ("selector", "#q")]), H).unwrap();
+        assert!(!again.ok && again.error.contains("without a selector"), "{again:?}");
+    }
+
+    #[test]
+    fn a_key_aimed_at_a_field_that_was_not_just_typed_into_is_still_refused_when_it_is_gone() {
+        let (mut c, _) = one_tab(vec![
+            ("S.focus(", "{\"threw\":\"no element matches #q\"}"),
+            ("S.focused(", "{\"d\":\"input#other\",\"field\":true,\"sel\":\"#other\"}"),
+        ]);
+        let r = c.dispatch_call(&verb("press", &[("text", "Enter"), ("selector", "#q")]), H).unwrap();
+        assert!(!r.ok && r.error.contains("no element matches #q"), "a field that happens to have the focus is not guessed at: {r:?}");
     }
 
     #[test]

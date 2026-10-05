@@ -77,6 +77,7 @@ LINKS = [
     ("big", "Big page", "/big"),
     ("cookie", "Cookie", "/cookie"),
     ("title-change", "Title change", "/title-change"),
+    ("typeahead", "Typeahead", "/typeahead"),
 ]
 
 
@@ -458,6 +459,32 @@ host.addEventListener('mouseleave', function () { host.classList.remove('open');
 )
 
 
+# ---------------------------------------------------------------- typeahead
+
+# A search box that is replaced by a new one as soon as something is typed in
+# it, which is what Wikipedia's does: the id the first one had is gone from the
+# page after one keystroke, though a person sees the same box with the cursor
+# in it.
+TYPEAHEAD = page(
+    "Typeahead",
+    r"""<h1>Typeahead</h1>
+<div id="box"><input id="q" type="search" title="Search the site"></div>
+<p id="out"></p>""",
+    script=r"""var out = document.getElementById('out');
+function wire(i) {
+  i.addEventListener('input', function () {
+    var v = i.value, n = document.createElement('input');
+    n.type = 'search'; n.title = 'Search the site'; n.value = v;
+    i.replaceWith(n); wire(n); n.focus(); n.setSelectionRange(v.length, v.length);
+  });
+  i.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') out.textContent = 'searched for ' + i.value;
+  });
+}
+wire(document.getElementById('q'));""",
+)
+
+
 # ---------------------------------------------------------------- big
 
 BIG_PARAGRAPHS = 2600
@@ -511,6 +538,7 @@ PAGES = {
     "/hover": HOVER,
     "/big": BIG,
     "/title-change": TITLE_CHANGE,
+    "/typeahead": TYPEAHEAD,
 }
 DYNAMIC = {
     "/submit", "/table", "/redirect", "/slow", "/server-error",

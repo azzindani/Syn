@@ -91,7 +91,10 @@ a UI change, `node showcase.mjs` writes screenshots of every state, dark and
 light, desktop and phone, to `testbed/shots/showcase`: look at them. Then
 `npm run audit` checks how it behaves (PASS/FAIL, exit 1 on a failure).
 After a change to the provider, the loop's process handling or anything
-that spawns, run `python3 tests/dev/turn.py` and `tests/dev/leftovers.py`.
+that spawns, run `python3 tests/dev/turn.py` and `tests/dev/leftovers.py`. After
+a change to how Syn ends (the window closing, the console's stop, the
+browser's shutdown), run `python tests/dev/window_close.py` on Windows: only
+closing the real window shows what the browser did or did not get to write.
 
 ## What a cloud session can and cannot verify
 

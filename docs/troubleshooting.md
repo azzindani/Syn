@@ -50,9 +50,11 @@ Syn and delete `.agent\browser-profile`.
 
 **A site wants a sign-in, a password or a payment card.** The model cannot
 type those: it asks you to do it in the browser window, then carries on.
-Because the browser keeps its own profile, once is enough. A sign-in box that
-is a frame from another site cannot be pressed by a script either, and gets
-the same answer.
+Because the browser keeps its own profile, once is enough: closing Syn's
+window, or quitting, lets the browser write the sign-in out before it goes.
+Ending Syn from Task Manager does not, and a sign-in made in the last half
+minute may be lost. A sign-in box that is a frame from another site cannot be
+pressed by a script either, and gets the same answer.
 
 **`AGENT_CDP` is set and Syn will not start a browser.** That is what it
 means: Syn attaches to the browser at that port and leaves it alone. Remove

@@ -29,8 +29,62 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
+
+/// Set when the window has been closed and Syn is ending: no more
+/// connections are taken, and the port is let go.
+static CLOSING: AtomicBool = AtomicBool::new(false);
+
+/// How long a closed window may keep Syn alive while the browser is asked to
+/// close. Edge was measured taking 5 s to close after a page that failed to
+/// resolve, against about 1 s otherwise.
+const CLOSE_WAIT: Duration = Duration::from_secs(20);
+
+/// The window was closed: end the CLI, and so the browser and the helpers it
+/// started, the polite way, then let the caller exit.
+///
+/// A turn that is running is asked to stop first (the CLI reads `quit` only
+/// between commands). If the CLI does not go within `CLOSE_WAIT` the caller
+/// exits anyway and the job object that ties its children to this process
+/// takes them, as it always has.
+fn end_politely(cli: &Mutex<Cli>, live: &Live, child_pid: &AtomicU32, port: u16) {
+    CLOSING.store(true, Ordering::SeqCst);
+    // Wake the accept loop, which then lets go of the port: a Syn started
+    // again at once is a new console, not a window onto this one that is
+    // about to go.
+    let _ = TcpStream::connect(("127.0.0.1", port));
+    let deadline = Instant::now() + CLOSE_WAIT;
+    if live.busy.load(Ordering::SeqCst) {
+        let _ = core::stop::request(child_pid.load(Ordering::SeqCst));
+        let stop_by = Instant::now() + Duration::from_secs(4);
+        while live.busy.load(Ordering::SeqCst) && Instant::now() < stop_by {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    loop {
+        let held = match cli.try_lock() {
+            Ok(g) => Some(g),
+            Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        };
+        if let Some(mut c) = held {
+            let _ = c.stdin.write_all(b"quit\n");
+            let _ = c.stdin.flush();
+            while Instant::now() < deadline {
+                if matches!(c.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
 const PAGE: &str = include_str!("../../../widget/index.html");
 
@@ -381,6 +435,12 @@ fn main() {
     // The child's pid outside its lock, so `/stop` can reach a turn that
     // holds the lock for as long as it runs.
     let child_pid = Arc::new(AtomicU32::new(cli.lock().map(|c| c.child.id()).unwrap_or(0)));
+    // When the window is closed: end the CLI the polite way first. The pid is
+    // read outside the CLI's lock, which a running turn holds.
+    {
+        let (cli, live, child_pid) = (Arc::clone(&cli), Arc::clone(&live), Arc::clone(&child_pid));
+        core::appwin::before_exit(move || end_politely(&cli, &live, &child_pid, port));
+    }
     // A run in another process writes its own log; `--tail` pins the
     // console to one file rather than following whichever is newest.
     let pinned: Option<std::path::PathBuf> = args
@@ -435,6 +495,9 @@ fn main() {
     // twenty minutes no longer blocks the accept loop, which is what made
     // polling for progress impossible.
     for conn in listener.incoming() {
+        if CLOSING.load(Ordering::SeqCst) {
+            break;
+        }
         let Ok(s) = conn else { continue };
         let cli = Arc::clone(&cli);
         let live = Arc::clone(&live);
@@ -826,6 +889,12 @@ fn main() {
             }
         }
         });
+    }
+    // The window was closed: the port is let go, and what is left is the
+    // polite stop on the thread that is ending the process.
+    drop(listener);
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
     }
 }
 

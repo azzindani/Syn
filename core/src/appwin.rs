@@ -15,7 +15,31 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+/// What to do before Syn ends because its window was closed.
+static BEFORE_EXIT: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Register what the console does between "the window is gone" and the end of
+/// the process. Syn used to end on the spot, and the job object that ties its
+/// children to it killed the CLI and the browser the CLI had started in the
+/// same instant, so the browser never wrote out what it was holding: a site
+/// signed in to in the last half minute was signed out at the next start
+/// (measured: a cookie set seconds before the window closed was lost every
+/// time, and kept after a clean `quit`).
+pub fn before_exit(f: impl Fn() + Send + Sync + 'static) {
+    let _ = BEFORE_EXIT.set(Box::new(f));
+}
+
+/// The window is gone, and so is the reason to run.
+#[cfg(windows)]
+fn leave() -> ! {
+    if let Some(f) = BEFORE_EXIT.get() {
+        f();
+    }
+    std::process::exit(0)
+}
 
 #[cfg(any(windows, test))]
 use std::path::PathBuf;
@@ -210,7 +234,7 @@ fn open_host(host: &Path, url: &str, data: &Path, watch: bool, fallback: impl Fn
         if host_gave_no_window(code, started.elapsed()) {
             fallback();
         } else if watch {
-            std::process::exit(0);
+            leave();
         }
     });
     true
@@ -245,7 +269,7 @@ fn open_browser_window(url: &str, profile: &Path, watch: bool) -> bool {
                 std::thread::sleep(Duration::from_secs(1));
                 gone = if win::syn_windows().is_empty() { gone + 1 } else { 0 };
                 if gone >= 2 {
-                    std::process::exit(0);
+                    leave();
                 }
             }
         });

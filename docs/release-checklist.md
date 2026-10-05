@@ -122,10 +122,15 @@ powershell -File scripts\live-cdp-smoke.ps1 -Browser edge
 cd core && cargo build --bins && cd ..
 python tests\dev\turn.py
 python tests\dev\leftovers.py
+python tests\dev\window_close.py
 cd tests\ui && npm install && npm test && npm run audit
 ```
 
 - [ ] `turn.py` all PASS (its Windows process listing has not run before).
+- [ ] `window_close.py` all PASS: it closes the real window and checks that
+      Syn ends within a second or two, nothing of Syn's or its browser is
+      left, and a sign-in made just before the close is still there at the
+      next start.
 - [ ] `leftovers.py` all PASS, including the browser scenario (a forced
       kill of Syn with its browser open leaves no browser process); the
       Office MCP scenario skips on Windows, which §4 covers by hand.

@@ -83,6 +83,31 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
 - [ ] **A CSV.** Ask Syn to turn a `.csv` into an `.xlsx`. It should be
       `open` then `export`: two calls.
 
+## 3b. The browser, on a real desktop
+
+```
+powershell -File scripts\live-cdp-smoke.ps1     # Chrome, window showing
+powershell -File scripts\live-cdp-smoke.ps1 -Browser edge
+```
+
+- [ ] Both suites pass in Chrome and in Edge, and the script ends with
+      "clean: no test browser processes remain".
+- [ ] On a machine with only Edge (no Chrome), ask Syn in the console to
+      open a page and read its heading: a browser window of its own
+      opens, titled by the page. It is not your everyday profile (none of
+      your sign-ins are in it).
+- [ ] Ask Syn to sign in to a site: it fills the name, refuses the password
+      field and asks you to type it. Type it in the window, say so, and it
+      carries on. Close Syn, start it again, ask for the same site: still
+      signed in.
+- [ ] Close the browser window while Syn is open, then ask for a page: it
+      says the window was closed and opens one again.
+- [ ] Close Syn: no `chrome.exe` or `msedge.exe` of Syn's own is left
+      (Task Manager, Details, command line has `browser-profile`). Your own
+      Chrome windows are untouched.
+- [ ] With `AGENT_BROWSER=off`, the model is told it has no browser rather
+      than failing at a call.
+
 ## 4. From an MCP client
 
 - [ ] Point Claude Desktop (or another client) at the package's
@@ -101,8 +126,9 @@ cd tests\ui && npm install && npm test && npm run audit
 ```
 
 - [ ] `turn.py` all PASS (its Windows process listing has not run before).
-- [ ] `leftovers.py` all PASS; the MCP scenario skips on Windows, which §4
-      covers by hand.
+- [ ] `leftovers.py` all PASS, including the browser scenario (a forced
+      kill of Syn with its browser open leaves no browser process); the
+      Office MCP scenario skips on Windows, which §4 covers by hand.
 - [ ] The UI specs pass except `chat.spec.mjs` without a key; `npm run
       audit` all PASS.
 

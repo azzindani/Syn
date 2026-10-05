@@ -41,7 +41,8 @@ which writes both to `dist\`. `scripts\installer.nsi` is the installer.
 - [Rust](https://rustup.rs) (stable)
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - PowerShell 5.1 or later (included with Windows)
-- For browsers and Electron apps: Chrome or Edge
+- For web pages: Chrome or Edge (every Windows machine has Edge). Syn starts
+  one of its own; nothing to configure
 - For the model-driven agent: an API key for an OpenAI-compatible provider
   (OpenRouter by default). Not needed to use Syn from an MCP client.
 
@@ -119,8 +120,9 @@ the number of failures. `-Vba` adds the VBA steps (see
 each step did.
 
 Also available: `live-uia-smoke.ps1` (drives Calculator through UI
-Automation) and `live-cdp-smoke.ps1` (drives a browser through the DevTools
-protocol).
+Automation) and `live-cdp-smoke.ps1` (starts Syn's own browser with its window showing and
+drives a fixture site through every browser verb, then checks nothing is left
+running).
 
 ## Stopping
 

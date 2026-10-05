@@ -3,8 +3,8 @@
 Syn is a desktop agent for one person on one machine. It lets a language
 model work in the applications you already have open — Word, Excel and
 PowerPoint through COM, any native Windows window through UI Automation, and
-browsers and Electron apps through the Chrome DevTools protocol — while you
-watch, interrupt and undo.
+web pages in a browser of its own, and Electron apps, through the Chrome
+DevTools protocol — while you watch, interrupt and undo.
 
 It reads structure, not pixels: no screenshots and no clicking by
 coordinates. Any OpenAI-compatible model works, through OpenRouter by
@@ -22,6 +22,13 @@ default, and any MCP client can use the same tools.
   links, headers and page setup; paragraphs, tables and contents in Word;
   slides, text boxes, themes and slide size in PowerPoint. See
   [docs/tools.md](docs/tools.md).
+- **Browses in a window of its own.** With Chrome or Edge on the computer
+  and nothing to set up, it opens pages, reads what can be pressed or
+  filled, types and clicks with real input, follows links into new tabs,
+  and waits for pages that load late. The browser keeps its own profile, so
+  you sign in to a site in its window once, and it never types a password
+  or a card number: it asks you to. It is not your everyday browser, and it
+  goes when Syn does. `AGENT_BROWSER=off` removes it.
 - **Real formulas, not arithmetic in the model.** It writes live formulas and
   reads their results, so a sheet of 250,000 rows is one call, not a
   context window.

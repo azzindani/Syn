@@ -33,7 +33,7 @@ the CLI's `attach`) returns:
 | Word | `word:report.docx:body` | `body` (the whole text, numbered); `p3` (one paragraph); `p3:p9` (several). `p0` is the first paragraph. `t2` is the second table, `t2.r1` its first row (`t2.r2:r9` several), `t2.c3` a column |
 | PowerPoint | `ppt:deck.pptx:deck` | `deck`; `s3` (slide 3, the title for `write`/`format`); `s3.body`; `s3.notes` |
 | A window | `ui:Calculator::self` | `:tree`; `id=num7Button`, `name=Seven`, `type=Button`, joined with `,` |
-| A web page | `web:Example Domain::doc` | CSS: `h1`, `#total`, `table tr:nth-child(2)`; `body` for the page text |
+| A web page | `web:tab-k3j9x::doc` | CSS: `h1`, `#total`, `input[name=q]`; `text=Sign in`; `label=Email`; `frame >>> #save` into a frame or shadow root; `body` for the page text; `:map` for what can be pressed or filled |
 
 Small mistakes are resolved when the meaning is certain: a bare file name
 (`plan.xlsx`), another unit of the same document (`excel:plan.xlsx:Sheet1`),
@@ -180,6 +180,41 @@ application is asked, with the list of verbs that app does have.
 `invoke` presses a control (`action`: `invoke`, `click`, `toggle`, `select`,
 `expand`, `collapse`, `focus`). `transfer` (`from`, `selector`, `title`)
 copies typed data between two handles with its provenance recorded.
+
+### Web pages
+
+`open` with `app: "browser"` and an address opens a tab in Syn's own browser
+(started with the first page; see [configuration.md](configuration.md)), and
+returns the tab's handle and a map of what is on the page. A tab is named
+`tab-xxxxx` from the browser's own id for it, which stays the same as its
+page and title change. `open` also takes a tab's name, or part of its title
+or address, to find a tab that is already open.
+
+`read` takes `:map` (every field, button, link and heading, each with a
+selector that finds exactly that one thing, and what a field holds now),
+`body` (the visible text, 4,000 characters at a time: `body@4000` carries
+on) or any selector. `write` replaces what a field holds.
+
+| Verb | Fields | Notes |
+|---|---|---|
+| `goto` | `text` (an address) | `http` and `https` only. |
+| `back`, `forward`, `reload` | — | |
+| `invoke` | `selector`, `action` | `click` is a real mouse press at the middle of the element. A hidden, disabled or covered element is refused, saying which and what covers it. `toggle` sets a checkbox, `focus` focuses. |
+| `type` | `selector`, `text` | Real keystrokes at the end of what the field holds. |
+| `press` | `text` (a key), `selector` (optional) | `Enter`, `Tab`, `Escape`, `ArrowDown`, `PageDown`, `Backspace`, or a shortcut such as `Control+a`. |
+| `choose` | `selector`, `text` | An option of a drop-down list, by its words. |
+| `hover` | `selector` | The pointer onto it, for menus that open on hover. |
+| `scroll` | `text` (`up`, `down`, `top`, `bottom`) or `selector` | Brings an element into view, for pages that load as you scroll. |
+| `wait` | `selector` or `text`, `rule` (`gone`), `name` (seconds, up to 30) | Until the element or words appear, or with `gone`, leave. |
+| `find` | `text` | Where the words are written, with a selector. |
+| `close` | — | A tab Syn opened. |
+
+A press, a key or a choice reports where the page went; when it says nothing
+about a new address the page stayed where it was. A link that opens another
+tab says so and names it. A selector that fits several things (a `text=` or
+`label=` most often) is refused with each candidate's selector rather than
+guessed. Password and card fields are refused: the person enters those.
+`manual` topic `browser` has the full reference a model reads.
 
 ### VBA
 

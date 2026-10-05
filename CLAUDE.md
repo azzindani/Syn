@@ -28,7 +28,11 @@ index is `docs/README.md`, and background notes are in `docs/design/`.
     `looptools.rs` holds tools the loop answers itself (`manual`, `plan`),
     and `surface.rs` merges the two at the wire.
   - `hand.rs`: the `office-rpc/1` transport (JSON lines over a named pipe).
-    `cdp.rs` + `ws.rs` are the browser hand.
+    `cdp.rs` + `ws.rs` are the browser hand, and `page.js` is the script it
+    runs inside a page (selectors, `:map`, what is visible). `browser.rs`
+    finds Chrome or Edge and starts one of Syn's own on its own profile,
+    on a port the system picks, tethered so it goes when Syn does; a
+    browser named by `AGENT_CDP` is attached and never started or closed.
   - `provider.rs`, `config.rs`, `router.rs`: request bodies, `.env`
     loading, and the four model slots. `catalog.rs` is the console's model
     list: each provider's `GET /models`, cached in `.agent/models.json`;
@@ -104,7 +108,10 @@ There are three tiers (`docs/development.md`):
    `python3-uno`; run it with `/usr/bin/python3`). It proves everything
    above the C#, formulas included. Use it for any change to MCP, the desk,
    the wire or the guidance. `tests/test_cdp_live.py` does the same for the
-   browser hand, against the sandbox's headless Chromium.
+   browser hand in attach mode, against the sandbox's headless Chromium;
+   `tests/browser/test_browser_live.py` does it for Syn's own browser,
+   against the fixture site `tests/browser/site.py`. Use them for any
+   change to `cdp.rs`, `page.js`, `browser.rs` or the browser's manual.
 3. Windows with Office installed, the only way to prove a COM call is
    right.
 

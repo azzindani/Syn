@@ -56,7 +56,8 @@ the model provider is reached through `curl`.
 | `ops` | The operations and the in-memory document model (used when no application is connected). |
 | `runner`, `queue`, `guard`, `security`, `bus` | The one path to a document and its gates; the event feed and session state. |
 | `hand` | The `office-rpc/1` client for the Office and UI Automation helpers. |
-| `cdp`, `ws` | The browser hand: Chrome DevTools over an RFC 6455 WebSocket. |
+| `cdp`, `ws`, `page.js` | The browser hand: Chrome DevTools over an RFC 6455 WebSocket, and the script it runs inside a page to map, find and read (compiled in). |
+| `browser` | Syn's own browser: finds Chrome or Edge, starts it on a profile of its own on a port the system picks, and ends it with Syn. |
 | `desk` | How an MCP session gets a document open: connect a helper, start it if needed, open the file, bind the handle. |
 | `mcpgate` | The MCP server; its document tools are generated from `tools`. |
 | `agent`, `looptools`, `surface` | The agent loop, the tools it answers itself (`plan`, `manual`), and the merged surface it offers the model. |

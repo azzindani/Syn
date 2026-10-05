@@ -38,6 +38,28 @@ that are already running and named in `.env` (`AGENT_PIPE_EXCEL` and so on);
 see [setup-windows.md](setup-windows.md#run). An MCP client starts helpers by
 itself.
 
+**The model says it has no browser.** Syn found no Chrome or Edge, or
+`AGENT_BROWSER=off` is set. Install either, or give the program's path in
+`AGENT_BROWSER`. The message names which of the two it is.
+
+**The browser opens but is empty, or its window disappeared.** Closing the
+window stops Syn's browser, and the model is told so: the next `open` of an
+address starts it again, with its sign-ins kept; if a person closed it on
+purpose, the model is told to ask before reopening it. To start fresh, close
+Syn and delete `.agent\browser-profile`.
+
+**A site wants a sign-in, a password or a payment card.** The model cannot
+type those: it asks you to do it in the browser window, then carries on.
+Because the browser keeps its own profile, once is enough. A sign-in box that
+is a frame from another site cannot be pressed by a script either, and gets
+the same answer.
+
+**`AGENT_CDP` is set and Syn will not start a browser.** That is what it
+means: Syn attaches to the browser at that port and leaves it alone. Remove
+the line to use Syn's own. Chrome ignores `--remote-debugging-port` on your
+everyday profile, so the browser it names needs a `--user-data-dir` of its
+own.
+
 **A long model reply stops with "the model sent nothing for 180s".** The
 connection went silent. Raise `AGENT_STREAM_IDLE_SECS`, or set
 `AGENT_STREAM=0` if the provider or a gateway in between mishandles

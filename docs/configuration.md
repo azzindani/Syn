@@ -78,7 +78,9 @@ wrong would connect to something else, so there is no built-in default.
 |---|---|---|
 | `AGENT_PIPE_EXCEL`, `AGENT_PIPE_WORD`, `AGENT_PIPE_PPT` | `hand-excel`, `hand-word`, `hand-powerpoint` | The named pipe (Unix socket off Windows) each Office helper listens on. `off` stops offering that application. |
 | `AGENT_PIPE_UIA` | none: not offered | The UI Automation helper, for any native Windows window. `.env.example` sets `hand-uia`. |
-| `AGENT_CDP` | `127.0.0.1:9222` | A Chromium browser or Electron app started with `--remote-debugging-port`. That port is unauthenticated: keep it on 127.0.0.1 and use a separate `--user-data-dir`. |
+| `AGENT_BROWSER` | Chrome, then Edge | The browser Syn starts when a page is first wanted: a program's path, or `off` to give the model no browser at all. Unset, Syn looks in the usual places for Chrome and then Edge (every Windows machine has Edge). It runs on a profile of its own in `.agent\browser-profile`, apart from yours, so a site signed in to once stays signed in; delete that folder to sign out of everything. It listens on loopback on a port the system picks, and stops when Syn does. |
+| `AGENT_BROWSER_HEADLESS` | off | `1` runs that browser with no window, for a server or a test. |
+| `AGENT_CDP` | none | Drive a browser or Electron app that is **already running** instead: one started with `--remote-debugging-port` and a `--user-data-dir` of its own. Syn attaches and never starts or closes it, and `AGENT_BROWSER` is not used. That port is unauthenticated: keep it on 127.0.0.1. Chrome ignores the port on your everyday profile. |
 | `AGENT_OFFICE_HOST` | — | Path to `office-host.exe` (or `sidecar-lo/lo_host.py` off Windows), when not in this repository's Release build output. |
 | `AGENT_UIA_HOST` | — | Path to `uia-host.exe`, likewise. |
 | `AGENT_PYTHON` | `python3` | The Python that has LibreOffice's `uno` module, for `lo_host.py`. |

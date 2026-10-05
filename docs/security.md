@@ -118,11 +118,38 @@ running with the user's full privileges. It is **off by default**:
   attributes to the page that holds the approve button.
 - **The helpers** listen on named pipes (Unix sockets off Windows) local to
   the machine.
-- **The browser hand** needs a Chromium started with
-  `--remote-debugging-port`. That port is unauthenticated: anything on the
-  machine that can reach it controls the browser, including its logged-in
-  sessions. Keep it on `127.0.0.1` and use a separate `--user-data-dir`, not
-  your everyday profile.
+- **The browser** is Syn's own: a Chrome or Edge it starts on a profile of
+  its own (`.agent\browser-profile`), never your everyday one, so the model
+  reaches only the sites a person signed in to in that window. Its debugging
+  port is unauthenticated, so it is opened on loopback only, on a port the
+  system picks when the browser starts, and goes when Syn does. It starts
+  when a page is first wanted, not at launch; `AGENT_BROWSER=off` removes it.
+  With `AGENT_CDP` Syn attaches to a browser you started instead and never
+  starts or closes it; that port is the same open door, so keep it on
+  `127.0.0.1` and use a separate `--user-data-dir`.
+
+## The browser
+
+What a model can do to a page is limited by Syn, not by trusting the page:
+
+- **Addresses.** Only `http` and `https`, with no sign-in in the address.
+  `file:`, `chrome:`, `edge:`, `javascript:`, `data:`, `blob:` and
+  `view-source:` are refused,
+  and so are Syn's own console and the browser's own control port, so a page
+  cannot be used to reach what Syn runs.
+- **Secrets.** A password or card field is never read, written or typed
+  into: the model is told to ask the person, who enters it in the window.
+- **What is read.** Only text a person can see: a hidden block or a closed
+  menu is not read, so text meant for the model alone does not get to it.
+  What a page says goes back fenced as untrusted data, like a document's.
+- **Message boxes.** An alert is closed and reported. A confirm or a prompt
+  is answered Cancel and reported, because the answer is the person's.
+- **Sending, buying, deleting.** The model is told that a form that buys,
+  sends, posts or deletes is the person's to submit unless they asked for
+  exactly that, and a repeated identical call stops for a person as it does
+  anywhere else.
+- **Frames from another site** (an embedded sign-in or payment box) are not
+  reachable by a script, and Syn does not try to get around that.
 
 ## Secrets
 

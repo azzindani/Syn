@@ -46,12 +46,28 @@ jobs:
         env:
           AGENT_PYTHON: /usr/bin/python3
           SYN_REQUIRE_LO: "1"
-      # The browser hand, live: the runner's own Chrome, headless, on a
-      # throwaway profile. SYN_REQUIRE_BROWSER=1 fails rather than skips.
-      - name: live test through mcpgate against a real browser
+      # The browser hand, live. Syn's own browser first (the mode people
+      # get): it finds the runner's Chrome, starts it headless on a profile
+      # of its own, drives a fixture site, and must leave no process behind.
+      # Then a browser a person started and pointed Syn at (AGENT_CDP),
+      # which Syn must attach to and never close. SYN_REQUIRE_BROWSER=1
+      # fails rather than skips.
+      - name: the fixture site's own checks
+        run: /usr/bin/python3 -m unittest discover -s tests/browser -p test_site.py -v
+      - name: live test of Syn's own browser through mcpgate
+        run: /usr/bin/python3 -m unittest discover -s tests/browser -p test_browser_live.py -v
+        env:
+          SYN_REQUIRE_BROWSER: "1"
+          # Newer runner images restrict the user namespaces Chrome's
+          # sandbox is built on. This is a throwaway profile on fixtures.
+          SYN_BROWSER_NO_SANDBOX: "1"
+      - name: live test of an attached browser through mcpgate
         run: /usr/bin/python3 -m unittest discover -s tests -p test_cdp_live.py -v
         env:
           SYN_REQUIRE_BROWSER: "1"
+          # Newer runner images restrict the user namespaces Chrome's
+          # sandbox is built on. This is a throwaway profile on fixtures.
+          SYN_BROWSER_NO_SANDBOX: "1"
 
   # The C# side drives Office through late-bound COM, so almost none of it
   # can run without Office installed -- but all of it has to compile, and

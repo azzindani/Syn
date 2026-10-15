@@ -225,6 +225,11 @@ class SiteTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 500)
         self.assertIn("<title>Server error</title>", cm.exception.read().decode())
 
+    def test_drag_page_has_a_card_two_zones_and_a_slider(self):
+        body = text(self.url("/drag"))
+        for needle in ('id="card"', 'draggable="true"', 'id="zone-a"', 'id="zone-b"', 'id="drag-out"', 'id="handle"', 'id="end"', 'id="val"', "dropped "):
+            self.assertIn(needle, body)
+
     def test_private_asks_for_a_sign_in(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             get(self.url("/private"))

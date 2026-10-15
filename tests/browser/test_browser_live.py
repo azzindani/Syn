@@ -609,6 +609,39 @@ class SynsOwnBrowser(unittest.TestCase):
         self.assertIn("ask the person", said)
         self.assertNotIn("Check the address", said)
 
+    def test_23i_one_thing_is_picked_up_and_put_down_on_another_by_a_page_drag_and_by_mouse_events(self):
+        self.page("/drag")
+        # The page's own drag: Chrome takes it over, and the page hears drag events.
+        said = self.verb("drag", selector="#card", at="#zone-b")
+        self.assertIn("dragged", said)
+        self.assertIn("dropped card in zone-b", self.read("#drag-out"))
+        self.assertIn("Card", self.read("#zone-b"), "the page moved it")
+        # A slider made of mouse events alone: no drag is ever started.
+        self.verb("drag", selector="#handle", at="#end")
+        self.assertRegex(self.read("#val"), r"value: (9\d|100)")
+        said = self.verb_refused("drag", selector="#card", at="#nowhere")
+        self.assertIn("the place to drop it", said)
+        self.assertIn("no element matches", said)
+
+    def test_23j_a_folder_the_person_names_is_where_downloads_go_and_nowhere_else(self):
+        folder = os.path.join(self.dir, "saved-downloads")
+        # Its own home, so its own browser: the shared profile's is not Syn's to set.
+        gate = self.start_gate(AGENT_HOME=os.path.join(self.dir, "home-downloads"), AGENT_BROWSER_DOWNLOADS=folder)
+        try:
+            err, text = gate.call("open", app="browser", path=self.base + "/")
+            self.assertFalse(err, text)
+            handle = re.search(r"Handle: (\S+)", text).group(1)
+            err, said = gate.call("struct", handle=handle, verb="invoke", selector="#to-download", action="click")
+            self.assertFalse(err, said)
+            self.assertIn("being saved in", said)
+            self.assertIn(folder, said)
+            saved = os.path.join(folder, "report.txt")
+            self.assertTrue(wait_until(lambda: os.path.exists(saved), 10), "the file reached the folder that was named")
+            with open(saved, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "quarterly numbers")
+        finally:
+            gate.stop()
+
     def test_24_zz_sign_ins_are_kept_the_browser_goes_with_syn_and_comes_back_when_wanted(self):
         self.page("/cookie")
         self.assertIn("first visit", self.read("#state"))

@@ -842,6 +842,10 @@ DO
   struct {verb:"hover", selector:"..."}
                            the pointer onto it, which opens menus that open
                            on hover; then read :map again
+  struct {verb:"drag", selector:"...", at:"..."}
+                           pick it up and put it down on the other: a press,
+                           a move and a release, for drop zones, sortable
+                           lists and sliders; then read to see what changed
   struct {verb:"scroll", text:"down"}   up, top, bottom; or a selector, to
                            bring it into view (pages that load as you scroll)
   struct {verb:"wait", selector:"..."}  until it is on the page, or text:
@@ -865,9 +869,10 @@ A MESSAGE BOX, A NEW TAB, A DOWNLOAD
 A message box (alert) is closed and reported to you. A question (confirm,
 prompt) is answered Cancel and reported, because the answer is the person's:
 ask them, then repeat the step. A link that opens another tab says so, with
-that tab's name. A file a page tries to download is refused and reported,
-because saving a file on the person's computer is theirs to decide: say where
-it came from, and they can save it from their own browser.
+that tab's name. A file a page tries to download is reported and, unless
+the person has chosen a folder for downloads, not saved: saving a file on
+their computer is theirs to decide. Say where it came from, so they can save
+it from their own browser; if it was saved, say where.
 
 IT IS THEIR WINDOW
 

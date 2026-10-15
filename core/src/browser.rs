@@ -29,6 +29,9 @@ use std::time::{Duration, Instant};
 pub const BROWSER_ENV: &str = "AGENT_BROWSER";
 /// `1` runs the browser with no window, for a server or a test.
 pub const HEADLESS_ENV: &str = "AGENT_BROWSER_HEADLESS";
+/// A folder the person lets Syn's browser save downloads in. Unset, it saves
+/// none: a file landing on the person's computer is theirs to decide.
+pub const DOWNLOADS_ENV: &str = "AGENT_BROWSER_DOWNLOADS";
 
 /// What `AGENT_BROWSER` says, as a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +109,25 @@ pub fn available() -> bool {
 
 pub fn headless() -> bool {
     std::env::var(HEADLESS_ENV).is_ok_and(|v| v.trim() == "1")
+}
+
+/// The folder `AGENT_BROWSER_DOWNLOADS` names, made if it is not there.
+///
+/// None when it is unset, is not a full path (a relative one would mean a
+/// different folder for every program that reads it), or cannot be made: a
+/// setting that does not work leaves downloads refused, and never saves them
+/// somewhere the person did not name.
+pub fn downloads_dir() -> Option<PathBuf> {
+    downloads_in(|k| std::env::var(k).ok())
+}
+
+pub fn downloads_in(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let dir = PathBuf::from(env(DOWNLOADS_ENV)?.trim());
+    if dir.as_os_str().is_empty() || !dir.is_absolute() {
+        return None;
+    }
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// The folder the browser keeps its profile in. Beside the chats and the
@@ -263,6 +285,19 @@ mod tests {
         assert_eq!(setting(env(&[("AGENT_BROWSER", "OFF")])), Setting::Off);
         assert_eq!(setting(env(&[("AGENT_BROWSER", "auto")])), Setting::Auto);
         assert_eq!(setting(env(&[("AGENT_BROWSER", r"D:\b\chrome.exe")])), Setting::Path(PathBuf::from(r"D:\b\chrome.exe")));
+    }
+
+    #[test]
+    fn a_downloads_folder_must_be_a_full_path_and_is_made_when_it_is_not_there() {
+        assert_eq!(downloads_in(env(&[])), None);
+        assert_eq!(downloads_in(env(&[("AGENT_BROWSER_DOWNLOADS", "  ")])), None);
+        // A relative path is a different folder to every program that reads it.
+        assert_eq!(downloads_in(env(&[("AGENT_BROWSER_DOWNLOADS", "files")])), None);
+        let dir = std::env::temp_dir().join(format!("syn-dl-{}", std::process::id())).join("deep");
+        let said = dir.to_string_lossy().into_owned();
+        assert_eq!(downloads_in(env(&[("AGENT_BROWSER_DOWNLOADS", said.as_str())])), Some(dir.clone()));
+        assert!(dir.is_dir(), "it was made");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]

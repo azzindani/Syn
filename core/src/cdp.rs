@@ -60,7 +60,7 @@ const NAV_LOOK: Duration = Duration::from_millis(350);
 /// The verbs this hand answers as `struct` verbs, besides `invoke`. A test
 /// holds this to `tools::WEB_VERBS` and to the verbs the schema offers.
 pub const VERBS: &[&str] =
-    &["goto", "type", "press", "scroll", "hover", "choose", "wait", "back", "forward", "reload", "find", "close"];
+    &["goto", "type", "press", "scroll", "hover", "drag", "choose", "wait", "back", "forward", "reload", "find", "close"];
 
 // ---------------------------------------------------------------- JSON bits
 
@@ -650,11 +650,11 @@ fn supported(call: &Call) -> Result<(), String> {
         },
         Call::Struct(StructArgs::Invoke { action, .. }) => match action.as_str() {
             "invoke" | "click" | "toggle" | "select" | "focus" => Ok(()),
-            other => Err(format!("{other:?} is not an action on a web page. Use click, focus or toggle (or a verb: type, press, scroll, hover, choose)")),
+            other => Err(format!("{other:?} is not an action on a web page. Use click, focus or toggle (or a verb: type, press, scroll, hover, drag, choose)")),
         },
         Call::Struct(StructArgs::Office { verb, .. }) if VERBS.contains(&verb.as_str()) => Ok(()),
         Call::Struct(StructArgs::Office { verb, .. }) => Err(format!("{verb} is not something a web page has. A page takes: {}, invoke", VERBS.join(", "))),
-        Call::Struct(_) => Err("Struct is not supported by the cdp hand for that verb. A page takes: goto, type, press, scroll, hover, choose, wait, back, forward, reload, find, close, invoke".into()),
+        Call::Struct(_) => Err("Struct is not supported by the cdp hand for that verb. A page takes: goto, type, press, scroll, hover, drag, choose, wait, back, forward, reload, find, close, invoke".into()),
     }
 }
 
@@ -706,6 +706,9 @@ pub struct Cdp<S: Read + Write + Deadline> {
     /// The browser took the order to refuse downloads. Only then is a download
     /// it reports one Syn refused: in a browser Syn attached to, it is saved.
     denying: bool,
+    /// The folder the person let downloads be saved in, when the browser took
+    /// the order to save them there (`AGENT_BROWSER_DOWNLOADS`).
+    keeping: Option<String>,
     /// The process of the browser, when Syn started it and it is still the one
     /// Syn started: ended with this hand.
     child: Option<Child>,
@@ -737,6 +740,7 @@ impl<S: Read + Write + Deadline> Cdp<S> {
             typed: None,
             refused: None,
             denying: false,
+            keeping: None,
             child: None,
             owned: None,
             // A browser closes in about a second, but Edge was measured taking
@@ -761,19 +765,28 @@ impl<S: Read + Write + Deadline> Cdp<S> {
     pub fn own(&mut self, child: Option<Child>, addr: &str) {
         self.child = child;
         self.owned = Some(addr.to_string());
-        self.refuse_downloads();
+        self.set_downloads(crate::browser::downloads_dir().as_deref());
     }
 
-    /// A browser of Syn's own saves nothing on the person's computer.
+    /// A browser of Syn's own saves nothing on the person's computer, unless
+    /// they named a folder for it.
     ///
     /// Found by clicking a link to a file in the visible browser: the file
     /// landed in the person's Downloads folder and the model was told
     /// nothing, so a page, or a model's click, could put files on the disk
-    /// that nobody had agreed to. Chrome forgets this when the connection
-    /// that set it closes, so it lasts as long as Syn does, and a browser
-    /// Syn attached to (the person's own, `AGENT_CDP`) is left as it is.
-    fn refuse_downloads(&mut self) {
-        self.denying = self.call("Browser.setDownloadBehavior", "{\"behavior\":\"deny\",\"eventsEnabled\":true}", None).is_ok();
+    /// that nobody had agreed to. Naming a folder (`AGENT_BROWSER_DOWNLOADS`)
+    /// is that agreement, and the files go there and nowhere else. Chrome
+    /// forgets this when the connection that set it closes, so it lasts as
+    /// long as Syn does, and a browser Syn attached to (the person's own,
+    /// `AGENT_CDP`) is left as it is.
+    fn set_downloads(&mut self, folder: Option<&std::path::Path>) {
+        let params = match folder {
+            Some(dir) => format!("{{\"behavior\":\"allow\",\"downloadPath\":{},\"eventsEnabled\":true}}", js_string(&dir.to_string_lossy())),
+            None => "{\"behavior\":\"deny\",\"eventsEnabled\":true}".to_string(),
+        };
+        let took = self.call("Browser.setDownloadBehavior", &params, None).is_ok();
+        self.denying = took && folder.is_none();
+        self.keeping = if took { folder.map(|d| d.to_string_lossy().into_owned()) } else { None };
     }
 
     pub fn set_policy(&mut self, policy: Policy) {
@@ -946,7 +959,9 @@ impl<S: Read + Write + Deadline> Cdp<S> {
                     self.refused = Some(guid);
                     let url: String = top_string(params, "url").unwrap_or_default().chars().take(200).collect();
                     let name = top_string(params, "suggestedFilename").filter(|n| !n.is_empty()).unwrap_or_else(|| url.rsplit('/').next().unwrap_or("").to_string());
-                    self.notes.push(if self.denying {
+                    self.notes.push(if let Some(dir) = &self.keeping {
+                        format!("a download ({name:?}, from {url}) began and is being saved in {dir}, the folder the person chose for downloads. It may still be arriving: look for {name:?} there, and tell the person where it is")
+                    } else if self.denying {
                         format!("a download ({name:?}, from {url}) began and Syn refused it: saving a file on the person's computer is theirs to decide. If they want it, tell them where it came from and let them save it from their own browser")
                     } else {
                         // Saying "refused" of a file that is being saved would
@@ -1141,7 +1156,10 @@ impl<S: Read + Write + Deadline> Cdp<S> {
     // ------------------------------------------------------------ input
 
     fn mouse(&mut self, session: &str, kind: &str, x: f64, y: f64, pressed: bool) -> std::io::Result<()> {
-        let params = if kind == "mouseMoved" {
+        let params = if kind == "mouseMoved" && pressed {
+            // Moving with the button down is what a drag is made of.
+            format!("{{\"type\":\"mouseMoved\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":1}}")
+        } else if kind == "mouseMoved" {
             format!("{{\"type\":\"mouseMoved\",\"x\":{x},\"y\":{y}}}")
         } else {
             format!("{{\"type\":\"{kind}\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":{},\"clickCount\":1}}", u8::from(pressed))
@@ -1430,15 +1448,72 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         Ok(good(said))
     }
 
+    /// Where a pointer would land on `selector`, or why it cannot: found,
+    /// shown, enabled and not covered, scrolled into view.
+    fn aim_at(&mut self, session: &str, unit: &str, selector: &str) -> std::io::Result<Result<Value, String>> {
+        Ok(match self.page(session, unit, &format!("S.prep({}, \"hover\")", js_string(selector)))? {
+            Err(e) => Err(e),
+            Ok(v) if !jbool(&v, "ok") => Err(jstr(&v, "say")),
+            Ok(v) => Ok(v),
+        })
+    }
+
     fn hover(&mut self, session: &str, unit: &str, selector: &str) -> std::io::Result<Reply> {
-        let prep = match self.page(session, unit, &format!("S.prep({}, \"hover\")", js_string(selector)))? {
+        let prep = match self.aim_at(session, unit, selector)? {
             Err(e) => return Ok(bad(e)),
-            Ok(v) if !jbool(&v, "ok") => return Ok(bad(jstr(&v, "say"))),
             Ok(v) => v,
         };
         self.mouse(session, "mouseMoved", jnum(&prep, "x"), jnum(&prep, "y"), false)?;
         self.settle(session, Duration::from_millis(120), Duration::from_secs(3))?;
         Ok(good(format!("moved the pointer onto {}. What it reveals is not shown until the page is read again: read selector \":map\"", jstr(&prep, "d"))))
+    }
+
+    /// Pick one thing up and put it down on another, as a person does with a
+    /// pointer: press on it, move across, let go over the other.
+    ///
+    /// A page's own drag (a `draggable` element) and one made of mouse events
+    /// (a slider, a sortable list) are both carried by this. Intercepting drags
+    /// (`Input.setInterceptDrags`, then `Input.dispatchDragEvent` at the target)
+    /// was written first, on the belief that a drag the page starts belongs to
+    /// the operating system and swallows the mouse; Chrome 155 and Edge both
+    /// carried the practice site's columns, the page that defeats naive drag
+    /// automation, from plain mouse events, visible or not, with or without it,
+    /// so it was taken out. If a browser ever does not, that is the way.
+    fn drag(&mut self, session: &str, unit: &str, from: &str, to: &str) -> std::io::Result<Reply> {
+        if let Err(e) = self.aim_at(session, unit, from)? {
+            return Ok(bad(e));
+        }
+        let target = match self.aim_at(session, unit, to)? {
+            Err(e) => return Ok(bad(format!("the place to drop it: {e}"))),
+            Ok(v) => v,
+        };
+        // Bringing the target into view may have moved the thing picked up,
+        // so it is aimed at again, last.
+        let first = match self.aim_at(session, unit, from)? {
+            Err(e) => return Ok(bad(e)),
+            Ok(v) => v,
+        };
+        let (a, b) = ((jnum(&first, "x"), jnum(&first, "y")), (jnum(&target, "x"), jnum(&target, "y")));
+        self.drag_gesture(session, a, b)?;
+        self.settle(session, Duration::from_millis(250), Duration::from_secs(3))?;
+        Ok(good(format!(
+            "dragged {} onto {}. What it changed is not shown until the page is read again: read selector \":map\", or the text of what it was dropped on",
+            jstr(&first, "d"),
+            jstr(&target, "d")
+        )))
+    }
+
+    fn drag_gesture(&mut self, session: &str, (ax, ay): (f64, f64), (bx, by): (f64, f64)) -> std::io::Result<()> {
+        self.mouse(session, "mouseMoved", ax, ay, false)?;
+        self.mouse(session, "mousePressed", ax, ay, true)?;
+        // Not one jump: a page that starts a drag, or a slider, wants to see
+        // the pointer travel.
+        const STEPS: u32 = 6;
+        for i in 1..=STEPS {
+            let t = f64::from(i) / f64::from(STEPS);
+            self.mouse(session, "mouseMoved", ax + (bx - ax) * t, ay + (by - ay) * t, true)?;
+        }
+        self.mouse(session, "mouseReleased", bx, by, false)
     }
 
     fn choose(&mut self, session: &str, handle: &str, unit: &str, selector: &str, text: &str) -> std::io::Result<Reply> {
@@ -1658,6 +1733,7 @@ impl<S: Read + Write + Deadline + std::fmt::Debug> LiveHand for Cdp<S> {
                     "press" => self.press(&session, handle, unit, selector, text, typed)?,
                     "scroll" => self.scroll(&session, unit, selector, text)?,
                     "hover" => self.hover(&session, unit, selector)?,
+                    "drag" => self.drag(&session, unit, selector, arg(args, "at"))?,
                     "choose" => self.choose(&session, handle, unit, selector, text)?,
                     "wait" => self.wait(&session, unit, args)?,
                     "find" => self.find(&session, unit, text, selector)?,
@@ -2622,8 +2698,23 @@ mod tests {
         c.grace = Duration::from_millis(100);
         let log = st.borrow().log.clone();
         let sent = log.iter().find(|(m, _, _)| m == "Browser.setDownloadBehavior").expect("told to refuse");
+        assert!(!sent.1.contains("downloadPath"), "no folder was named: {}", sent.1);
         assert!(sent.1.contains("\"behavior\":\"deny\"") && sent.1.contains("\"eventsEnabled\":true"), "{}", sent.1);
         assert!(c.denying, "and it took the order");
+    }
+
+    #[test]
+    fn a_folder_the_person_named_is_where_downloads_go_and_the_model_is_told_where() {
+        let (mut c, st) = one_tab(vec![]);
+        let dir = std::env::temp_dir().join("syn-downloads-for-a-test");
+        c.set_downloads(Some(&dir));
+        let log = st.borrow().log.clone();
+        let sent = log.iter().find(|(m, _, _)| m == "Browser.setDownloadBehavior").expect("told");
+        assert!(sent.1.contains("\"behavior\":\"allow\"") && sent.1.contains("\"downloadPath\"") && sent.1.contains("syn-downloads-for-a-test"), "{}", sent.1);
+        assert!(!c.denying && c.keeping.is_some());
+        c.on_event(&event("Browser.downloadWillBegin", "{\"guid\":\"g1\",\"url\":\"http://x/r.txt\",\"suggestedFilename\":\"r.txt\"}", None));
+        assert!(c.notes[0].contains("being saved in") && c.notes[0].contains("syn-downloads-for-a-test") && c.notes[0].contains("\"r.txt\""), "{}", c.notes[0]);
+        assert!(!c.notes[0].contains("refused"), "{}", c.notes[0]);
     }
 
     #[test]
@@ -2642,6 +2733,54 @@ mod tests {
         assert!(said.contains("user name and password") && said.contains("ask the person to open this address in Syn's window"), "{said}");
         assert!(!said.contains("Check the address"), "{said}");
         assert!(net_error("net::ERR_NAME_NOT_RESOLVED", "http://x/").contains("Check the address"));
+    }
+
+    fn mouse_events(st: &Rc<RefCell<State>>) -> Vec<String> {
+        st.borrow()
+            .log
+            .iter()
+            .filter(|(m, _, _)| m == "Input.dispatchMouseEvent")
+            .map(|(_, p, _)| {
+                let kind = ["mouseMoved", "mousePressed", "mouseReleased"].iter().find(|k| p.contains(*k)).copied().unwrap_or("?");
+                if p.contains("\"buttons\":1") && kind == "mouseMoved" { "moved with the button down".to_string() } else { kind.to_string() }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_drag_presses_moves_in_steps_with_the_button_down_and_lets_go_on_the_target() {
+        let (mut c, st) = one_tab(vec![("S.page(", PAGE_A), ("S.prep(", PREP_OK)]);
+        let r = c.dispatch_call(&office("drag", &[("selector", "#card"), ("at", "#zone")]), H).unwrap();
+        assert!(r.ok, "{}", r.error);
+        assert!(r.preview.contains("dragged") && r.preview.contains("onto") && r.preview.contains("read selector"), "{}", r.preview);
+        let seen = mouse_events(&st);
+        assert_eq!(seen.first().map(String::as_str), Some("mouseMoved"), "{seen:?}");
+        assert_eq!(seen[1], "mousePressed", "{seen:?}");
+        assert!(seen.iter().filter(|e| e.as_str() == "moved with the button down").count() >= 3, "it travels: {seen:?}");
+        assert_eq!(seen.last().map(String::as_str), Some("mouseReleased"), "{seen:?}");
+    }
+
+    #[test]
+    fn a_drag_whose_target_is_covered_is_refused_before_anything_is_pressed() {
+        let ans: Answer = Box::new(move |id, method, params, _| match method {
+            "Target.attachToTarget" => vec![reply(id, "{\"sessionId\":\"S1\"}")],
+            "Runtime.evaluate" => {
+                let e = expr_of(params);
+                if e.starts_with("S.page(") {
+                    vec![evaluated(id, PAGE_A)]
+                } else if e.contains("#zone") {
+                    vec![evaluated(id, "{\"ok\":false,\"why\":\"covered\",\"say\":\"div#zone is covered by div#veil\"}")]
+                } else {
+                    vec![evaluated(id, PREP_OK)]
+                }
+            }
+            _ => vec![reply(id, "{}")],
+        });
+        let (mut c, st) = cdp_with(ans, vec![the_tab()]);
+        let r = c.dispatch_call(&office("drag", &[("selector", "#card"), ("at", "#zone")]), H).unwrap();
+        assert!(!r.ok);
+        assert!(r.error.contains("the place to drop it") && r.error.contains("div#zone is covered by div#veil"), "{}", r.error);
+        assert!(mouse_events(&st).is_empty(), "nothing was pressed: {:?}", mouse_events(&st));
     }
 
     #[test]

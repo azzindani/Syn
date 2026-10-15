@@ -28,7 +28,8 @@ default, and any MCP client can use the same tools.
   and waits for pages that load late. The browser keeps its own profile, so
   you sign in to a site in its window once, and it never types a password
   or a card number: it asks you to. It is not your everyday browser, and it
-  goes when Syn does. `AGENT_BROWSER=off` removes it.
+  goes when Syn does. `AGENT_BROWSER=off` removes it. It saves no file
+  unless you name a folder for downloads in `AGENT_BROWSER_DOWNLOADS`.
 - **Real formulas, not arithmetic in the model.** It writes live formulas and
   reads their results, so a sheet of 250,000 rows is one call, not a
   context window.

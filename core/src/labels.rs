@@ -104,6 +104,7 @@ const STRUCT_FORMS: &[(&str, Forms)] = &[
     ("press", ("Press", "Pressing", "Pressed", "a key")),
     ("scroll", ("Scroll", "Scrolling", "Scrolled", "the page")),
     ("hover", ("Point", "Pointing", "Pointed", "at a control")),
+    ("drag", ("Drag", "Dragging", "Dragged", "an item")),
     ("choose", ("Choose", "Choosing", "Chose", "an option")),
     ("wait", ("Wait", "Waiting", "Waited", "for the page")),
     ("back", ("Go", "Going", "Went", "back")),
@@ -227,7 +228,7 @@ fn target(name: &str, args: &str) -> Option<String> {
             "goto" | "press" | "choose" => named("text"),
             "wait" => named("selector").or_else(|| named("text")),
             "scroll" => named("selector").or_else(|| named("text")),
-            "type" | "hover" => named("selector"),
+            "type" | "hover" | "drag" => named("selector"),
             "back" | "forward" | "reload" => None,
             // The workbook it came from: "Inserted a chart from plan.xlsx".
             "embedChart" => field(args, "from").and_then(|h| file(&h)),
@@ -317,7 +318,7 @@ fn keeps_noun(name: &str, args: &str) -> bool {
     // https://...", "Typed into #email", not "Went to a page to https://...".
     !matches!(
         verb.as_str(),
-        "addSheet" | "table" | "name" | "slicer" | "save" | "close" | "goto" | "type" | "press" | "hover" | "choose" | "wait" | "scroll"
+        "addSheet" | "table" | "name" | "slicer" | "save" | "close" | "goto" | "type" | "press" | "hover" | "drag" | "choose" | "wait" | "scroll"
     )
 }
 

@@ -146,8 +146,10 @@ What a model can do to a page is limited by Syn, not by trusting the page:
   is answered Cancel and reported, because the answer is the person's.
 - **Downloads.** Syn's own browser saves no file: a download a page starts,
   or a press that starts one, is refused and reported with where it came
-  from, so nothing reaches the person's disk that they did not choose. A
-  browser Syn attached to (`AGENT_CDP`) keeps its own settings.
+  from, so nothing reaches the person's disk that they did not choose. Naming
+  a folder in `AGENT_BROWSER_DOWNLOADS` is that choice: files then go there
+  and nowhere else, and the model is told where. A browser Syn attached to
+  (`AGENT_CDP`) keeps its own settings.
 - **Sending, buying, deleting.** The model is told that a form that buys,
   sends, posts or deletes is the person's to submit unless they asked for
   exactly that, and a repeated identical call stops for a person as it does

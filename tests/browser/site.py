@@ -336,6 +336,46 @@ FRAMESET_MID = page(
 
 FRAMESET_TEXT = page("Text", r"""<p id="said">MIDDLE</p>""")
 
+# One thing dropped on another, both ways a page does it: a drag of its own
+# (draggable, which Chrome takes over and the page only hears as drag events)
+# and a slider made of mouse events alone (which never starts a drag).
+DRAG = page(
+    "Drag",
+    r"""<h1>Drag</h1>
+<div id="card" draggable="true">Card</div>
+<div id="zone-a" class="zone">Zone A</div>
+<div id="zone-b" class="zone">Zone B</div>
+<p id="drag-out">none</p>
+<div id="track"><div id="handle"></div><div id="end"></div></div>
+<p id="val">value: 0</p>""",
+    style=r""".zone{display:inline-block;width:160px;height:90px;margin:8px;border:2px dashed #888;vertical-align:top}
+#card{width:100px;height:40px;background:#cde;border:1px solid #567;cursor:grab}
+#track{position:relative;width:400px;height:20px;margin:24px 0;background:#ddd}
+#handle{position:absolute;left:0;top:0;width:20px;height:20px;background:#357;cursor:pointer}
+#end{position:absolute;right:0;top:0;width:20px;height:20px}""",
+    script=r"""var card = document.getElementById('card'), out = document.getElementById('drag-out');
+card.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', 'card'); });
+['zone-a', 'zone-b'].forEach(function (id) {
+  var z = document.getElementById(id);
+  z.addEventListener('dragover', function (e) { e.preventDefault(); });
+  z.addEventListener('drop', function (e) {
+    e.preventDefault();
+    out.textContent = 'dropped ' + e.dataTransfer.getData('text/plain') + ' in ' + id;
+    z.appendChild(card);
+  });
+});
+var track = document.getElementById('track'), handle = document.getElementById('handle'), held = false;
+handle.addEventListener('mousedown', function (e) { held = true; e.preventDefault(); });
+document.addEventListener('mousemove', function (e) {
+  if (!held) return;
+  var r = track.getBoundingClientRect();
+  var x = Math.max(0, Math.min(r.width - 20, e.clientX - r.left - 10));
+  handle.style.left = x + 'px';
+  document.getElementById('val').textContent = 'value: ' + Math.round(x / (r.width - 20) * 100);
+});
+document.addEventListener('mouseup', function () { held = false; });""",
+)
+
 FRAME_INNER = page(
     "Inner",
     r"""<button id="inner-btn" type="button">Inner button</button>
@@ -605,6 +645,7 @@ PAGES = {
     "/editor": EDITOR,
     "/frames": FRAMES,
     "/frame-inner": FRAME_INNER,
+    "/drag": DRAG,
     "/frameset": FRAMESET,
     "/frameset-mid": FRAMESET_MID,
     "/frameset-text": FRAMESET_TEXT,

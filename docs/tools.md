@@ -204,6 +204,7 @@ on) or any selector. `write` replaces what a field holds.
 | `press` | `text` (a key), `selector` (optional) | `Enter`, `Tab`, `Escape`, `ArrowDown`, `PageDown`, `Backspace`, or a shortcut such as `Control+a`. |
 | `choose` | `selector`, `text` | An option of a drop-down list, by its words. |
 | `hover` | `selector` | The pointer onto it, for menus that open on hover. |
+| `drag` | `selector`, `at` | Pick up `selector` and put it down on `at`, with a real press, move and release: drop zones, sortable lists, sliders. Both ends are refused if hidden or covered, as a press is. |
 | `scroll` | `text` (`up`, `down`, `top`, `bottom`) or `selector` | Brings an element into view, for pages that load as you scroll. |
 | `wait` | `selector` or `text`, `rule` (`gone`), `name` (seconds, up to 30) | Until the element or words appear, or with `gone`, leave. |
 | `find` | `text` | Where the words are written, with a selector. |

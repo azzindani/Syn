@@ -79,7 +79,7 @@ try {
         }
     }
     $ws.Range('A1:C1').Font.Bold = $true
-    $wb.SaveAs((Join-Path $docs 'plan.xlsx'), 51)   # 51 = xlOpenXMLWorkbook
+    $wb.SaveAs([string](Join-Path $docs 'plan.xlsx'), 51)   # 51 = xlOpenXMLWorkbook
     $wb.Close($false)
     $wb = $null
     $made += 'plan.xlsx   Sheet1!A1:C5 (5x3, header bold)'
@@ -106,7 +106,14 @@ try {
     $null = $doc.Content.InsertAfter('Placeholder body. The live run appends below this line.')
     # SaveAs2, not SaveAs: the [ref] overload cannot bind a PowerShell
     # PSObject-wrapped string and throws a type-conversion error.
-    $doc.SaveAs2((Join-Path $docs 'report.docx'), 16)   # 16 = wdFormatDocumentDefault
+    #
+    # And the string is cast. Handed the bare result of Join-Path, SaveAs2 does
+    # not throw on the Word installed when this was found, it spins: Word sat
+    # at one core for 15 minutes on a blank "Document1", answering the screen
+    # and never saving, so the script (and live-office-peak.ps1, which runs it)
+    # never ended. The same call with [string] or .ToString() takes 0.1 s. Each
+    # path below is cast for that reason; keep it so.
+    $doc.SaveAs2([string](Join-Path $docs 'report.docx'), 16)   # 16 = wdFormatDocumentDefault
     $doc.Saved = $true
     $doc.Close(0)                    # 0 = wdDoNotSaveChanges
     $doc = $null
@@ -116,7 +123,11 @@ finally {
     if ($wd) {
         # Lesson 1: clear the dirty bit BEFORE Quit or the save prompt hangs.
         try { foreach ($d in @($wd.Documents)) { $d.Saved = $true } } catch {}
-        try { $wd.Quit(0) } catch {}
+        # No argument: Quit(0) throws "should be a PSReference" on the Word
+        # installed when this was found, and the try/catch swallowed it, so
+        # Word never quit. The document is closed and marked saved above, so
+        # there is nothing for a bare Quit() to ask about.
+        try { $wd.Quit() } catch {}
     }
     Release $doc; Release $wd
 }
@@ -131,7 +142,7 @@ try {
     $pres = $pp.Presentations.Add($true)
     $slide = $pres.Slides.Add(1, 11)   # 11 = ppLayoutTitleOnly
     $slide.Shapes.Item(1).TextFrame.TextRange.Text = 'Q3 Regional Review'
-    $pres.SaveAs((Join-Path $docs 'deck.pptx'), 24)   # 24 = ppSaveAsOpenXMLPresentation
+    $pres.SaveAs([string](Join-Path $docs 'deck.pptx'), 24)   # 24 = ppSaveAsOpenXMLPresentation
     $pres.Close()
     $pres = $null
     $made += 'deck.pptx   1 slide (title only)'
@@ -151,8 +162,14 @@ Write-Host "testbed docs written to $docs"
 $made | ForEach-Object { Write-Host "  $_" }
 
 # Orphan check: the supervisor contract the runbook's M1 acceptance demands.
-Start-Sleep -Milliseconds 700
-$orphans = Get-Process EXCEL, WINWORD, POWERPNT -ErrorAction SilentlyContinue
+# PowerPoint takes 2 to 12 seconds to go after Quit() (measured), so an app is
+# given 20 s before it is called an orphan: at 0.7 s every run failed here.
+$until = (Get-Date).AddSeconds(20)
+do {
+    $orphans = Get-Process EXCEL, WINWORD, POWERPNT -ErrorAction SilentlyContinue
+    if (-not $orphans) { break }
+    Start-Sleep -Milliseconds 250
+} while ((Get-Date) -lt $until)
 if ($orphans) {
     Write-Warning "orphan Office processes survived Quit(): $(($orphans | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', ')"
     exit 1

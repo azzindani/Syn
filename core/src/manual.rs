@@ -799,7 +799,7 @@ LOOK FIRST
   read {selector:":map"}   what can be pressed or filled, each with a
                            selector that finds exactly that one thing: its
                            fields (and what they hold now), buttons, links
-                           and headings
+                           and headings, and the frames it holds
   read {selector:"body"}   the visible text, 4,000 characters at a time;
                            body@4000 carries on from character 4,000
   find {text:"..."}        where some words are written, with a selector
@@ -860,12 +860,14 @@ a moment ago can match nothing now: read again after anything that
 navigates or loads, rather than trusting the last read. A page that fills in
 after it loads is waited for with wait, not read in a loop.
 
-A MESSAGE BOX, A NEW TAB
+A MESSAGE BOX, A NEW TAB, A DOWNLOAD
 
 A message box (alert) is closed and reported to you. A question (confirm,
 prompt) is answered Cancel and reported, because the answer is the person's:
 ask them, then repeat the step. A link that opens another tab says so, with
-that tab's name.
+that tab's name. A file a page tries to download is refused and reported,
+because saving a file on the person's computer is theirs to decide: say where
+it came from, and they can save it from their own browser.
 
 IT IS THEIR WINDOW
 

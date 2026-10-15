@@ -24,9 +24,11 @@ is needed. Without WebView2 it uses Edge as an application window, and with
 neither it opens in the default browser and keeps a console window, which is
 then the way to stop it. Closing the Syn window stops Syn and everything it
 started. Starting it again while it runs brings that window to the front. The
-package is Office only: the console, the CLI, the MCP server
-and a self-contained Office helper, which carries its own .NET. It needs
-Windows 10 or 11 and desktop Office, nothing else.
+package carries the console, the CLI, the MCP server and a self-contained
+Office helper, which carries its own .NET. Web pages need no helper of their
+own: the CLI starts the Chrome or Edge already on the machine (Edge ships
+with Windows) in a window and profile of its own when a page is first wanted.
+It needs Windows 10 or 11, and desktop Office for documents; nothing else.
 
 To build them yourself: `powershell -File scripts\package.ps1` (needs Rust,
 the .NET 8 SDK, and [NSIS](https://nsis.sourceforge.io) for the installer),

@@ -40,7 +40,8 @@ Ids are exact. Behaviour is deterministic: the only timers are `/spa`
 | `/spa` | Single page app, then SPA ready | `app` reads "Loading..."; at 800 ms it holds `items` (3 `li`), `more`, and `count` ("3 items"). `more` adds 3 `li` after 500 ms and sets `count` to "6 items"; clicks while a load is pending are ignored |
 | `/dialogs` | Dialogs | `do-alert` (alert "hello from alert", then `out` = `alert closed`), `do-confirm` ("really?", `out` = `confirm:true` or `confirm:false`), `do-prompt` ("your name?", `out` = `prompt:<value>`, `prompt:null` if cancelled); `dirty` text input: once typed in, leaving the page asks first (beforeunload); `leave` links to `/form` |
 | `/overlay` | Overlay | `veil` is a fixed transparent full-width div over `covered`; `dismiss` (not covered) removes it; `covered` sets `out` to `covered clicked`; `needs-real` sets `out` to `trusted click` only for a real pointerdown + pointerup (`isTrusted`), otherwise `untrusted click ignored` (so `element.click()` and a keyboard activation are ignored) |
-| `/editor` | Editor | `rich` (contenteditable); `ctl` controlled input: `state` follows only `input` events and the value is reset to it on `change`/`blur`, `mirror` shows `state`; `auto` shows `sugg` (`li`, prefix matches of apple, apricot, avocado, banana, blueberry, cherry) only on keydown/keyup; `enter` sets `out` to `enter pressed` on Enter |
+| `/editor` | Editor | `rich` (contenteditable, empty); `notes` (contenteditable, holding `Your content goes here.`); `ctl` controlled input: `state` follows only `input` events and the value is reset to it on `change`/`blur`, `mirror` shows `state`; `auto` shows `sugg` (`li`, prefix matches of apple, apricot, avocado, banana, blueberry, cherry) only on keydown/keyup; `enter` sets `out` to `enter pressed` on Enter |
+| `/frameset` | Frameset | `outer-frame` (`/frameset-mid`) holds `inner-frame` (`/frameset-text`), which holds only the text `MIDDLE` (`said`): frames with nothing to press in them, two deep |
 | `/frames` | Frames | same-origin iframe `inner` (`/frame-inner`, title "inner frame"); `outer-btn` sets `outer-out` to `outer clicked` |
 | `/frame-inner` | Inner | `inner-btn` sets `inner-out` to `inner clicked` |
 | `/shadow` | Shadow | `<x-card id="card">` with an open shadow root holding `shadow-btn` and `shadow-out` (`shadow clicked`); light-DOM `light-btn` sets `light-out` to `light clicked` |
@@ -52,6 +53,7 @@ Ids are exact. Behaviour is deterministic: the only timers are `/spa`
 | `/slow` | Slow page | waits 3 s, then `h1` "Slow done" |
 | `/server-error` | Server error | 500 |
 | `/download` | | `Content-Disposition: attachment; filename="report.txt"`, body `quarterly numbers` |
+| `/private` | Private | 401 with `WWW-Authenticate: Basic`, which a browser with nobody to sign in answers with `net::ERR_INVALID_AUTH_CREDENTIALS` |
 | `/inject` | Notes | `note` holds an instruction aimed at the agent (to be treated as page text); `secret` is `display:none`; `decoy` is `aria-hidden="true"` |
 | `/hover` | Hover menu | `submenu` (with `sub-item`, link to `/form`) is `display:none` until a real pointer enters `menu-host` (mouseenter/mouseleave, not CSS `:hover`) |
 | `/big` | Big page | about 300 KB of visible text in 2600 paragraphs, ending with `big-end` ("END OF BIG PAGE") |

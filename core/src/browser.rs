@@ -187,18 +187,25 @@ pub fn running_on(profile: &Path) -> Option<String> {
 pub struct Started {
     pub child: Option<Child>,
     pub addr: String,
+    /// Syn started this browser, so ending it is Syn's to do. Not the same as
+    /// holding `child`: Edge hands the launch to another process and the one
+    /// Syn started exits at once, leaving a browser that is Syn's and a child
+    /// that is not it. False for one that was already running on the profile.
+    pub ours: bool,
 }
 
 /// Start the browser on `profile` and wait until it listens.
 ///
-/// A profile that is already in use by a running browser hands the new
-/// process to the old one and exits at once, ignoring the port flag: so when
-/// the child exits, the port file is read once more before giving up, and a
-/// browser that is listening is reused instead of reported as a failure.
+/// A browser that was running on the profile before Syn asked is reused and
+/// is not Syn's. One that is started, but whose process hands the launch to
+/// another and exits at once (Edge does, in the version this was found on, and
+/// any browser does when the profile is already in use), is waited for through
+/// its port file: when the child exits, the port file is read again before
+/// giving up, and a browser that is listening is Syn's to end all the same.
 pub fn start(exe: &Path, profile: &Path, headless: bool) -> Result<Started, String> {
     std::fs::create_dir_all(profile).map_err(|e| format!("cannot make the browser's profile folder {}: {e}", profile.display()))?;
     if let Some(addr) = running_on(profile) {
-        return Ok(Started { child: None, addr });
+        return Ok(Started { child: None, addr, ours: false });
     }
     // A file left by a browser that is gone would be read as this one's.
     let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
@@ -215,7 +222,7 @@ pub fn start(exe: &Path, profile: &Path, headless: bool) -> Result<Started, Stri
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
         if let Some(addr) = running_on(profile) {
-            return Ok(Started { child: Some(child), addr });
+            return Ok(Started { child: Some(child), addr, ours: true });
         }
         if let Ok(Some(status)) = child.try_wait() {
             // Handed to a browser that was already there? Give it a moment
@@ -223,7 +230,7 @@ pub fn start(exe: &Path, profile: &Path, headless: bool) -> Result<Started, Stri
             let settle = Instant::now() + Duration::from_secs(3);
             while Instant::now() < settle {
                 if let Some(addr) = running_on(profile) {
-                    return Ok(Started { child: None, addr });
+                    return Ok(Started { child: None, addr, ours: true });
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -324,13 +331,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("syn-browser-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut first = start(&exe, &dir, true).expect("the browser starts");
-        assert!(first.child.is_some(), "a first start owns the process");
+        assert!(first.ours, "a first start is Syn's");
         assert!(first.addr.starts_with("127.0.0.1:"), "{}", first.addr);
         assert!(alive(&first.addr));
         // The same profile, asked again: the running browser, not a second
         // process fighting it for the profile.
         let second = start(&exe, &dir, true).expect("a second start finds the first");
-        assert!(second.child.is_none(), "a reused browser is not owned");
+        assert!(second.child.is_none() && !second.ours, "a reused browser is not owned");
         assert_eq!(second.addr, first.addr);
         let child = first.child.as_mut().unwrap();
         let _ = child.kill();

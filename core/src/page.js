@@ -34,6 +34,31 @@ function vis(e) {
   return r.width > 0 && r.height > 0;
 }
 
+// Whether a pointer can get to it, which is not whether a person can see it.
+// A page that draws its own checkbox hides the real one with opacity:0 and
+// lays it over the drawing: nothing is seen, and a click lands on it. What is
+// read stays with `vis`, so what the page hides is still not read; what is
+// pressed asks only this, and the hit test that follows says whether the press
+// would land.
+function reach(e) {
+  if (!e || e.nodeType !== 1) return false;
+  if (e.checkVisibility && !e.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })) return false;
+  var r = e.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+function pickable(e) { return e.tagName === 'INPUT' && /^(checkbox|radio)$/i.test(e.type); }
+
+// The label a person would press for a box the page hides or shrinks to a
+// pixel, which toggles it just as pressing the box does.
+function shownLabel(e) {
+  var ls = e.labels ? slice(e.labels) : [];
+  var up = e.closest ? e.closest('label') : null;
+  if (up && ls.indexOf(up) < 0) ls.push(up);
+  for (var i = 0; i < ls.length; i++) { if (vis(ls[i])) return ls[i]; }
+  return null;
+}
+
 // ------------------------------------------------------------------ names
 
 function labelOf(e) {
@@ -52,10 +77,22 @@ function labelOf(e) {
   return norm(e.placeholder || e.title || e.alt || '');
 }
 
+// A checkbox in a list of things ("call Ada") often has no label tied to it:
+// the words are the text next to it. They are its name when they are short and
+// shown, and a map that said only "checkbox" for each would leave a model
+// pressing the third and hoping.
+function besideText(e) {
+  if (!pickable(e)) return '';
+  var p = e.parentElement;
+  if (!p || !vis(p)) return '';
+  var t = norm(p.innerText);
+  return t && t.length <= 60 ? t : '';
+}
+
 function nameOf(e) {
   var tag = e.tagName;
   if (tag === 'INPUT' && /^(submit|button|reset|image)$/i.test(e.type)) return norm(e.value) || labelOf(e);
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return labelOf(e) || norm(e.name || e.id);
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return labelOf(e) || besideText(e) || norm(e.name || e.id);
   var img = e.querySelector ? e.querySelector('img[alt]') : null;
   // The words of something hidden are not its name: an element the page
   // hides is where text meant for an agent and not for a person goes, and a
@@ -131,17 +168,36 @@ function local(e) {
     c = 'a[href=' + JSON.stringify(e.getAttribute('href')) + ']';
     if (countIn(root, c) === 1) return c;
   }
+  // The members of a group share a name and differ in what they are worth: a
+  // radio button or a checkbox ("size" is large), a button ("order" is Submit).
+  var nm = e.getAttribute('name'), val = e.getAttribute('value');
+  if (nm && val && nm.length < 60 && val.length < 60) {
+    c = t + '[name=' + JSON.stringify(nm) + '][value=' + JSON.stringify(val) + ']';
+    if (countIn(root, c) === 1) return c;
+  }
+  if (val && val.length < 60 && /^(button|submit|reset)$/i.test(e.getAttribute('type') || '')) {
+    c = t + '[value=' + JSON.stringify(val) + ']';
+    if (countIn(root, c) === 1) return c;
+  }
+  // A path of positions, as short as is still unique: a step names its
+  // position only where it has same-named siblings, and the path stops at the
+  // first step that makes it unique, or at an ancestor with an id of its own.
+  // (It used to run from <html> every time, which no one could read and which
+  // broke as soon as a banner was added above the form.)
   var path = [], n = e, top = root.documentElement || null;
   while (n && n.nodeType === 1) {
-    var idx = 1, s = n;
+    var idx = 1, more = false, s = n;
     while ((s = s.previousElementSibling)) { if (s.tagName === n.tagName) idx++; }
-    path.unshift(n.tagName.toLowerCase() + ':nth-of-type(' + idx + ')');
-    if (n.id && n !== e && countIn(root, '#' + esc(n.id)) === 1) { path.shift(); path.unshift('#' + esc(n.id)); break; }
+    s = n;
+    while (!more && (s = s.nextElementSibling)) { if (s.tagName === n.tagName) more = true; }
+    path.unshift(n.tagName.toLowerCase() + ((idx > 1 || more) ? ':nth-of-type(' + idx + ')' : ''));
+    if (n.id && n !== e && countIn(root, '#' + esc(n.id)) === 1) { path[0] = '#' + esc(n.id); }
+    c = path.join(' > ');
+    if (countIn(root, c) === 1) return c;
     if (n === top) break;
     n = n.parentNode && n.parentNode.nodeType === 1 ? n.parentNode : null;
   }
-  c = path.join(' > ');
-  return c;
+  return path.join(' > ');
 }
 
 function sel(e) {
@@ -284,7 +340,7 @@ S.read = function (selector, off) {
 
 S.map = function (budget) {
   budget = budget || 3600;
-  var heads = [], fields = [], buttons = [], links = [], frames = 0, seen = 0, CAP = 5000;
+  var heads = [], fields = [], buttons = [], links = [], framed = [], frames = 0, seen = 0, CAP = 5000;
 
   function item(e, kind, extra) {
     var o = { sel: sel(e), name: cut(nameOf(e), 60), role: kind };
@@ -300,7 +356,11 @@ S.map = function (budget) {
       if (t === 'IFRAME' || t === 'FRAME') {
         var d = null;
         try { d = e.contentDocument; } catch (x) { d = null; }
-        if (d && d.documentElement) { frames++; walk(d); }
+        if (d && d.documentElement) {
+          frames++;
+          framed.push({ sel: sel(e), name: cut(e.getAttribute('title') || e.getAttribute('aria-label') || e.getAttribute('name') || e.id || '', 40), src: cut(e.getAttribute('src') || '', 50) });
+          walk(d);
+        }
         continue;
       }
       if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|HEAD)$/.test(t)) continue;
@@ -358,6 +418,10 @@ S.map = function (budget) {
   });
   section('BUTTONS', buttons, 25, function (b) { return b.role + ' ' + JSON.stringify(b.name) + '  ' + b.sel + (b.dis ? '  [disabled]' : ''); });
   section('LINKS', links, 40, function (l) { return 'link ' + JSON.stringify(l.name || '(no text)') + '  ' + l.sel; });
+  // A frame with nothing to press in it (an article, a frameset) would
+  // otherwise leave the model knowing there is a frame and not what to put
+  // before the arrows to read it.
+  section('FRAMES', framed, 8, function (f) { return 'frame' + (f.name ? ' ' + JSON.stringify(f.name) : '') + '  ' + f.sel + (f.src ? '  (' + f.src + ')' : ''); });
   if (frames) line(frames + ' frame(s) are included above; a selector into one reads  frameSelector' + DEEP + 'inner');
   return { ok: true, text: out.join('\n'), counts: { fields: fields.length, buttons: buttons.length, links: links.length } };
 };
@@ -394,29 +458,47 @@ S.find = function (text) {
 // The thing to press or hover: found, shown, enabled, and not covered. The
 // point is in the top window's own coordinates, which is what a real mouse
 // event takes.
-S.prep = function (selector, mode) {
-  var r = resolve(selector, true), e = r.el, d = describe(e);
-  if (mode === 'click' && e.tagName === 'SELECT') return fail('select', d + ' is a drop-down list. Choose an option with action select and the option\'s text in `text`.');
-  if (mode === 'click' && e.tagName === 'INPUT' && e.type === 'file') return fail('file', d + ' opens a file chooser, which Syn cannot drive. Ask the person to choose the file in the browser window.');
-  if (!vis(e)) return fail('hidden', d + many(r) + ' is not visible: it is hidden, has no size, or sits in a menu that is closed. Open or reveal it first (hover or press what shows it), then try again.');
-  if (e.disabled || e.getAttribute('aria-disabled') === 'true') return fail('disabled', d + ' is disabled: it cannot be pressed until the page enables it.');
-  e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-  var rects = slice(e.getClientRects()).filter(function (q) { return q.width > 0 && q.height > 0; });
-  var q = rects[0] || e.getBoundingClientRect();
-  var w = e.ownerDocument.defaultView;
+// Where a press at `t` would land, and whether it would land on the control
+// `e` (or what stands for it): scrolled into view, at the middle of what shows.
+function aim(t, e) {
+  t.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  var rects = slice(t.getClientRects()).filter(function (q) { return q.width > 0 && q.height > 0; });
+  var q = rects[0] || t.getBoundingClientRect();
+  var w = t.ownerDocument.defaultView;
   var vw = w.innerWidth, vh = w.innerHeight;
   var left = Math.max(q.left, 0), right = Math.min(q.right, vw), top = Math.max(q.top, 0), bottom = Math.min(q.bottom, vh);
   var cx = (left + right) / 2, cy = (top + bottom) / 2;
-  var root = e.getRootNode();
-  var hit = (root && root.elementFromPoint ? root : e.ownerDocument).elementFromPoint(cx, cy);
+  var root = t.getRootNode();
+  var hit = (root && root.elementFromPoint ? root : t.ownerDocument).elementFromPoint(cx, cy);
   while (hit && hit.shadowRoot && hit.shadowRoot.elementFromPoint) {
     var h2 = hit.shadowRoot.elementFromPoint(cx, cy);
     if (!h2 || h2 === hit) break;
     hit = h2;
   }
   var lab = hit && hit.closest ? hit.closest('label') : null;
-  var good = hit && (hit === e || e.contains(hit) || (lab && lab.control === e) || (e.closest && e.closest('label') && e.closest('label').contains(hit)));
-  if (!good) return fail('covered', d + many(r) + ' is covered by ' + describe(hit) + ' at the point where it would be pressed. Close, dismiss or scroll past whatever is in front of it first.');
+  var good = !!(hit && (hit === t || t.contains(hit) || (lab && lab.control === e) || (e.closest && e.closest('label') && e.closest('label').contains(hit))));
+  return { cx: cx, cy: cy, hit: hit, good: good, w: w };
+}
+
+S.prep = function (selector, mode) {
+  var r = resolve(selector, true), e = r.el, d = describe(e);
+  if (mode === 'click' && e.tagName === 'SELECT') return fail('select', d + ' is a drop-down list. Choose an option with action select and the option\'s text in `text`.');
+  if (mode === 'click' && e.tagName === 'INPUT' && e.type === 'file') return fail('file', d + ' opens a file chooser, which Syn cannot drive. Ask the person to choose the file in the browser window.');
+  // A box the page hides is pressed where a person would press it: itself if
+  // a pointer reaches it, else the label that toggles it.
+  var t = e;
+  if (!vis(e) && !(pickable(e) && reach(e))) {
+    t = pickable(e) ? shownLabel(e) : null;
+    if (!t) return fail('hidden', d + many(r) + ' is not visible: it is hidden, has no size, or sits in a menu that is closed. Open or reveal it first (hover or press what shows it), then try again.');
+  }
+  if (e.disabled || e.getAttribute('aria-disabled') === 'true') return fail('disabled', d + ' is disabled: it cannot be pressed until the page enables it.');
+  var a = aim(t, e);
+  if (!a.good && t === e && pickable(e)) {
+    var l2 = shownLabel(e);
+    if (l2) { t = l2; a = aim(t, e); }
+  }
+  if (!a.good) return fail('covered', d + many(r) + ' is covered by ' + describe(a.hit) + ' at the point where it would be pressed. Close, dismiss or scroll past whatever is in front of it first.');
+  var cx = a.cx, cy = a.cy, w = a.w;
   var x = cx, y = cy;
   while (w && w.frameElement) {
     var f = w.frameElement, fr = f.getBoundingClientRect();
@@ -463,6 +545,26 @@ S.field = function (selector, clear) {
     else { var rg = e.ownerDocument.createRange(); rg.selectNodeContents(e); var sl = e.ownerDocument.defaultView.getSelection(); sl.removeAllRanges(); sl.addRange(rg); }
   } else if (kind === 'field' && e.setSelectionRange && /^(text|search|url|tel|password|textarea)$/.test(e.type || 'textarea')) {
     try { var n = e.value.length; e.setSelectionRange(n, n); } catch (x) { /* some types have no caret */ }
+  } else if (kind === 'editor') {
+    // A focused editable region keeps its caret where it last was, which is the
+    // start when it never had one: found in a rich-text editor in a frame, where
+    // words typed "at the end" came out ahead of what the page already held.
+    var at = e;
+    while (at.lastChild) {
+      var up = at.lastChild;
+      while (up && up.nodeType === 3 && !/\S/.test(up.nodeValue)) up = up.previousSibling;
+      if (!up) break;
+      at = up;
+    }
+    var cr = e.ownerDocument.createRange();
+    if (at.nodeType === 3) cr.setStart(at, at.length);
+    else if (at === e) cr.setStart(e, e.childNodes.length);
+    else if (at.tagName === 'BR') cr.setStartBefore(at);
+    else if (at.childNodes.length) cr.setStart(at, at.childNodes.length);
+    else if (/^(IMG|HR|INPUT|VIDEO|CANVAS|SVG)$/i.test(at.tagName)) cr.setStartAfter(at);
+    else cr.setStart(at, 0);
+    cr.collapse(true);
+    var cs = e.ownerDocument.defaultView.getSelection(); cs.removeAllRanges(); cs.addRange(cr);
   }
   return { ok: true, d: d, n: r.n, kind: kind, sel: sel(e) };
 };

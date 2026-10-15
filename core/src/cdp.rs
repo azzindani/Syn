@@ -436,6 +436,14 @@ pub fn check_url(raw: &str, policy: &Policy) -> Result<String, String> {
 
 /// Chrome's own words for a page that could not load, in a model's.
 fn net_error(code: &str, url: &str) -> String {
+    if code == "net::ERR_INVALID_AUTH_CREDENTIALS" {
+        // Said as "check the address" it sent a model round in circles: the
+        // address was right, and what the site wants is something Syn never
+        // types.
+        return format!(
+            "could not load {url}: the site asks for a user name and password before it shows anything ({code}). Syn does not type those: ask the person to open this address in Syn's window and sign in there, then carry on."
+        );
+    }
     let say = match code {
         "net::ERR_NAME_NOT_RESOLVED" => "that address does not exist (the name could not be looked up)",
         "net::ERR_CONNECTION_REFUSED" => "nothing is listening at that address (connection refused)",
@@ -691,8 +699,20 @@ pub struct Cdp<S: Read + Write + Deadline> {
     /// key that follows (Enter to search) is then aimed at a selector that no
     /// longer exists though the person can see exactly what is meant.
     typed: Option<(String, String)>,
-    /// The browser, when Syn started it: ended with this hand.
+    /// The download the browser last said it refused, by its guid: a browser
+    /// says so on the browser's connection and again on the page's, and the
+    /// model should hear it once.
+    refused: Option<String>,
+    /// The browser took the order to refuse downloads. Only then is a download
+    /// it reports one Syn refused: in a browser Syn attached to, it is saved.
+    denying: bool,
+    /// The process of the browser, when Syn started it and it is still the one
+    /// Syn started: ended with this hand.
     child: Option<Child>,
+    /// Where the browser listens, when Syn started it. A browser can hand its
+    /// launch to another process and leave Syn holding a child that is already
+    /// gone, so what says the browser is Syn's, and how to end it, is this.
+    owned: Option<String>,
     /// How long it is given to close by itself before it is told.
     grace: Duration,
     policy: Policy,
@@ -715,7 +735,10 @@ impl<S: Read + Write + Deadline> Cdp<S> {
             notes: Vec::new(),
             active: None,
             typed: None,
+            refused: None,
+            denying: false,
             child: None,
+            owned: None,
             // A browser closes in about a second, but Edge was measured taking
             // 5 s after a page that did not resolve, and a browser told at 4 s
             // had not yet written the cookie of a sign-in made a moment before.
@@ -733,9 +756,24 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         &self.targets
     }
 
-    /// The browser Syn started is this hand's to end.
-    pub fn own(&mut self, child: Child) {
-        self.child = Some(child);
+    /// The browser Syn started, listening at `addr`, is this hand's to end.
+    /// `child` is the process Syn started, if it is still the browser.
+    pub fn own(&mut self, child: Option<Child>, addr: &str) {
+        self.child = child;
+        self.owned = Some(addr.to_string());
+        self.refuse_downloads();
+    }
+
+    /// A browser of Syn's own saves nothing on the person's computer.
+    ///
+    /// Found by clicking a link to a file in the visible browser: the file
+    /// landed in the person's Downloads folder and the model was told
+    /// nothing, so a page, or a model's click, could put files on the disk
+    /// that nobody had agreed to. Chrome forgets this when the connection
+    /// that set it closes, so it lasts as long as Syn does, and a browser
+    /// Syn attached to (the person's own, `AGENT_CDP`) is left as it is.
+    fn refuse_downloads(&mut self) {
+        self.denying = self.call("Browser.setDownloadBehavior", "{\"behavior\":\"deny\",\"eventsEnabled\":true}", None).is_ok();
     }
 
     pub fn set_policy(&mut self, policy: Policy) {
@@ -900,6 +938,21 @@ impl<S: Read + Write + Deadline> Cdp<S> {
                 if let Some(s) = top_string(params, "sessionId") {
                     self.sessions.retain(|_, v| *v != s);
                     self.loading.remove(&s);
+                }
+            }
+            "Browser.downloadWillBegin" | "Page.downloadWillBegin" => {
+                let guid = top_string(params, "guid").unwrap_or_default();
+                if self.refused.as_deref() != Some(guid.as_str()) {
+                    self.refused = Some(guid);
+                    let url: String = top_string(params, "url").unwrap_or_default().chars().take(200).collect();
+                    let name = top_string(params, "suggestedFilename").filter(|n| !n.is_empty()).unwrap_or_else(|| url.rsplit('/').next().unwrap_or("").to_string());
+                    self.notes.push(if self.denying {
+                        format!("a download ({name:?}, from {url}) began and Syn refused it: saving a file on the person's computer is theirs to decide. If they want it, tell them where it came from and let them save it from their own browser")
+                    } else {
+                        // Saying "refused" of a file that is being saved would
+                        // be a lie the model repeats to the person.
+                        format!("a download ({name:?}, from {url}) began. This is the person's own browser, so it saves the file as they have set it up: Syn does not stop it and does not change that")
+                    });
                 }
             }
             "Inspector.targetCrashed" => {
@@ -1218,7 +1271,7 @@ impl<S: Read + Write + Deadline> Cdp<S> {
         }
         // A browser Syn started has one empty tab; use it rather than
         // leaving it empty beside the page.
-        let blank = (self.child.is_some())
+        let blank = (self.owned.is_some())
             .then(|| self.targets.iter().filter(|t| t.kind == "page").collect::<Vec<_>>())
             .filter(|p| p.len() == 1 && p[0].url == "about:blank")
             .map(|p| p[0].id.clone());
@@ -1656,17 +1709,24 @@ impl<S: Read + Write + Deadline> Drop for Cdp<S> {
     /// object that tethers it covers Syn being killed, which no destructor
     /// does.
     fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else { return };
+        let Some(addr) = self.owned.take() else { return };
+        let mut child = self.child.take();
         let _ = self.send_raw("Browser.close", "{}", None);
         let until = Instant::now() + self.grace;
         while Instant::now() < until {
-            if let Ok(Some(_)) = child.try_wait() {
+            // Gone is the process Syn started and, when it handed over to
+            // another, the port: the browser's own end is what writes the
+            // sign-ins out, and nothing of it is left to wait on but that.
+            let process_gone = child.as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(Some(_))));
+            if process_gone && !crate::browser::alive(&addr) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Some(mut c) = child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 }
 
@@ -2533,6 +2593,58 @@ mod tests {
     }
 
     #[test]
+    fn a_download_the_browser_began_is_said_to_be_refused_with_where_it_came_from() {
+        let (mut c, _) = one_tab(vec![]);
+        c.denying = true;
+        c.on_event(&event(
+            "Browser.downloadWillBegin",
+            "{\"guid\":\"g1\",\"url\":\"http://x/files/report.txt\",\"suggestedFilename\":\"report.txt\"}",
+            None,
+        ));
+        assert_eq!(c.notes.len(), 1);
+        let n = &c.notes[0];
+        assert!(n.contains("\"report.txt\"") && n.contains("http://x/files/report.txt") && n.contains("Syn refused it") && n.contains("theirs to decide"), "{n}");
+        // The same download, told again by the page's own connection.
+        c.on_event(&event("Page.downloadWillBegin", "{\"guid\":\"g1\",\"url\":\"http://x/files/report.txt\",\"suggestedFilename\":\"report.txt\"}", Some("S1")));
+        assert_eq!(c.notes.len(), 1, "once is enough");
+        // A different one is another.
+        c.on_event(&event("Browser.downloadWillBegin", "{\"guid\":\"g2\",\"url\":\"http://x/a/b.pdf\",\"suggestedFilename\":\"\"}", None));
+        assert_eq!(c.notes.len(), 2);
+        assert!(c.notes[1].contains("\"b.pdf\""), "a file with no name is called what its address ends with: {}", c.notes[1]);
+    }
+
+    #[test]
+    fn a_browser_syn_started_is_told_to_refuse_downloads_and_one_it_only_attached_to_is_not() {
+        let (mut c, st) = one_tab(vec![]);
+        c.attach("5B3F8A9C1D2E").unwrap();
+        assert!(!methods(&st).contains(&"Browser.setDownloadBehavior".to_string()), "the person's own browser keeps its settings: {:?}", methods(&st));
+        c.own(None, "127.0.0.1:1");
+        c.grace = Duration::from_millis(100);
+        let log = st.borrow().log.clone();
+        let sent = log.iter().find(|(m, _, _)| m == "Browser.setDownloadBehavior").expect("told to refuse");
+        assert!(sent.1.contains("\"behavior\":\"deny\"") && sent.1.contains("\"eventsEnabled\":true"), "{}", sent.1);
+        assert!(c.denying, "and it took the order");
+    }
+
+    #[test]
+    fn a_download_in_a_browser_that_was_not_told_to_refuse_is_not_said_to_be_refused() {
+        let (mut c, _) = one_tab(vec![]);
+        assert!(!c.denying, "a browser Syn only attached to");
+        c.on_event(&event("Page.downloadWillBegin", "{\"guid\":\"g9\",\"url\":\"http://x/r.txt\",\"suggestedFilename\":\"r.txt\"}", Some("S1")));
+        assert_eq!(c.notes.len(), 1);
+        assert!(c.notes[0].contains("\"r.txt\"") && c.notes[0].contains("saves the file as they have set it up"), "{}", c.notes[0]);
+        assert!(!c.notes[0].contains("refused"), "{}", c.notes[0]);
+    }
+
+    #[test]
+    fn a_page_that_asks_for_a_password_is_not_reported_as_a_wrong_address() {
+        let said = net_error("net::ERR_INVALID_AUTH_CREDENTIALS", "http://x/private");
+        assert!(said.contains("user name and password") && said.contains("ask the person to open this address in Syn's window"), "{said}");
+        assert!(!said.contains("Check the address"), "{said}");
+        assert!(net_error("net::ERR_NAME_NOT_RESOLVED", "http://x/").contains("Check the address"));
+    }
+
+    #[test]
     fn a_page_that_loads_for_ever_is_given_up_on_and_the_press_returns() {
         let (mut c, st) = one_tab(vec![]);
         c.attach("5B3F8A9C1D2E").unwrap();
@@ -2895,10 +3007,46 @@ mod tests {
         } else {
             std::process::Command::new("sleep").arg("30").spawn().unwrap()
         };
-        c.own(child);
+        c.own(Some(child), "127.0.0.1:1");
         c.grace = Duration::from_millis(200);
         drop(c);
         assert!(methods(&st).contains(&"Browser.close".to_string()), "asked politely first: {:?}", methods(&st));
+    }
+
+    #[test]
+    fn a_browser_that_handed_its_launch_over_is_still_asked_to_close_and_waited_for_by_its_port() {
+        // Edge starts, hands over to another process and exits: Syn holds no
+        // child, and the browser is still Syn's. It is told to close through
+        // its connection, and the hand waits for its port to go, which is the
+        // browser having written out what it held.
+        let (mut c, st) = one_tab(vec![]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        c.own(None, &addr);
+        c.grace = Duration::from_secs(5);
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            drop(listener);
+        });
+        let started = Instant::now();
+        drop(c);
+        let took = started.elapsed();
+        closer.join().unwrap();
+        assert!(methods(&st).contains(&"Browser.close".to_string()), "asked politely: {:?}", methods(&st));
+        assert!(took >= Duration::from_millis(300), "it waited for the port to go: {took:?}");
+        assert!(took < Duration::from_secs(3), "and no longer than that: {took:?}");
+    }
+
+    #[test]
+    fn a_browser_that_will_not_close_is_waited_for_only_as_long_as_the_grace() {
+        let (mut c, _) = one_tab(vec![]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        c.own(None, &listener.local_addr().unwrap().to_string());
+        c.grace = Duration::from_millis(300);
+        let started = Instant::now();
+        drop(c);
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        drop(listener);
     }
 
     #[test]

@@ -971,22 +971,23 @@ impl Connector for EnvConnector {
                 return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched: false });
             }
             let profile = crate::browser::profile_dir();
-            let (addr, child) = match crate::browser::running_on(&profile) {
-                Some(addr) => (addr, None),
+            let (addr, child, ours) = match crate::browser::running_on(&profile) {
+                Some(addr) => (addr, None, false),
                 None => {
                     if !self.launch {
                         return Err("starting the browser is off (AGENT_MCP_LAUNCH=0): the human starts it".into());
                     }
                     let exe = crate::browser::find()?;
                     let started = crate::browser::start(&exe, &profile, crate::browser::headless())?;
-                    (started.addr, started.child)
+                    (started.addr, started.child, started.ours)
                 }
             };
             let mut c = crate::cdp::Cdp::connect(&addr).map_err(|e| format!("cannot reach the browser at {addr}: {e}"))?;
-            let launched = child.is_some();
-            if let Some(child) = child {
-                // From here it is this hand's to end, with Syn.
-                c.own(child);
+            let launched = ours;
+            if ours {
+                // From here it is this hand's to end, with Syn: by its own
+                // port, whether or not the process Syn started is still there.
+                c.own(child, &addr);
             }
             return Ok(Connected { name: format!("cdp-{addr}"), apps: vec!["web".into()], hand: Box::new(c), launched });
         }

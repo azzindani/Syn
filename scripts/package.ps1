@@ -15,9 +15,12 @@
 # that runs it needs neither: office-host is published self-contained, so
 # only Windows and a desktop Office are required there.
 #
-# v0.1.0 is Office only: the package carries the console, the CLI, the MCP
-# server and the Office helper. The UI Automation helper and the browser
-# hand are not in it; they stay in the source build for whoever turns them on.
+# The package carries the console, the CLI, the MCP server and the Office
+# helper. The browser hand is compiled into the CLI and the MCP server and
+# needs no helper of its own: it starts the Chrome or Edge already on the
+# machine, on a profile of its own, when a page is first wanted. The UI
+# Automation helper is not in it; it stays in the source build for whoever
+# turns it on.
 
 param(
     [string]$Out = '',
@@ -93,6 +96,10 @@ AGENT_API_KEY=
 AGENT_PIPE_EXCEL=hand-excel
 AGENT_PIPE_WORD=hand-word
 AGENT_PIPE_PPT=hand-powerpoint
+
+# Web pages open in a Chrome or Edge window of Syn's own. Remove the # to
+# give the model no browser at all.
+# AGENT_BROWSER=off
 "@ | Set-Content -Encoding ascii (Join-Path $stage '.env')
 
 # For the zip: syn.exe starts the console with no terminal window and opens
@@ -126,9 +133,18 @@ START
   applications and documents stay open; Syn never closes what it did not
   open, and never saves unless asked.
 
+WEB PAGES
+  Ask Syn to open a page and it starts Chrome (or Edge, which comes with
+  Windows) in a window of its own, with its own profile: it is not your
+  everyday browser and none of your sign-ins are in it. Sign in to a site
+  there once and it stays signed in. Syn never types a password or a card
+  number: it asks you to. The browser goes when Syn does. To turn it off,
+  add AGENT_BROWSER=off to .env.
+
 NEEDS
   Windows 10 or 11, and desktop Microsoft Office (Microsoft 365 or a
-  perpetual version). Nothing else: the Office helper carries its own .NET.
+  perpetual version) for documents. Nothing else: the Office helper carries
+  its own .NET, and web pages use the Chrome or Edge already on the machine.
 
 FROM AN MCP CLIENT (Claude Desktop, OpenCode, ...)
   Point the client at mcpgate.exe in this folder. No key is needed; the

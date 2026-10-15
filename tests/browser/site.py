@@ -78,6 +78,8 @@ LINKS = [
     ("cookie", "Cookie", "/cookie"),
     ("title-change", "Title change", "/title-change"),
     ("typeahead", "Typeahead", "/typeahead"),
+    ("pizza", "Pizza", "/pizza"),
+    ("custom", "Custom controls", "/custom"),
 ]
 
 
@@ -260,13 +262,15 @@ EDITOR = page(
     r"""<h1>Editor</h1>
 <p>Rich text</p>
 <div id="rich" contenteditable="true"></div>
+<p>Notes</p>
+<div id="notes" contenteditable="true"><p>Your content goes here.</p></div>
 <p>Controlled input <input id="ctl"></p>
 <p id="mirror"></p>
 <p>Autocomplete <input id="auto" autocomplete="off"></p>
 <ul id="sugg"></ul>
 <p>Press Enter <input id="enter"></p>
 <p id="out">none</p>""",
-    style=r"""#rich{min-height:80px;border:1px solid #888;padding:8px}""",
+    style=r"""#rich,#notes{min-height:80px;border:1px solid #888;padding:8px}""",
     script=r"""// A React-style controlled input: `state` is the truth, and it is updated
 // only from 'input' events. A value set from outside without one (el.value
 // = ...) is put back on the next change or blur.
@@ -315,6 +319,22 @@ FRAMES = page(
   document.getElementById('outer-out').textContent = 'outer clicked';
 });""",
 )
+
+# Frames with nothing to press in them, two deep: what a frameset or an
+# embedded article is, and the map has to say how to reach each one.
+FRAMESET = page(
+    "Frameset",
+    r"""<h1>Frameset</h1>
+<iframe id="outer-frame" title="outer" src="/frameset-mid" width="500" height="260"></iframe>""",
+)
+
+FRAMESET_MID = page(
+    "Middle",
+    r"""<p>Middle page</p>
+<iframe id="inner-frame" name="deep" src="/frameset-text" width="300" height="100"></iframe>""",
+)
+
+FRAMESET_TEXT = page("Text", r"""<p id="said">MIDDLE</p>""")
 
 FRAME_INNER = page(
     "Inner",
@@ -485,6 +505,60 @@ wire(document.getElementById('q'));""",
 )
 
 
+# ---------------------------------------------------------------- pizza
+
+# A form of the kind most of the web is made of: no ids anywhere, groups that
+# share a name and differ in their value, a button with only a value. What a
+# map can say about these is the difference between a selector a person can
+# read and one made of positions from <html> down.
+PIZZA = page(
+    "Pizza",
+    r"""<h1>Pizza</h1>
+<form method="POST" action="/submit">
+<p><label>Name <input name="name"></label></p>
+<fieldset><legend>Size</legend>
+<p><label><input type="radio" name="size" value="small"> Small</label>
+<label><input type="radio" name="size" value="large"> Large</label></p></fieldset>
+<fieldset><legend>Toppings</legend>
+<p><label><input type="checkbox" name="topping" value="bacon"> Bacon</label>
+<label><input type="checkbox" name="topping" value="mushroom"> Mushroom</label></p></fieldset>
+<p><input type="submit" value="Order"></p>
+</form>""",
+)
+
+
+# ---------------------------------------------------------------- custom
+
+# The two ways a page draws its own checkbox. A todo list hides the real box
+# with opacity:0 and lays it over a drawing, so a click lands on a thing
+# nobody sees, and the words beside it are not tied to it by a label. A
+# subscribe switch shrinks the real box to a pixel and clips it, so the only
+# thing to press is the label.
+CUSTOM = page(
+    "Custom controls",
+    r"""<h1>Custom controls</h1>
+<ul id="todos">
+<li><input class="tg" type="checkbox"><label>buy milk</label></li>
+<li><input class="tg" type="checkbox"><label>call Ada</label></li>
+</ul>
+<p><label class="sw"><input id="subscribe" type="checkbox" class="sr"><span class="box"></span> Subscribe</label></p>
+<p id="out">nothing checked</p>""",
+    style=r"""#todos{list-style:none;padding:0}
+#todos li{position:relative;height:32px}
+.tg{opacity:0;position:absolute;left:0;top:0;width:24px;height:24px;margin:0}
+#todos label{display:block;padding-left:32px;line-height:24px;background:linear-gradient(#bbb,#bbb) no-repeat left center / 24px 24px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0;margin:-1px}
+.box{display:inline-block;width:18px;height:18px;border:1px solid #888;vertical-align:middle}""",
+    script=r"""var out = document.getElementById('out');
+document.addEventListener('change', function () {
+  var on = [].slice.call(document.querySelectorAll('input:checked')).map(function (i) {
+    return (i.closest('li') || i.closest('label')).innerText.trim();
+  });
+  out.textContent = on.length ? 'checked: ' + on.join(', ') : 'nothing checked';
+});""",
+)
+
+
 # ---------------------------------------------------------------- big
 
 BIG_PARAGRAPHS = 2600
@@ -531,6 +605,9 @@ PAGES = {
     "/editor": EDITOR,
     "/frames": FRAMES,
     "/frame-inner": FRAME_INNER,
+    "/frameset": FRAMESET,
+    "/frameset-mid": FRAMESET_MID,
+    "/frameset-text": FRAMESET_TEXT,
     "/shadow": SHADOW,
     "/newtab": NEWTAB,
     "/long": LONG,
@@ -539,10 +616,12 @@ PAGES = {
     "/big": BIG,
     "/title-change": TITLE_CHANGE,
     "/typeahead": TYPEAHEAD,
+    "/pizza": PIZZA,
+    "/custom": CUSTOM,
 }
 DYNAMIC = {
     "/submit", "/table", "/redirect", "/slow", "/server-error",
-    "/download", "/cookie", "/favicon.ico",
+    "/download", "/private", "/cookie", "/favicon.ico",
 }
 
 
@@ -592,6 +671,13 @@ def route(method, path, query, body, req_headers):
                 ("Content-Disposition", 'attachment; filename="report.txt"'),
             ],
             b"quarterly numbers",
+        )
+    if path == "/private":
+        # What a browser answers to this with nobody to type the password
+        # is net::ERR_INVALID_AUTH_CREDENTIALS.
+        return html_response(
+            page("Private", "<h1>401 Sign in</h1>"), 401,
+            [("WWW-Authenticate", 'Basic realm="testbed"')],
         )
     if path == "/cookie":
         cookies = [c.strip() for c in req_headers.get("Cookie", "").split(";")]

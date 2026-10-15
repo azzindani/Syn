@@ -529,6 +529,86 @@ class SynsOwnBrowser(unittest.TestCase):
         self.assertIn("no element matches #q", refusal)
         self.assertIn("without a selector", refusal)
 
+    def test_23c_a_field_with_no_id_gets_a_selector_a_person_can_read_and_it_works(self):
+        self.page("/pizza")
+        shown = self.read(":map")
+        # The members of a group are told apart by their value, and a button
+        # by its own: no path of positions from <html> down.
+        for want in ('input[name="size"][value="large"]', 'input[name="topping"][value="bacon"]', 'input[value="Order"]'):
+            self.assertIn(want, shown)
+        self.assertNotIn("html:nth-of-type", shown)
+        self.assertNotIn("body:nth-of-type", shown)
+        self.click('input[name="size"][value="large"]')
+        self.click('input[name="topping"][value="bacon"]')
+        self.click('input[name="topping"][value="mushroom"]')
+        self.verb("type", selector='input[name="name"]', text="Ada")
+        sent = self.click('input[value="Order"]')
+        self.assertIn("Thanks", sent)
+        landed = self.read("body")
+        for want in ("size=large", "topping=bacon", "topping=mushroom", "name=Ada"):
+            self.assertIn(want, landed)
+
+    def test_23d_a_box_the_page_draws_for_itself_is_named_and_pressed_the_way_a_person_would(self):
+        self.page("/custom")
+        shown = self.read(":map")
+        # Nothing ties the words to the box; they are what is beside it.
+        self.assertIn('checkbox "buy milk"', shown)
+        self.assertIn('checkbox "call Ada"', shown)
+        # The real box is transparent and lies over the drawing: a click lands on it.
+        self.click("li:nth-of-type(2) > input")
+        self.assertIn("checked: call Ada", self.read("#out"))
+        # The real box is one pixel and clipped: the label is what a person presses.
+        self.click("#subscribe")
+        self.assertIn("checked: call Ada, Subscribe", self.read("#out"))
+
+    def test_23e_a_file_a_press_starts_downloading_is_refused_and_said_not_saved_in_silence(self):
+        self.page("/")
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+
+        def saved():
+            try:
+                return {n for n in os.listdir(downloads) if n.startswith("report") or n.endswith(".crdownload")}
+            except OSError:
+                return set()
+
+        before = saved()
+        said = self.click("#to-download")
+        # Found headed, where the file went to the person's Downloads folder
+        # and the model heard nothing. A headless browser refuses downloads
+        # anyway, so the disk can only prove it when the browser is visible
+        # (SYN_BROWSER_VISIBLE=1), and a new name is what shows a new file.
+        time.sleep(1.5)
+        self.assertEqual(saved() - before, set(), "nothing was saved on the person's computer")
+        self.assertIn("a download", said)
+        self.assertIn("report.txt", said)
+        self.assertIn("Syn refused it", said)
+        self.assertIn("Syn browser testbed", self.read("h1"), "the page the press came from is still there")
+
+    def test_23f_text_typed_into_an_editor_goes_after_what_it_already_holds(self):
+        self.page("/editor")
+        def held():
+            fenced = self.read("#notes")
+            return re.search(r"<user_content>\n(.*?)\n</user_content>", fenced, re.S).group(1).replace("\xa0", " ")
+
+        self.verb("type", selector="#notes", text=" plus this")
+        self.assertRegex(held(), r"^Your content goes here\.\s*plus this$")
+        self.verb("type", selector="#notes", text=" and more")
+        self.assertRegex(held(), r"^Your content goes here\.\s*plus this and more$")
+
+    def test_23g_the_map_lists_each_frame_with_the_selector_that_reaches_into_it(self):
+        self.page("/frameset")
+        shown = self.read(":map")
+        self.assertIn("FRAMES", shown)
+        self.assertIn('frame "outer"  #outer-frame', shown)
+        self.assertIn("#outer-frame >>> #inner-frame", shown, "a frame inside a frame is reached through the first")
+        self.assertIn("MIDDLE", self.read("#outer-frame >>> #inner-frame >>> body"))
+
+    def test_23h_a_page_that_asks_for_a_password_is_said_to_want_one_not_to_be_a_wrong_address(self):
+        said = self.verb_refused("goto", text=self.base + "/private")
+        self.assertIn("user name and password", said)
+        self.assertIn("ask the person", said)
+        self.assertNotIn("Check the address", said)
+
     def test_24_zz_sign_ins_are_kept_the_browser_goes_with_syn_and_comes_back_when_wanted(self):
         self.page("/cookie")
         self.assertIn("first visit", self.read("#state"))

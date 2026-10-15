@@ -92,7 +92,8 @@ class SiteTest(unittest.TestCase):
                 "trusted click", "untrusted click ignored", 'id="out"',
             ],
             "/editor": [
-                "<title>Editor</title>", 'id="rich"',
+                "<title>Editor</title>", 'id="rich"', 'id="notes"',
+                "Your content goes here.",
                 'contenteditable="true"', 'id="ctl"', 'id="mirror"',
                 'id="auto"', 'id="sugg"', 'id="enter"', "enter pressed",
             ],
@@ -223,6 +224,17 @@ class SiteTest(unittest.TestCase):
             get(self.url("/server-error"))
         self.assertEqual(cm.exception.code, 500)
         self.assertIn("<title>Server error</title>", cm.exception.read().decode())
+
+    def test_private_asks_for_a_sign_in(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            get(self.url("/private"))
+        self.assertEqual(cm.exception.code, 401)
+        self.assertIn("Basic", cm.exception.headers.get("WWW-Authenticate", ""))
+
+    def test_frameset_nests_two_frames_that_hold_only_text(self):
+        self.assertIn('id="outer-frame"', text(self.url("/frameset")))
+        self.assertIn('id="inner-frame"', text(self.url("/frameset-mid")))
+        self.assertIn(">MIDDLE<", text(self.url("/frameset-text")))
 
     def test_download_is_an_attachment(self):
         status, headers, body = get(self.url("/download"))

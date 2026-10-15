@@ -51,7 +51,14 @@ test.beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "syn-models-"));
   ({ url: consoleUrl, stop } = await startConsole({
     port: Number(process.env.SYN_UI_MODELS_PORT ?? 7813),
-    env: { AGENT_BASE_URL: `http://${provider}/api/v1`, AGENT_API_KEY: "test-key", AGENT_HOME: home },
+    // The four models are pinned to the defaults: "automatic goes back to the
+    // .env model" is asserted below, and a developer's own .env names its own
+    // (it made this spec fail on a machine that had one).
+    env: {
+      AGENT_BASE_URL: `http://${provider}/api/v1`, AGENT_API_KEY: "test-key", AGENT_HOME: home,
+      AGENT_MODEL_SMALL: "openrouter/auto", AGENT_MODEL_STANDARD: "openrouter/auto",
+      AGENT_MODEL_CODING: "openrouter/auto", AGENT_MODEL_REASONING: "openrouter/auto",
+    },
   }));
 });
 
@@ -118,9 +125,14 @@ test("a fresh window shows what the console will use, and automatic goes back to
   await page.locator("#mlist .mrow.auto").click();
   await expect(page.locator("#mname")).toHaveText("Automatic");
   await page.locator("#think").selectOption("low");
+  const before = bodies.length;
   await page.locator("#new").click();
   await page.locator("#box").fill("Again");
   await page.locator("#box").press("Enter");
+  // The request itself, not the reply bubble: the last chat's "pineapple" is
+  // still on screen for a moment after New chat, and satisfied this wait
+  // before the new request had reached the provider.
+  await expect.poll(() => bodies.length, { timeout: 60_000 }).toBeGreaterThan(before);
   await expect(page.locator("#tl .bot").last()).toContainText("pineapple", { timeout: 60_000 });
   const sent = bodies[bodies.length - 1];
   expect(sent.model).toBe("openrouter/auto");

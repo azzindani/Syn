@@ -83,18 +83,40 @@ namespace Syn.Sidecar
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
-                _stop = true;
-                // Ends the STA thread's loop once the request in hand is
-                // answered; the listeners are background threads.
-                Jobs.CompleteAdding();
-                Console.WriteLine("stop requested: draining");
+                RequestStop("stop requested: draining");
             };
+            // Windows has no SIGTERM, and a console helper started with no
+            // window shares no console with the program that started it, so
+            // Ctrl+C cannot reach it. The launcher sets this named event
+            // instead (desk.rs ask_to_stop) and kills the helper only if it
+            // is still here a few seconds later. The reason is Office: a
+            // helper that is terminated outright never lets go of its
+            // references, and Excel then could not exit on Quit(): still
+            // running after twelve minutes when measured, against twelve
+            // seconds with no helper.
+            // The name carries the process id so two helpers never share one.
+            var stopEvent = new EventWaitHandle(false, EventResetMode.ManualReset,
+                $"Local\\SynHelperStop{Environment.ProcessId}");
+            new Thread(() =>
+            {
+                stopEvent.WaitOne();
+                RequestStop("stop requested by the program that started this helper: draining");
+            }) { IsBackground = true, Name = "stop-listener" }.Start();
             var sta = new Thread(Run) { IsBackground = true };
             sta.SetApartmentState(ApartmentState.STA);
             sta.Start();
             Console.WriteLine($"office-host live: app={_app} pipe={_pipe} (STA)");
             sta.Join();
             return 0;
+        }
+
+        /// <summary>Ends the STA thread's loop once the request in hand is
+        /// answered; the listeners are background threads. Safe to call twice.</summary>
+        private static void RequestStop(string why)
+        {
+            _stop = true;
+            Jobs.CompleteAdding();
+            Console.WriteLine(why);
         }
 
         private static void Run()
@@ -168,6 +190,16 @@ namespace Syn.Sidecar
                 // own; the user's documents are left exactly as they are.
                 try { DropAllUndo(); } catch { }
                 try { Marshal.FinalReleaseComObject(app); } catch { /* detach only, never kill user app */ }
+                // Every sheet, range and document this loop touched is a
+                // wrapper holding one count on an Office object. .NET does
+                // not run finalizers when the process exits, so without this
+                // they would be dropped by the kill instead -- and Office
+                // keeps counting them. The thread's own exit then uninitialises
+                // COM, which lets go of whatever is left.
+                app = null!;
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
             }
         }
 

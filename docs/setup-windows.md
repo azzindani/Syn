@@ -112,6 +112,7 @@ These scripts work on throwaway documents in `testbed\`, never on yours.
 powershell -File scripts\new-testbed-docs.ps1   # make plan.xlsx, report.docx, deck.pptx (close Office first)
 powershell -File scripts\live-excel-smoke.ps1   # attach to Excel, read, write, detach
 powershell -File scripts\live-office-peak.ps1   # every Excel, Word and PowerPoint verb through mcpgate
+powershell -File scripts\live-helper-exit.ps1   # what Excel does when Syn ends (close Excel first)
 ```
 
 `live-office-peak.ps1` prints one PASS or FAIL line per step and exits with

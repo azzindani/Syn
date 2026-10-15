@@ -61,6 +61,9 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
       Word table style refused for Excel.
 - [ ] Run it a second time: it passes again (it clears its own old
       exports; an export never replaces a file the session did not write).
+- [ ] `powershell -File scripts\live-helper-exit.ps1` (Excel closed first)
+      exits 0: an Excel that Syn started goes when Syn ends, one with a
+      workbook open stays, and a plain `Quit()` ends either.
 
 ## 3. What this round changed and only Windows can show
 

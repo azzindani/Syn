@@ -1029,17 +1029,18 @@ impl Drop for EnvConnector {
     /// does not: a helper never closes what it did not open, and the human's
     /// documents stay exactly where they are.
     fn drop(&mut self) {
-        for c in &mut self.started {
-            // Asked first, told second. The LibreOffice helper stops its
-            // office on SIGTERM; SIGKILL would leave that office orphaned.
-            if no_inherit::ask_to_stop(c) {
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
-                while std::time::Instant::now() < until {
-                    if let Ok(Some(_)) = c.try_wait() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+        // Asked first, told second. The LibreOffice helper stops its office
+        // on SIGTERM and SIGKILL would leave that office orphaned; the Office
+        // helper lets go of Word, Excel and PowerPoint so they can exit.
+        // Everyone is asked before anyone is waited for: they stop together.
+        let asked: Vec<bool> = self.started.iter().map(no_inherit::ask_to_stop).collect();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        for (c, asked) in self.started.iter_mut().zip(asked) {
+            while asked && std::time::Instant::now() < until {
+                if let Ok(Some(_)) = c.try_wait() {
+                    break;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
             let _ = c.kill();
             let _ = c.wait();
@@ -1062,6 +1063,14 @@ pub(crate) mod no_inherit {
     const HANDLE_FLAG_INHERIT: u32 = 1;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenEventW(access: u32, inherit: i32, name: *const u16) -> *mut std::ffi::c_void;
+        fn SetEvent(h: *mut std::ffi::c_void) -> i32;
+        fn CloseHandle(h: *mut std::ffi::c_void) -> i32;
+    }
+    const EVENT_MODIFY_STATE: u32 = 0x0002;
+
     /// Stop this process's own stdio from leaking into the child, and keep
     /// the child off the screen.
     pub fn prepare(cmd: &mut std::process::Command) {
@@ -1075,10 +1084,26 @@ pub(crate) mod no_inherit {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    /// Windows has no SIGTERM to send; the helper is terminated outright,
-    /// and it holds nothing that terminating it would lose.
-    pub fn ask_to_stop(_c: &std::process::Child) -> bool {
-        false
+    /// Windows has no SIGTERM, and the helper shares no console with this
+    /// program, so there is no Ctrl+C to send either. office-host opens a
+    /// named event for itself (Program.cs); setting it makes the helper
+    /// finish the request in hand, let go of Word, Excel and PowerPoint and
+    /// exit. Terminated outright it holds nothing a person could lose, but
+    /// Excel went on counting it as a client and could not exit on Quit()
+    /// for more than twelve minutes. Helpers that open no such event (the
+    /// UI Automation one) are refused here and terminated as before.
+    pub fn ask_to_stop(c: &std::process::Child) -> bool {
+        let name: Vec<u16> = format!("Local\\SynHelperStop{}", c.id()).encode_utf16().chain([0]).collect();
+        // SAFETY: a NUL-terminated name; the handle is closed before return.
+        unsafe {
+            let h = OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr());
+            if h.is_null() {
+                return false;
+            }
+            let set = SetEvent(h) != 0;
+            CloseHandle(h);
+            set
+        }
     }
 }
 
@@ -1244,6 +1269,60 @@ mod tests {
     fn desk() -> (Desk, std::rc::Rc<std::cell::RefCell<Log>>) {
         let (c, log) = FakeConnector::new();
         (Desk::new("t", Box::new(c)), log)
+    }
+
+    /// The Windows stop request from this side alone: the event office-host
+    /// opens for itself is opened here, under the name it uses.
+    #[cfg(windows)]
+    mod stop_request {
+        use super::no_inherit::ask_to_stop;
+        use std::process::{Child, Command, Stdio};
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CreateEventW(attrs: *const u8, manual: i32, initial: i32, name: *const u16) -> *mut std::ffi::c_void;
+            fn WaitForSingleObject(h: *mut std::ffi::c_void, ms: u32) -> u32;
+            fn CloseHandle(h: *mut std::ffi::c_void) -> i32;
+        }
+
+        fn sleeper() -> Child {
+            Command::new("cmd")
+                .args(["/c", "ping -n 30 127.0.0.1 >nul"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+
+        #[test]
+        fn a_helper_that_opened_no_stop_event_is_not_asked_and_is_left_to_be_terminated() {
+            let mut child = sleeper();
+            assert!(!ask_to_stop(&child));
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+
+        #[test]
+        fn the_event_a_helper_opens_for_itself_is_set_by_the_request() {
+            let mut child = sleeper();
+            let name: Vec<u16> = format!("Local\\SynHelperStop{}", child.id()).encode_utf16().chain([0]).collect();
+            // SAFETY: a NUL-terminated name; the handle is closed below.
+            let (set, waited) = unsafe {
+                let h = CreateEventW(std::ptr::null(), 1, 0, name.as_ptr());
+                assert!(!h.is_null(), "could not open the event");
+                let before = WaitForSingleObject(h, 0);
+                assert_eq!(before, 0x102, "the event started out set");
+                let set = ask_to_stop(&child);
+                let waited = WaitForSingleObject(h, 2000);
+                CloseHandle(h);
+                (set, waited)
+            };
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(set, "the request said it could not reach the helper");
+            assert_eq!(waited, 0, "the helper's event was not set");
+        }
     }
 
     #[test]

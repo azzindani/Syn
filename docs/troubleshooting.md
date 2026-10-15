@@ -267,3 +267,28 @@ C# helper is written the way it is:
     text, with a note in the `open` reply, so no order is guessed. ISO dates and
     everything else are left to Excel. Checked live on a monthly file, a
     mixed file and a month-first file.
+19. **Excel could not exit after the helper was ended outright.** The helper
+    was ended with TerminateProcess, so it never let go of its references to
+    Excel (the cause is inferred: letting go cleanly fixed it). A plain `Quit()` afterwards (from a script,
+    or a person closing the window) left an invisible, windowless EXCEL.EXE
+    running: still there after twelve minutes, where Excel driven by a script
+    with no helper in the way is gone in twelve seconds, and PowerPoint
+    after about eight minutes. A workbook opened by double-click can open
+    into that hidden instance, with no window to show for it. Windows has no
+    SIGTERM and the helper shares no console with its launcher, so the
+    helper now opens a named event, `Local\SynHelperStop<its pid>`, and the
+    launcher sets it (`desk.rs` `ask_to_stop`) and kills the helper only if
+    it is still there eight seconds later. On the event the helper finishes
+    the request in hand, drops its undo scratch workbooks, lets go of Excel
+    and collects the wrappers it made (.NET runs no finalizers at exit),
+    and its thread's exit uninitialises COM. Excel that Syn started and that
+    has nothing open then exits by itself 2 to 3 s later; Excel with a
+    workbook open stays, showing it, and a plain `Quit()` ends it in 3 s,
+    also when the helper was started by the console (`cli` given `open`
+    and `quit`, which is what closing the window does). A helper that is killed
+    for any other reason (Syn's own process killed, the job object) still
+    cannot do this; that case is no worse than before.
+    `scripts\live-helper-exit.ps1` checks it, and fails against the older
+    helper. Word and PowerPoint go through the same code: after the whole
+    peak run, a plain `Quit()` on all three ended Word and Excel within 25 s
+    and PowerPoint a few seconds later (it is slow to go even on its own).

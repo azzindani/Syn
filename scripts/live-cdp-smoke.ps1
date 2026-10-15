@@ -54,9 +54,16 @@ foreach ($suite in 'tests\browser\test_browser_live.py', 'tests\test_cdp_live.py
 
 # The suites check their own profiles; this checks that nothing at all of
 # Syn's is still running, the way a person would notice it in Task Manager.
-Start-Sleep -Seconds 2
-$left = Get-CimInstance Win32_Process |
-    Where-Object { $_.Name -match '^(chrome|msedge)\.exe$' -and $_.CommandLine -like '*syn-*' }
+# Given up to 15 s: the attach-mode suite kills the browser it started with
+# Process.kill, which leaves Edge's crashpad-handler to notice and go by
+# itself, and at 2 s that handler was reported as a leftover (it was gone a
+# few seconds later). Anything that outlives 15 s is a real one.
+$until = (Get-Date).AddSeconds(15)
+do {
+    Start-Sleep -Seconds 1
+    $left = Get-CimInstance Win32_Process |
+        Where-Object { $_.Name -match '^(chrome|msedge)\.exe$' -and $_.CommandLine -like '*syn-*' }
+} while ($left -and (Get-Date) -lt $until)
 if ($left) {
     Write-Warning "LEFTOVER browser processes on a test profile: $($left.ProcessId -join ', ')"
     $failed++

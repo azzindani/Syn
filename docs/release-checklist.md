@@ -75,6 +75,10 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
       `powershell -File scripts\live-layout-auto.ps1` exits 0: with Arrange by
       itself on, an Excel Syn opens takes the rest of the screen with no
       click; with it off, it is left alone; a window you move stays moved.
+- [ ] With Syn and Excel both closed, `powershell -File scripts\live-layout-start.ps1`
+      exits 0: Syn started beside an Excel that is already open and
+      maximized gives it the rest of the screen; a minimized one, and one on
+      the other monitor, are left alone.
 - [ ] Close Syn and start it from its shortcut: its window comes up in its
       place (right third) by itself, and the first document it opens in
       Excel or Word takes the rest.

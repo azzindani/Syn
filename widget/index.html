@@ -2460,6 +2460,16 @@ function liveStep(line) {
     // No "Working on <model>" banner: the work card names the model, and
     // the dots say it is working. A banner is kept for what needs reading.
     liveOpen(m[1]);
+    // A run an MCP client drives (`mcpgate`, model=mcp:<client>) has no
+    // message behind it: the client calls Syn's tools directly. Drawn alone
+    // it read as Syn working unprompted, with no sign of what it was asked --
+    // reported as "I don't see the prompts". Say who is driving instead.
+    if (m[1].startsWith("mcp:") && liveTurn) {
+      const who = m[1].slice(4) || "a client";
+      const note = el("div", "note", `Driven by ${who} over MCP: it calls Syn's tools directly, so there is no chat prompt`);
+      liveTurn.insertBefore(note, liveActs);
+      liveNodes.push(note);
+    }
     // The clock from when the turn began, not from when this page saw it:
     // a page opened ten minutes into a run said "0:03".
     const at = Number((line.match(/ at=(\d+)/) || [])[1]);

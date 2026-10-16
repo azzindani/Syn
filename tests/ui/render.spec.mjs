@@ -333,6 +333,19 @@ test("a turn's work reads as one sentence of where it happened", async ({ page }
   await expect(card.locator(".acts-head .meta")).toContainText("3 steps");
 });
 
+test("a run an MCP client drives says who drives it, since there is no prompt to show", async ({ page }) => {
+  await say(page, "RECEIPT say model=mcp:claude-code");
+  await say(page, step({ label: "Opened excel:plan.xlsx:workbook", tool: "open", app: "excel", status: "done", detail: "ok" }));
+  await expect(page.locator(".note")).toContainText("Driven by claude-code over MCP");
+  await expect(page.locator(".note")).toContainText("no chat prompt");
+  // The note sits above the card it explains, inside the same turn.
+  await expect(page.locator(".turn > .note + .acts")).toHaveCount(1);
+  // A run a model drives has a prompt, so it gets no such note.
+  await say(page, "ANSWER ok");
+  await say(page, "RECEIPT say model=vendor/model-x open=0");
+  await expect(page.locator(".note")).toHaveCount(1);
+});
+
 test("a turn that touched nothing leaves no empty card behind", async ({ page }) => {
   await say(page, "RECEIPT say model=vendor/model-x open=0");
   await expect(page.locator(".acts")).toHaveCount(1);

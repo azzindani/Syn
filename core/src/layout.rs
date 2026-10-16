@@ -353,7 +353,8 @@ pub fn available() -> bool {
 /// Place Syn's window and the application beside it. The text says what was
 /// done, or why nothing was. With `anything`, when no Excel, Word or
 /// PowerPoint is open the window the person was in before Syn goes beside it
-/// instead; without, only Office does, and Syn alone takes its place.
+/// instead; without, only Office does (and with none, Syn alone takes its
+/// place).
 pub fn apply(req: Request, anything: bool) -> Result<String, String> {
     #[cfg(windows)]
     {
@@ -384,8 +385,11 @@ pub fn follow(app: &str) {
 }
 
 /// Syn's own window takes its place when Syn starts, if automatic layout is
-/// on. The window program restores wherever it was last closed, a moment
-/// after it appears; this waits for it and then puts it in the chosen slot.
+/// on, and an Excel, Word or PowerPoint window already open on the same
+/// screen takes the rest (maximized or not; minimized ones and ones on
+/// another monitor are left alone). The window program restores wherever it
+/// was last closed, a moment after it appears; this waits for it and then
+/// puts it in the chosen slot.
 pub fn settle_self() {
     #[cfg(windows)]
     {
@@ -437,6 +441,7 @@ mod win {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn EnumWindows(cb: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+        fn IsWindow(h: isize) -> i32;
         fn IsWindowVisible(h: isize) -> i32;
         fn IsIconic(h: isize) -> i32;
         fn IsZoomed(h: isize) -> i32;
@@ -602,6 +607,27 @@ mod win {
             .collect()
     }
 
+    /// The topmost Office window that is already on Syn's own screen and is
+    /// not minimized: what is there to be given the rest when Syn starts.
+    /// Syn taking its third on top of a maximized Excel, and leaving Excel
+    /// full screen behind it, was seen to hide a third of the workbook until
+    /// the first `open`. A window on the person's other monitor is their own
+    /// arrangement, and one they minimized is theirs to bring back; neither
+    /// is touched without being asked.
+    fn partner_here(ours: &[isize], syn: isize) -> Option<(isize, String)> {
+        let screen = monitor_of(syn);
+        candidates(ours).into_iter().find_map(|c| match c.pick {
+            // SAFETY: plain call on a window handle.
+            Pick::Office(app) if unsafe { IsIconic(c.h) } == 0 && monitor_of(c.h) == screen => Some((c.h, app.to_string())),
+            _ => None,
+        })
+    }
+
+    fn monitor_of(h: isize) -> isize {
+        // SAFETY: a plain call on a window handle.
+        unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) }
+    }
+
     /// The window to put beside Syn: the topmost Office window, else the
     /// topmost ordinary one. Office first because Syn works on those, so
     /// "beside Syn" means beside what it is doing; the window just behind
@@ -640,11 +666,23 @@ mod win {
         Office,
         /// This one, which Syn has just opened a document in.
         Window(isize, String),
-        /// None: only Syn takes its place.
-        Alone,
+        /// The topmost Office window already on Syn's screen, not minimized:
+        /// what Syn starting means.
+        Here,
+    }
+
+    /// What one arrangement did: the words for the menu, and the other
+    /// window with the place it was given, when there was one.
+    struct Done {
+        text: String,
+        partner: Option<(isize, Rect)>,
     }
 
     pub fn apply_with(req: Request, with: Partner) -> Result<String, String> {
+        arrange(req, with).map(|done| done.text)
+    }
+
+    fn arrange(req: Request, with: Partner) -> Result<Done, String> {
         let _px = Pixels::real();
         let ours = shared::syn_windows();
         let Some(&syn) = ours.first() else {
@@ -672,7 +710,7 @@ mod win {
             Partner::Pick => partner(&ours, true),
             Partner::Office => partner(&ours, false),
             Partner::Window(h, name) => Some((h, name)),
-            Partner::Alone => None,
+            Partner::Here => partner_here(&ours, syn),
         };
         let mut crowded = 0;
         if let Some((h, _)) = &beside {
@@ -684,7 +722,44 @@ mod win {
         // SAFETY: plain calls on a window handle.
         unsafe { SetWindowPos(syn, HWND_TOP, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE) };
         shared::raise(syn);
-        Ok(describe(req, beside.as_ref().map(|(_, who)| who.as_str()), crowded))
+        Ok(Done {
+            text: describe(req, beside.as_ref().map(|(_, who)| who.as_str()), crowded),
+            partner: beside.map(|(h, _)| (h, rest)),
+        })
+    }
+
+    /// How long, after Syn gives an application's window its place, a window
+    /// that leaves it is put back.
+    const HOLD: std::time::Duration = std::time::Duration::from_millis(2500);
+
+    /// Excel and Word put their window back to the size it had when they were
+    /// last closed once the first document is up, which is after Syn has
+    /// placed it: Excel came out 7 px short of the screen with Syn's third
+    /// beside it, though the same call had put it flush a run before. The
+    /// person has not touched the window yet in these first seconds (the
+    /// application did it within about half a second of its document
+    /// appearing), so a window that is no longer where it was left is placed
+    /// again; after them it is theirs. One that cannot be as narrow as asked is
+    /// judged by where it really landed, not by what was asked, so it is not
+    /// chased.
+    fn hold(h: isize, want: Rect) {
+        use std::time::{Duration, Instant};
+        let _px = Pixels::real();
+        // Placed again at once, so a window that already moved since `arrange`
+        // is caught, and a window that is in place is left alone.
+        let mut landed = place(h, want);
+        let until = Instant::now() + HOLD;
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(300));
+            // SAFETY: a plain call on a window handle.
+            if unsafe { IsWindow(h) } == 0 {
+                return;
+            }
+            let now = drawn_rect(h);
+            if now != landed {
+                landed = place(h, want);
+            }
+        }
     }
 
     /// Windows already given their place this run; a person who moves one
@@ -720,8 +795,10 @@ mod win {
                 if available() {
                     let _px = Pixels::real();
                     if let Some((h, name)) = window_of(class, &shared::syn_windows()) {
-                        if first_time(h) {
-                            let _ = apply_with(prefs.request(), Partner::Window(h, name));
+                        if first_time(h)
+                            && let Ok(Done { partner: Some((p, rest)), .. }) = arrange(prefs.request(), Partner::Window(h, name))
+                        {
+                            hold(p, rest);
                         }
                         return;
                     }
@@ -744,11 +821,14 @@ mod win {
                 }
                 if available() {
                     // The window program puts itself where it was last closed
-                    // as it starts; wait that out, then take the slot.
+                    // as it starts; wait that out, then take the slot, and
+                    // give an Office window already on this screen the rest.
                     std::thread::sleep(Duration::from_millis(700));
                     let prefs = load();
-                    if prefs.auto {
-                        let _ = apply_with(prefs.request(), Partner::Alone);
+                    if prefs.auto
+                        && let Ok(Done { partner: Some((p, rest)), .. }) = arrange(prefs.request(), Partner::Here)
+                    {
+                        hold(p, rest);
                     }
                     return;
                 }

@@ -89,7 +89,10 @@ Watching Syn work means Syn down one side of the screen and Excel, Word or
 PowerPoint on the rest, edge to edge. Syn does that by itself:
 
 - **When Syn starts**, its window goes to its place: the right third of the
-  screen, unless you chose otherwise.
+  screen, unless you chose otherwise. An Excel, Word or PowerPoint window
+  already open on that screen (maximized or not) takes the rest, so Syn is
+  never left sitting on top of it. One you minimized, and one on your other
+  monitor, are left where they are.
 - **When Syn opens a document**, the application's window goes to the rest
   of the screen, touching Syn's: no gap, no overlap, both filling the
   screen top to bottom. A maximized window is restored first and one in the

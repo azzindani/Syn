@@ -115,6 +115,7 @@ powershell -File scripts\live-office-peak.ps1   # every Excel, Word and PowerPoi
 powershell -File scripts\live-helper-exit.ps1   # what Excel does when Syn ends (close Excel first)
 powershell -File scripts\live-layout.ps1        # Syn beside Excel at several ratios (Syn running in its window)
 powershell -File scripts\live-layout-auto.ps1   # Syn and Excel take their places by themselves (Syn running; Excel closed)
+powershell -File scripts\live-layout-start.ps1  # Syn starting beside an Excel already open (Syn and Excel both closed: it starts them)
 ```
 
 `live-office-peak.ps1` prints one PASS or FAIL line per step and exits with

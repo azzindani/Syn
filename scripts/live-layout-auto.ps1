@@ -184,7 +184,9 @@ function Wait-InSlot($a, [int]$seconds) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     do {
         $slot = Slot; $e = AppDrawn $a
-        if ($e -and (Near $e.R.Rt $slot.AppRight) -and (Near $e.R.L $slot.Work.L)) { return $e }
+        # Top and bottom too: an application puts its own size back once its first document is up, a moment
+        # after Syn has placed it, and Syn puts it right again (layout.rs `hold`).
+        if ($e -and (Near $e.R.Rt $slot.AppRight) -and (Near $e.R.L $slot.Work.L) -and (Near $e.R.T $slot.Work.T) -and (Near $e.R.B $slot.Work.B)) { return $e }
         Start-Sleep -Milliseconds 300
     } while ($clock.Elapsed.TotalSeconds -lt $seconds)
     return (AppDrawn $a)
@@ -220,10 +222,16 @@ try {
     $p = Start-Gate
     $null = Call $p 'open' @{ app = 'excel'; path = (Join-Path $docs $excel.File) }
     Start-Sleep -Seconds 6
+    # Excel opens where it was last closed, which after a run with automatic on is Syn's slot, so "where it
+    # opened" proves nothing. The person moves it, Syn is asked to open it again, and it must stay moved.
     $e = AppDrawn $excel
-    $slot = Slot
-    $inSlot = $e -and (Near $e.R.Rt $slot.AppRight) -and (Near $e.R.L $slot.Work.L)
-    Verdict 'off: Excel is left where it opened' ($e -and -not $inSlot) $(if ($e) { "Excel $($e.R.L)-$($e.R.Rt), the slot would be $($slot.Work.L)-$($slot.AppRight)" } else { 'no Excel window' })
+    if ($e) { [void][Win]::SetWindowPos($e.H, [IntPtr]::Zero, 120, 120, 900, 600, 0x0014) }   # (automatic is off here: nothing holds it)
+    Start-Sleep -Milliseconds 500
+    $null = Call $p 'open' @{ app = 'excel'; path = (Join-Path $docs $excel.File) }
+    Start-Sleep -Seconds 6
+    $e = AppDrawn $excel
+    $raw = if ($e) { [Win]::Raw($e.H) }
+    Verdict 'off: Excel is left where the person put it' ($e -and (Near $raw.L 120) -and (Near $raw.T 120)) $(if ($e) { "Excel's window at $($raw.L),$($raw.T), put at 120,120" } else { 'no Excel window' })
     Stop-Gate $p
     Clear-App $excel
 
@@ -249,6 +257,9 @@ try {
 
     # --- 3. the person moves it; Syn does not take it back ------------------
     if ($kept) {
+        # A person does not drag a window in the first seconds after Syn places it, and for those seconds Syn puts
+        # back a window its application moves (layout.rs `hold`): wait them out before acting as the person.
+        Start-Sleep -Seconds 4
         [void][Win]::SetWindowPos($kept.H, [IntPtr]::Zero, 120, 120, 900, 600, 0x0014)
         Start-Sleep -Milliseconds 500
         $null = Call $p 'open' @{ app = 'excel'; path = (Join-Path $docs $excel.File) }

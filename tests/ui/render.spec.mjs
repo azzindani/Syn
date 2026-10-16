@@ -139,6 +139,37 @@ test("a model's answer renders as a document, not as its source", async ({ page 
   expect(shown).not.toMatch(/^- /m);
 });
 
+test("a table whose rule row the model left out is still a table", async ({ page }) => {
+  // The reply that printed as a paragraph of pipes in a 50-message run: six
+  // columns, the header, and no `|---|` line under it.
+  const answer = [
+    "Added market-segment table under Overview (A6:F14, live formulas, same 6 columns):",
+    "",
+    "| Segment | Bookings | Canc. | Rate | Avg lead | Avg nights |",
+    "| Aviation | 237 | 52 | 21.9% | 4.4 | 3.6 |",
+    "| Complementary | 743 | 97 | 13.1% | 13.3 | 1.6 |",
+    "| Undefined | 2 | 2 | 100% | 1.5 | 1.5 |",
+    "",
+    "Standout: Groups cancels most.",
+  ].join("\n");
+  await page.evaluate((t) => window.live.render([{ role: "assistant", text: t }], {}), answer);
+  const bot = page.locator(".bot");
+  await expect(bot.locator("table thead th")).toHaveCount(6);
+  await expect(bot.locator("table thead th").first()).toHaveText("Segment");
+  await expect(bot.locator("table tbody tr")).toHaveCount(3);
+  await expect(bot.locator("table tbody tr").last()).toContainText("Undefined");
+  // The sentences around it stay sentences.
+  await expect(bot).toContainText("Standout: Groups cancels most.");
+  expect(await bot.innerText()).not.toContain("| Aviation |");
+});
+
+test("a line that only mentions a pipe is not made into a table", async ({ page }) => {
+  const answer = ["Use the | character to separate cells.", "", "| just one row |", "", "and a | b | c in a sentence."].join("\n");
+  await page.evaluate((t) => window.live.render([{ role: "assistant", text: t }], {}), answer);
+  await expect(page.locator(".bot table")).toHaveCount(0);
+  await expect(page.locator(".bot")).toContainText("| just one row |");
+});
+
 test("a model cannot put markup on the page", async ({ page }) => {
   await page.evaluate(() =>
     window.live.render([{ role: "assistant", text: "<img src=x onerror=alert(1)> and <b>bold</b>" }], {}),

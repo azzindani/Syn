@@ -1240,6 +1240,8 @@ function md(src) {
 
   const cells = row => row.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
   const isRule = row => row.includes("-") && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(row);
+  // A row of a table: pipes at both ends, and more than one cell between.
+  const isRow = row => /^\s*\|.*\|\s*$/.test(row) && cells(row).length >= 2;
 
   const lines = text.split("\n");
   const out = [];
@@ -1261,12 +1263,20 @@ function md(src) {
 
     if (!line.trim()) { flush(); continue; }
 
-    // A table: a header row, a rule, then body rows.
-    if (line.includes("|") && isRule(lines[i + 1] ?? "")) {
+    // A table: a header row, a rule, then body rows. A model often leaves the
+    // rule out (`| a | b |` straight into `| 1 | 2 |`), and a reader who
+    // sees one row after another with pipes at both ends and the same number
+    // of cells means a table: without this a six-column table printed as a
+    // paragraph of pipes, in a reply that had built it. The first row is the
+    // header then. Needs two rows that agree on their cell count and begin
+    // and end with a pipe, so prose that merely mentions a pipe stays prose.
+    const ruled = line.includes("|") && isRule(lines[i + 1] ?? "");
+    const bare = !ruled && isRow(line) && isRow(lines[i + 1] ?? "") && cells(lines[i + 1]).length === cells(line).length;
+    if (ruled || bare) {
       flush();
       const head = cells(line);
       const body = [];
-      let j = i + 2;
+      let j = i + (ruled ? 2 : 1);
       while (j < lines.length && lines[j].includes("|") && lines[j].trim()) body.push(cells(lines[j++]));
       i = j - 1;
       out.push(

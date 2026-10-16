@@ -21,6 +21,7 @@ pub mod guard;
 pub mod hand;
 pub mod json;
 pub mod labels;
+pub mod layout;
 pub mod live;
 pub mod looptools;
 pub mod manual;

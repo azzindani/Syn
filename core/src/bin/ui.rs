@@ -837,6 +837,30 @@ fn main() {
                 }
                 let _ = respond(&mut s, "200 OK", "application/json", "{\"stopped\":\"restarted\"}");
             }
+            // Whether the page may offer to put Syn beside another window.
+            // Asked of the machine each time the menu opens, because it is
+            // true only while Syn's own window is on screen.
+            ("GET", "/layout") => {
+                let body = format!("{{\"can\":{}}}", core::layout::available());
+                let _ = respond(&mut s, "200 OK", "application/json", &body);
+            }
+            // Move this machine's windows: Origin required, like `/stop`,
+            // so a page from anywhere else cannot rearrange the screen.
+            ("POST", "/layout") => {
+                if req.origin.is_none() {
+                    let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /layout needs an Origin header");
+                    return;
+                }
+                match core::layout::parse(&req.body).and_then(core::layout::apply) {
+                    Ok(text) => {
+                        let body = format!("{{\"text\":\"{}\"}}", json_escape(&text));
+                        let _ = respond(&mut s, "200 OK", "application/json", &body);
+                    }
+                    Err(e) => {
+                        let _ = respond(&mut s, "409 Conflict", "text/plain", &e);
+                    }
+                }
+            }
             ("POST", "/models") => {
                 if req.origin.is_none() {
                     let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /models needs an Origin header");

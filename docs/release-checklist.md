@@ -65,6 +65,12 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
       exits 0: an Excel that Syn started goes when Syn ends (also when Syn
       is killed), one with a workbook open stays, and a plain `Quit()` ends
       either.
+- [ ] With Syn open from its shortcut, `powershell -File scripts\live-layout.ps1`
+      exits 0: Syn and Excel meet edge to edge at a third, a half, two
+      thirds and a quarter, on both sides, from a maximized Excel and from
+      one in the taskbar, and a request out of range, with no `Origin` or
+      from another page, moves nothing. Then look at it yourself: status
+      menu > Windows > Right, 33% with Excel open puts them side by side.
 
 ## 3. What this round changed and only Windows can show
 

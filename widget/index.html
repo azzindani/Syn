@@ -355,7 +355,11 @@ body.busy #hands .dots,body.running #hands .dots{display:inline-flex}
 /* ---------------- the status menu ----------------
    Everything that is machinery rather than conversation lives behind one
    control. A sidebar with three jobs reads as a debug console. */
+/* Scrolls rather than runs off the bottom: with the Windows section the menu is
+   taller than the smallest window (440x320), and a menu is the one thing there
+   that must never be cut off. */
 #pop{display:none;position:absolute;right:0;top:calc(40*var(--du));z-index:30;width:calc(304*var(--tu));padding:calc(8*var(--du));
+  max-height:calc(100vh - 64*var(--du));overflow-y:auto;overscroll-behavior:contain;
   border:1px solid var(--border);border-radius:calc(14*var(--du));background:var(--surface-raised);box-shadow:var(--shadow-lg)}
 #pop.on{display:block;animation:rise .14s ease-out}
 @keyframes rise{from{opacity:0;transform:translateY(-4px)}}
@@ -369,6 +373,7 @@ body.busy #hands .dots,body.running #hands .dots{display:inline-flex}
 .seg button{display:grid;place-items:center;width:calc(30*var(--du));height:calc(24*var(--du));border-radius:calc(7*var(--du));color:var(--muted-foreground)}
 .seg button:hover{color:var(--foreground)}
 .seg button[aria-pressed="true"]{background:var(--card);color:var(--foreground);box-shadow:var(--shadow-sm)}
+.seg.words button{width:auto;padding:0 calc(9*var(--du));font-size:var(--t12)}
 #contrast{width:calc(112*var(--du));accent-color:var(--primary)}
 .popitem{display:flex;align-items:center;gap:calc(10*var(--du));width:100%;height:max(calc(34*var(--du)),calc(22*var(--tu)));padding:0 calc(8*var(--du));
   border-radius:var(--control-radius);font-size:var(--t13);color:var(--foreground);text-align:left}
@@ -818,7 +823,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
   /* Three pills and the send button are wider than a phone: the bar wraps
      rather than pushing the whole page sideways. */
   #bar{flex-wrap:wrap;row-gap:calc(6*var(--du))}
-  #pop{position:fixed;left:calc(12*var(--du));right:calc(12*var(--du));top:calc(62*var(--du));width:auto}}
+  #pop{position:fixed;left:calc(12*var(--du));right:calc(12*var(--du));top:calc(62*var(--du));width:auto;max-height:calc(100vh - 76*var(--du))}}
 
 /* ---------------- the timeline minimap ----------------
    docs/design/DIGEST-08 section 5. One tick per user turn in the left gutter,
@@ -947,6 +952,25 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
         <div class="setrow"><label for="contrast">Contrast</label>
           <input id="contrast" type="range" min="50" max="160" step="5" value="100"></div>
         <hr>
+        <!-- Only while Syn is in a window of its own: a console in a browser tab cannot be moved. -->
+        <div id="layout" hidden>
+          <h4>Windows</h4>
+          <div class="setrow"><span>Syn takes the</span>
+            <span class="seg words" id="laySide" role="group" aria-label="Side of the screen Syn takes">
+              <button type="button" data-side="left">Left</button>
+              <button type="button" data-side="right">Right</button>
+            </span></div>
+          <div class="setrow"><span>Its share</span>
+            <span class="seg words" id="layShare" role="group" aria-label="Share of the screen Syn takes">
+              <button type="button" data-share="0.25">25%</button>
+              <button type="button" data-share="0.3333">33%</button>
+              <button type="button" data-share="0.4">40%</button>
+              <button type="button" data-share="0.5">50%</button>
+              <button type="button" data-share="0.6667">67%</button>
+            </span></div>
+          <span class="hint" id="layHint" aria-live="polite">Click a side or a share to put Syn and Excel, Word or PowerPoint side by side, edge to edge.</span>
+          <hr>
+        </div>
         <button class="popitem" id="setbtn" type="button"><span data-icon="key"></span>Settings</button>
         <button class="popitem" id="handsbtn" type="button"><span data-icon="plug"></span>Connected apps</button>
         <button class="popitem" id="evbtn" type="button"><span data-icon="list"></span>Recent events</button>
@@ -2979,6 +3003,7 @@ $("hands").onclick = e => {
   const open = !pop.classList.contains("on");
   pop.classList.toggle("on", open);
   $("hands").setAttribute("aria-expanded", String(open));
+  if (open) offerLayout();
 };
 document.addEventListener("click", e => { if (!pop.contains(e.target)) closePop(); });
 window.addEventListener("keydown", e => { if (e.key === "Escape") { closePop(); closeModels(false); } });
@@ -3025,6 +3050,44 @@ darkQuery.addEventListener("change", () => {
 });
 for (const b of $("theme").children) b.onclick = () => setTheme(b.dataset.pref);
 setTheme(document.documentElement.dataset.pref);
+
+/* ---------------- window layout ----------------
+   Syn on one side of the screen and the application it works on filling the
+   rest, edge to edge: the way to watch it work. The page only asks; the
+   console moves the windows (it alone knows where they are), and only
+   while Syn is in a window of its own, so the section stays hidden in a
+   browser tab. What was last chosen is remembered, not re-applied. */
+const LAYOUT_KEY = "syn.layout";
+const layout = { side: "right", share: 0.3333 };
+try {
+  const v = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
+  if (v.side === "left" || v.side === "right") layout.side = v.side;
+  if (v.share >= 0.2 && v.share <= 0.8) layout.share = v.share;
+} catch { /* the defaults */ }
+function showLayout() {
+  for (const b of $("laySide").children) b.setAttribute("aria-pressed", String(b.dataset.side === layout.side));
+  for (const b of $("layShare").children) b.setAttribute("aria-pressed", String(Number(b.dataset.share) === layout.share));
+}
+async function offerLayout() {
+  try {
+    const r = await fetch("/layout");
+    $("layout").hidden = !(r.ok && (await r.json()).can);
+  } catch { $("layout").hidden = true; }
+}
+async function arrange(change) {
+  Object.assign(layout, change);
+  showLayout();
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* a private window */ }
+  const hint = $("layHint");
+  hint.textContent = "Arranging…";
+  try {
+    const r = await fetch("/layout", { method: "POST", body: JSON.stringify(layout) });
+    hint.textContent = r.ok ? (await r.json()).text : await r.text();
+  } catch (e) { hint.textContent = "Syn could not be reached: " + e.message; }
+}
+for (const b of $("laySide").children) b.onclick = () => arrange({ side: b.dataset.side });
+for (const b of $("layShare").children) b.onclick = () => arrange({ share: Number(b.dataset.share) });
+showLayout();
 $("contrast").addEventListener("input", e => setContrast(e.target.value));
 
 /* ---------------- appearance ----------------

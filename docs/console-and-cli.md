@@ -60,7 +60,8 @@ port).
 - **The status pill** (top right) shows the apps that are live, with a
   green dot that breathes slowly while they are, and three breathing dots
   while a run is going. Its menu switches between system, light and dark
-  themes, sets contrast, and opens Settings.
+  themes, sets contrast, lays out [the windows](#windows-side-by-side), and
+  opens Settings.
 - **Settings** holds the API keys, one row per provider (OpenRouter,
   OpenCode Zen, OpenCode Go). Paste a key and press Save. A key is never
   shown again once saved: each row says only where its key comes from
@@ -81,6 +82,36 @@ its last line if the connection drops, and polls in the meantime.
 The console binds 127.0.0.1 only, and refuses any command whose `Origin` is
 not its own page (and any with no `Origin`), so neither another machine nor a
 web page you happen to visit can send it commands.
+
+### Windows side by side
+
+The status menu has a **Windows** section for watching Syn work: Syn on
+one side of the screen, Excel, Word or PowerPoint on the rest, edge to edge.
+Choose the side Syn takes (Left or Right) and its share of the screen's width
+(25%, 33%, 40%, 50% or 67%); a click moves the windows at once, and the menu
+says what was done. The last choice is remembered, but never re-applied
+without a click.
+
+- It measures the working area of the screen Syn is on (the screen less the
+  taskbar), puts Syn's window at the share asked for, and gives the Office
+  window all that is left, touching it: no gap, no overlap. Both fill the
+  working area top to bottom. The invisible resize border every Windows
+  window has is taken out, so the drawn edges are what meet.
+- The window beside Syn is the topmost Excel, Word or PowerPoint window;
+  when none is open, the topmost ordinary window (the one you were in before
+  you came to Syn). A maximized window is restored first, and an Office
+  window in the taskbar is brought up. Nothing else moves, and nothing is
+  closed.
+- Syn's window has a smallest width. If the share asked for is narrower
+  (a quarter of a small screen), Syn stays at its smallest and the other
+  window gets what is left, as the menu says; an application that will not
+  go as narrow as it is given reaches under Syn, and the menu says by how
+  much.
+- It needs Syn in a window of its own (the shortcut). In a browser tab
+  there is nothing to move, so the section is not shown; the same on a
+  machine that is not Windows. The page asks the console to do it
+  (`POST /layout`, with `{"side":"left"|"right","share":0.2 to 0.8}`, and
+  the same `Origin` rule as every other command).
 
 ### Appearance
 

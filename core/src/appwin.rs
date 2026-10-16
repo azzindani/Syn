@@ -121,7 +121,7 @@ fn host_gave_no_window(code: Option<i32>, lived: Duration) -> bool {
 }
 
 #[cfg(windows)]
-mod win {
+pub(crate) mod win {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn EnumWindows(cb: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
@@ -139,11 +139,19 @@ mod win {
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
     }
 
+    pub fn class(h: isize) -> String {
+        text(GetClassNameW, h)
+    }
+
+    pub fn title(h: isize) -> String {
+        text(GetWindowTextW, h)
+    }
+
     unsafe extern "system" fn collect(h: isize, lparam: isize) -> i32 {
         // SAFETY: `lparam` is the `Vec` `syn_windows` passed, alive for the
         // whole of the EnumWindows call that calls this.
         let found = unsafe { &mut *(lparam as *mut Vec<isize>) };
-        if unsafe { IsWindowVisible(h) } != 0 && super::is_syn_window(&text(GetClassNameW, h), &text(GetWindowTextW, h)) {
+        if unsafe { IsWindowVisible(h) } != 0 && super::is_syn_window(&class(h), &title(h)) {
             found.push(h);
         }
         1

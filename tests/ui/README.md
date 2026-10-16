@@ -57,6 +57,7 @@ the binary, because that failure is silent and completely convincing.
 | `concurrent.spec.mjs` | do two runs at once each keep their own view | nothing | |
 | `shell.spec.mjs` | do the minimap, banners, budget meter, contrast and folding work | nothing | |
 | `models.spec.mjs` | does the model picker list, search and choose models | nothing (a local fake provider) | |
+| `layout.spec.mjs` | does the status menu's Windows section appear only when Syn can be moved, send the side and share clicked, keep the other when one changes, remember the choice without applying it, and show the console's answer or refusal | nothing (the page's half, against a stand-in endpoint; the windows themselves are `scripts\live-layout.ps1`) | ~8s |
 | `appearance.spec.mjs` | do Settings > Appearance's two five-level scales change the page the right way, keep their choice, work from the keyboard, never draw text under 9px, and fit a 440x320 window | nothing | ~30s |
 | `chat.spec.mjs` | does a typed prompt reach a model and come back | `AGENT_API_KEY` and whichever model `.env` wires to the current slot | one model call |
 

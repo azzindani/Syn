@@ -84,16 +84,50 @@ fn main() {
     };
 
     // A `ui` that is still running after a few seconds has bound its port
-    // and is serving. One that has gone has failed, and nobody would know.
+    // and is serving. One that has gone with an error has failed, and nobody
+    // would know. One that went with success was closed: a person who opens
+    // Syn and shuts the window within these seconds got a box saying it had
+    // stopped as it started and that port 7777 might be in use, which stayed
+    // on screen (holding syn.exe, so an uninstall could not delete it) until
+    // they pressed OK.
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(4) {
         if let Ok(Some(status)) = child.try_wait() {
-            sys::alert(&format!(
-                "Syn stopped as it started ({status}).\n\nAnother program may be using port 7777. \
-                 Running ui.exe from a terminal shows the reason."
-            ));
+            if failed_to_start(&status) {
+                sys::alert(&format!(
+                    "Syn stopped as it started ({status}).\n\nAnother program may be using port 7777. \
+                     Running ui.exe from a terminal shows the reason."
+                ));
+            }
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Whether a console that ended in its first seconds did so because it could
+/// not start. `ui` exits 2 when it cannot bind its port or is misconfigured,
+/// and 0 when its window is closed.
+fn failed_to_start(status: &std::process::ExitStatus) -> bool {
+    !status.success()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exit_with(code: i32) -> std::process::ExitStatus {
+        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+        Command::new(shell).args([flag, &format!("exit {code}")]).status().unwrap()
+    }
+
+    #[test]
+    fn a_console_closed_in_its_first_seconds_is_not_a_failure_to_start() {
+        assert!(!failed_to_start(&exit_with(0)));
+    }
+
+    #[test]
+    fn a_console_that_could_not_bind_its_port_is_a_failure_to_start() {
+        assert!(failed_to_start(&exit_with(2)));
     }
 }

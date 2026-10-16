@@ -71,6 +71,13 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
       one in the taskbar, and a request out of range, with no `Origin` or
       from another page, moves nothing. Then look at it yourself: status
       menu > Windows > Right, 33% with Excel open puts them side by side.
+- [ ] With Syn open in its window, set to Right and 33%, and Excel closed,
+      `powershell -File scripts\live-layout-auto.ps1` exits 0: with Arrange by
+      itself on, an Excel Syn opens takes the rest of the screen with no
+      click; with it off, it is left alone; a window you move stays moved.
+- [ ] Close Syn and start it from its shortcut: its window comes up in its
+      place (right third) by itself, and the first document it opens in
+      Excel or Word takes the rest.
 
 ## 3. What this round changed and only Windows can show
 

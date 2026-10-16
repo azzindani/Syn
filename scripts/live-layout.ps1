@@ -70,15 +70,23 @@ $synProc = Get-Process syn-window -ErrorAction SilentlyContinue | Where-Object {
 if (-not $synProc) { throw "no Syn window: start Syn from its shortcut first (a console in a browser tab cannot be moved)" }
 $syn = $synProc.MainWindowHandle
 
-# Excel: the running one if there is one, else one of this script's own.
-$ownExcel = -not (Get-Process EXCEL -ErrorAction SilentlyContinue)
+# Excel: the running one if there is one, else one of this script's own. "Running" is only what COM can attach
+# to: an Excel sitting at its start screen is not registered, so a new instance is made beside it, and that one
+# (found by what is new in the process list) is this script's to end, whatever else is running.
+$before = @(Get-Process EXCEL -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
 $xl = $null
 try { $xl = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application') } catch { }
 if (-not $xl) { $xl = New-Object -ComObject Excel.Application }
+$mine = @(Get-Process EXCEL -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id })
+$ownExcel = $mine.Count -gt 0
 $xl.Visible = $true
 $book = $null
 if ($ownExcel -or $xl.Workbooks.Count -eq 0) { $book = $xl.Workbooks.Add() }
 $xlh = [IntPtr]$xl.Hwnd
+
+# What Syn remembers of the layout, which the cases below overwrite: put back at the end.
+$remembered = $null
+try { $remembered = (& curl.exe -s "$Url/layout") -join '' | ConvertFrom-Json } catch { }
 
 # Where everything is now, to put it back.
 $was = @{}
@@ -168,6 +176,11 @@ try {
     Write-Host "      screenshot: $file"
 }
 finally {
+    # Syn's remembered choice first, while Excel is still there to be arranged with it.
+    if ($remembered -and $remembered.side) {
+        $sh = $remembered.share.ToString([Globalization.CultureInfo]::InvariantCulture)
+        $null = Ask ('{{"side":"{0}","share":{1},"auto":{2}}}' -f $remembered.side, $sh, $remembered.auto.ToString().ToLower())
+    }
     # Put it back: sizes, then the states they had.
     foreach ($h in @($syn, $xlh)) {
         $w = $was[[string]$h]
@@ -182,8 +195,12 @@ finally {
         $xl = $null; $book = $null
         [GC]::Collect(); [GC]::WaitForPendingFinalizers()
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        while ((Get-Process EXCEL -ErrorAction SilentlyContinue) -and $clock.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 250 }
-        Verdict 'the Excel this script started is gone' (-not (Get-Process EXCEL -ErrorAction SilentlyContinue)) ''
+        while ((Get-Process -Id $mine.Id -ErrorAction SilentlyContinue) -and $clock.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 250 }
+        # An Excel that was asked to quit, with nothing open, has been seen to stay on; it is this script's own and
+        # empty, so it is ended rather than left behind.
+        $stayed = [bool](Get-Process -Id $mine.Id -ErrorAction SilentlyContinue)
+        if ($stayed) { Stop-Process -Id $mine.Id -Force -ErrorAction SilentlyContinue }
+        Verdict 'the Excel this script started is gone' (-not (Get-Process -Id $mine.Id -ErrorAction SilentlyContinue)) $(if ($stayed) { 'it did not quit by itself in 20 s and was ended' } else { '' })
     }
 }
 

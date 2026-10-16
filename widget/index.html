@@ -955,6 +955,11 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
         <!-- Only while Syn is in a window of its own: a console in a browser tab cannot be moved. -->
         <div id="layout" hidden>
           <h4>Windows</h4>
+          <div class="setrow"><span>Arrange by itself</span>
+            <span class="seg words" id="layAuto" role="group" aria-label="Arrange the windows by itself">
+              <button type="button" data-auto="true">On</button>
+              <button type="button" data-auto="false">Off</button>
+            </span></div>
           <div class="setrow"><span>Syn takes the</span>
             <span class="seg words" id="laySide" role="group" aria-label="Side of the screen Syn takes">
               <button type="button" data-side="left">Left</button>
@@ -968,7 +973,7 @@ body.hidden-side #side{margin-left:calc(var(--sidebar-w) * -1)}
               <button type="button" data-share="0.5">50%</button>
               <button type="button" data-share="0.6667">67%</button>
             </span></div>
-          <span class="hint" id="layHint" aria-live="polite">Click a side or a share to put Syn and Excel, Word or PowerPoint side by side, edge to edge.</span>
+          <span class="hint" id="layHint" aria-live="polite"></span>
           <hr>
         </div>
         <button class="popitem" id="setbtn" type="button"><span data-icon="key"></span>Settings</button>
@@ -3056,37 +3061,52 @@ setTheme(document.documentElement.dataset.pref);
    rest, edge to edge: the way to watch it work. The page only asks; the
    console moves the windows (it alone knows where they are), and only
    while Syn is in a window of its own, so the section stays hidden in a
-   browser tab. What was last chosen is remembered, not re-applied. */
-const LAYOUT_KEY = "syn.layout";
-const layout = { side: "right", share: 0.3333 };
-try {
-  const v = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
-  if (v.side === "left" || v.side === "right") layout.side = v.side;
-  if (v.share >= 0.2 && v.share <= 0.8) layout.share = v.share;
-} catch { /* the defaults */ }
+   browser tab. What is chosen is kept by the console, not the page: the
+   program that opens Excel is another process, and it reads the same file.
+   With "by itself" on, Syn takes its place when it starts and each
+   application takes its own when Syn opens a document in it. */
+const layout = { side: "right", share: 0.3333, auto: true };
+const LAYOUT_HINT = {
+  on: "Syn takes its place when it starts, and Excel, Word and PowerPoint take theirs when Syn opens them. Click a side or a share to change it.",
+  off: "Click a side or a share to put Syn and Excel, Word or PowerPoint side by side, edge to edge.",
+};
 function showLayout() {
   for (const b of $("laySide").children) b.setAttribute("aria-pressed", String(b.dataset.side === layout.side));
   for (const b of $("layShare").children) b.setAttribute("aria-pressed", String(Number(b.dataset.share) === layout.share));
+  for (const b of $("layAuto").children) b.setAttribute("aria-pressed", String((b.dataset.auto === "true") === layout.auto));
 }
 async function offerLayout() {
   try {
     const r = await fetch("/layout");
-    $("layout").hidden = !(r.ok && (await r.json()).can);
+    const s = r.ok ? await r.json() : { can: false };
+    if (s.side === "left" || s.side === "right") layout.side = s.side;
+    if (s.share >= 0.2 && s.share <= 0.8) layout.share = s.share;
+    if (typeof s.auto === "boolean") layout.auto = s.auto;
+    showLayout();
+    $("layHint").textContent = layout.auto ? LAYOUT_HINT.on : LAYOUT_HINT.off;
+    $("layout").hidden = !s.can;
   } catch { $("layout").hidden = true; }
 }
 async function arrange(change) {
-  Object.assign(layout, change);
-  showLayout();
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* a private window */ }
+  // A side or a share is a layout and goes with the other; automatic is a
+  // setting of its own. What the console answers is shown as it is.
+  const body = "auto" in change ? { auto: change.auto } : { side: layout.side, share: layout.share, ...change };
   const hint = $("layHint");
   hint.textContent = "Arranging…";
   try {
-    const r = await fetch("/layout", { method: "POST", body: JSON.stringify(layout) });
-    hint.textContent = r.ok ? (await r.json()).text : await r.text();
+    const r = await fetch("/layout", { method: "POST", body: JSON.stringify(body) });
+    if (r.ok) {
+      Object.assign(layout, change);
+      hint.textContent = (await r.json()).text;
+    } else {
+      hint.textContent = await r.text();
+    }
   } catch (e) { hint.textContent = "Syn could not be reached: " + e.message; }
+  showLayout();
 }
 for (const b of $("laySide").children) b.onclick = () => arrange({ side: b.dataset.side });
 for (const b of $("layShare").children) b.onclick = () => arrange({ share: Number(b.dataset.share) });
+for (const b of $("layAuto").children) b.onclick = () => arrange({ auto: b.dataset.auto === "true" });
 showLayout();
 $("contrast").addEventListener("input", e => setContrast(e.target.value));
 

@@ -408,6 +408,12 @@ impl Doors {
             self.register(relay, runner, &handle, app)?;
             look = self.first_look(relay, runner, &handle, app);
         }
+        // The application is up and holds the document: its window is given
+        // its place beside Syn's, if the person has not turned that off.
+        // Whether or not the first look worked, the window is there.
+        if look.is_ok() || full.is_some() {
+            crate::layout::follow(app);
+        }
         match look {
             Ok((summary, sheets)) => {
                 let doc = Doc { handle, app: app.into(), summary: join_notes(notes, &summary), sheets };

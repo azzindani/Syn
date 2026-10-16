@@ -54,32 +54,172 @@ pub struct Request {
 pub const MIN_SHARE: f64 = 0.2;
 pub const MAX_SHARE: f64 = 0.8;
 
-const USAGE: &str =
-    "POST /layout takes {\"side\":\"left\"|\"right\",\"share\":0.2 to 0.8}: the side Syn takes and the share of the screen's width it gets";
+const USAGE: &str = "POST /layout takes {\"side\":\"left\"|\"right\",\"share\":0.2 to 0.8} to arrange now (the side Syn takes and the share of the screen's width it gets), and/or {\"auto\":true|false} to have Syn and the apps it opens take their places by themselves";
+
+/// What a request asks: to arrange now, to change whether Syn arranges by
+/// itself, or both.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ask {
+    pub place: Option<Request>,
+    pub auto: Option<bool>,
+}
 
 /// Read a request body. Closed like every other schema here: an unknown key
 /// is refused, never ignored, and so is a share outside what makes a layout.
-pub fn parse(body: &str) -> Result<Request, String> {
+/// A side with no share (or the other way round) is half a layout: refused.
+pub fn parse(body: &str) -> Result<Ask, String> {
     let v = json::parse(body).map_err(|e| format!("{USAGE} (that was not JSON: {e})"))?;
     let Some(pairs) = v.as_obj() else {
         return Err(USAGE.into());
     };
-    if let Some((k, _)) = pairs.iter().find(|(k, _)| k != "side" && k != "share") {
+    if let Some((k, _)) = pairs.iter().find(|(k, _)| !["side", "share", "auto"].contains(&k.as_str())) {
         return Err(format!("{USAGE} (there is no key \"{k}\")"));
     }
-    let side = match v.get("side").and_then(Value::as_str) {
-        Some("left") => Side::Left,
-        Some("right") => Side::Right,
-        _ => return Err(format!("{USAGE} (side must be \"left\" or \"right\")")),
+    let auto = match v.get("auto") {
+        None => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(format!("{USAGE} (auto must be true or false)")),
     };
-    let share = match v.get("share") {
-        Some(Value::Num(n)) => n.parse::<f64>().ok(),
-        _ => None,
+    let place = match (v.get("side"), v.get("share")) {
+        (None, None) => None,
+        (Some(side), Some(share)) => {
+            let side = match side.as_str() {
+                Some("left") => Side::Left,
+                Some("right") => Side::Right,
+                _ => return Err(format!("{USAGE} (side must be \"left\" or \"right\")")),
+            };
+            let share = match share {
+                Value::Num(n) => n.parse::<f64>().ok(),
+                _ => None,
+            };
+            match share {
+                Some(s) if (MIN_SHARE..=MAX_SHARE).contains(&s) => Some(Request { side, share: s }),
+                _ => return Err(format!("{USAGE} (share must be a number from {MIN_SHARE} to {MAX_SHARE})")),
+            }
+        }
+        _ => return Err(format!("{USAGE} (a layout needs both side and share)")),
     };
-    match share {
-        Some(s) if (MIN_SHARE..=MAX_SHARE).contains(&s) => Ok(Request { side, share: s }),
-        _ => Err(format!("{USAGE} (share must be a number from {MIN_SHARE} to {MAX_SHARE})")),
+    if place.is_none() && auto.is_none() {
+        return Err(USAGE.into());
     }
+    Ok(Ask { place, auto })
+}
+
+/// What Syn remembers between runs, and what the apps it opens are held to.
+/// Automatic is the default: the point of Syn is watching it work, and by hand
+/// that is a window dragged next to a window, again, after every start.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Prefs {
+    pub auto: bool,
+    pub side: Side,
+    pub share: f64,
+}
+
+/// A third of the screen, which is what most people mean by "beside it".
+pub const DEFAULT_SHARE: f64 = 0.3333;
+
+impl Default for Prefs {
+    fn default() -> Prefs {
+        Prefs { auto: true, side: Side::Right, share: DEFAULT_SHARE }
+    }
+}
+
+impl Prefs {
+    pub fn request(&self) -> Request {
+        Request { side: self.side, share: self.share }
+    }
+
+    pub fn to_json(&self) -> String {
+        let side = if self.side == Side::Left { "left" } else { "right" };
+        format!("{{\"auto\":{},\"side\":\"{side}\",\"share\":{}}}", self.auto, self.share)
+    }
+}
+
+/// Read saved preferences. A missing file, or a field that is not what it
+/// should be, is the default for that field: a preference file is never a
+/// reason for Syn not to start, or for a window to land off the screen.
+pub fn parse_prefs(text: &str) -> Prefs {
+    let mut p = Prefs::default();
+    let Ok(v) = json::parse(text) else { return p };
+    if let Some(Value::Bool(b)) = v.get("auto") {
+        p.auto = *b;
+    }
+    match v.get("side").and_then(Value::as_str) {
+        Some("left") => p.side = Side::Left,
+        Some("right") => p.side = Side::Right,
+        _ => {}
+    }
+    if let Some(Value::Num(n)) = v.get("share")
+        && let Ok(s) = n.parse::<f64>()
+        && (MIN_SHARE..=MAX_SHARE).contains(&s)
+    {
+        p.share = s;
+    }
+    p
+}
+
+/// Beside the chats and keys, in Syn's own data folder, so every process of
+/// Syn (the console that is asked, the CLI that opens an application) reads
+/// the same answer.
+fn prefs_path() -> std::path::PathBuf {
+    crate::chats::home().join("layout.json")
+}
+
+pub fn load() -> Prefs {
+    std::fs::read_to_string(prefs_path()).map(|t| parse_prefs(&t)).unwrap_or_default()
+}
+
+fn save_to(path: &std::path::Path, p: &Prefs) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, p.to_json())
+}
+
+/// What the console answers to `GET /layout`: whether windows can be
+/// arranged now, and what is remembered, which is what the menu shows.
+pub fn status_json(can: bool, p: &Prefs) -> String {
+    let side = if p.side == Side::Left { "left" } else { "right" };
+    format!("{{\"can\":{can},\"auto\":{},\"side\":\"{side}\",\"share\":{}}}", p.auto, p.share)
+}
+
+/// Answer a request: arrange if it asks to (or turns automatic on, which is
+/// asking to), and remember what it changes. A layout that could not be done
+/// is not remembered as if it had been: the menu and the file must agree.
+/// `arrange` is where the windows really move, passed in so the rest can be
+/// tested without a screen.
+fn handle_with(
+    body: &str,
+    store: &std::path::Path,
+    mut prefs: Prefs,
+    arrange: impl FnOnce(Request, bool) -> Result<String, String>,
+) -> Result<String, String> {
+    let ask = parse(body)?;
+    let mut now = false;
+    if let Some(r) = ask.place {
+        prefs.side = r.side;
+        prefs.share = r.share;
+        now = true;
+    }
+    if let Some(a) = ask.auto {
+        prefs.auto = a;
+        now |= a;
+    }
+    // A side and a share asked for by hand may put any window beside Syn when
+    // no Office application is open. Turning automatic on may not: it is
+    // not a request to move the person's browser.
+    let said = if now { Some(arrange(prefs.request(), ask.place.is_some())?) } else { None };
+    save_to(store, &prefs).map_err(|e| format!("could not save the layout choice to {}: {e}", store.display()))?;
+    Ok(match said {
+        None => "Syn will leave the windows where you put them.".into(),
+        Some(said) if prefs.auto => format!("{said} Syn and the apps it opens will keep to this."),
+        Some(said) => said,
+    })
+}
+
+/// `POST /layout`.
+pub fn handle(body: &str) -> Result<String, String> {
+    handle_with(body, &prefs_path(), load(), apply)
 }
 
 /// Syn's rectangle and the application's, for a Syn `syn_w` pixels wide on
@@ -171,19 +311,23 @@ fn percent(share: f64) -> String {
     format!("{}%", (share * 100.0).round() as i32)
 }
 
-/// What the console tells the person after a layout.
+/// "right with 33% of the screen".
 #[cfg(any(windows, test))]
-fn describe(req: Request, beside: Option<&str>, crowded_by: i32) -> String {
+fn slot_words(req: Request) -> String {
     let side = match req.side {
         Side::Left => "left",
         Side::Right => "right",
     };
+    format!("{side} with {} of the screen", percent(req.share))
+}
+
+/// What the console tells the person after a layout.
+#[cfg(any(windows, test))]
+fn describe(req: Request, beside: Option<&str>, crowded_by: i32) -> String {
+    let slot = slot_words(req);
     let mut out = match beside {
-        Some(who) => format!("Syn is on the {side} with {} of the screen, and {who} has the rest.", percent(req.share)),
-        None => format!(
-            "Syn is on the {side} with {} of the screen. Nothing else was open to put beside it: open Excel, Word or PowerPoint and ask again.",
-            percent(req.share)
-        ),
+        Some(who) => format!("Syn is on the {slot}, and {who} has the rest."),
+        None => format!("Syn is on the {slot}. Nothing else was open to put beside it."),
     };
     if crowded_by > 0 {
         let who = beside.unwrap_or("The other window");
@@ -207,16 +351,57 @@ pub fn available() -> bool {
 }
 
 /// Place Syn's window and the application beside it. The text says what was
-/// done, or why nothing was.
-pub fn apply(req: Request) -> Result<String, String> {
+/// done, or why nothing was. With `anything`, when no Excel, Word or
+/// PowerPoint is open the window the person was in before Syn goes beside it
+/// instead; without, only Office does, and Syn alone takes its place.
+pub fn apply(req: Request, anything: bool) -> Result<String, String> {
     #[cfg(windows)]
     {
-        win::apply(req)
+        win::apply_with(req, if anything { win::Partner::Pick } else { win::Partner::Office })
     }
     #[cfg(not(windows))]
     {
-        let _ = req;
+        let _ = (req, anything);
         Err("Arranging windows is only done on Windows.".into())
+    }
+}
+
+/// The application Syn has just opened a document in is given its place
+/// beside Syn, by itself, if the person has not turned that off. Returns at
+/// once: the window is not always up when `open` returns (Excel has been seen
+/// to show a start screen first), so a thread waits for it, a few seconds at
+/// most. Each window is placed once, the first time Syn meets it; after that
+/// it is the person's to move, and a second `open` does not pull it back.
+pub fn follow(app: &str) {
+    #[cfg(windows)]
+    {
+        win::follow(app);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
+/// Syn's own window takes its place when Syn starts, if automatic layout is
+/// on. The window program restores wherever it was last closed, a moment
+/// after it appears; this waits for it and then puts it in the chosen slot.
+pub fn settle_self() {
+    #[cfg(windows)]
+    {
+        win::settle_self();
+    }
+}
+
+/// The class of an application's main window, for the apps Syn opens
+/// documents in (`desk` calls them excel, word and ppt).
+#[cfg(any(windows, test))]
+fn office_class(app: &str) -> Option<&'static str> {
+    match app {
+        "excel" => Some("XLMAIN"),
+        "word" => Some("OpusApp"),
+        "ppt" | "powerpoint" => Some("PPTFrameClass"),
+        _ => None,
     }
 }
 
@@ -352,7 +537,17 @@ mod win {
             if IsZoomed(h) != 0 || IsIconic(h) != 0 {
                 ShowWindow(h, SW_RESTORE);
             }
-            let at = ask_for(want, insets(window_rect(h), drawn_rect(h)));
+            // Already there: leave it be, so asking again (a second `open`, a
+            // second click) does not make the window flicker.
+            let now = drawn_rect(h);
+            if (now.left - want.left).abs() <= 1
+                && (now.right - want.right).abs() <= 1
+                && (now.top - want.top).abs() <= 1
+                && (now.bottom - want.bottom).abs() <= 1
+            {
+                return now;
+            }
+            let at = ask_for(want, insets(window_rect(h), now));
             SetWindowPos(h, HWND_TOP, at.left, at.top, at.width(), at.height(), SWP_NOACTIVATE);
         }
         drawn_rect(h)
@@ -372,42 +567,84 @@ mod win {
         1
     }
 
+    /// One top-level window, as far as choosing a partner goes.
+    struct Candidate {
+        h: isize,
+        pick: Pick,
+        class: String,
+        title: String,
+    }
+
+    /// Every visible top-level window, topmost first, with what to make of it.
+    fn candidates(ours: &[isize]) -> Vec<Candidate> {
+        let mut seen = Seen { top: Vec::new() };
+        // SAFETY: `seen` outlives the call.
+        unsafe { EnumWindows(collect, &mut seen as *mut Seen as isize) };
+        seen.top
+            .into_iter()
+            .map(|h| {
+                let (class, title) = (shared::class(h), shared::title(h));
+                // SAFETY: plain calls on a window handle.
+                let (minimized, owned, ex) =
+                    unsafe { (IsIconic(h) != 0, GetWindow(h, GW_OWNER) != 0, GetWindowLongW(h, GWL_EXSTYLE)) };
+                let pick = classify(&Facts {
+                    class: &class,
+                    title: &title,
+                    visible: true,
+                    minimized,
+                    cloaked: cloaked(h),
+                    owned,
+                    tool: ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) != 0,
+                    ours: ours.contains(&h),
+                });
+                Candidate { h, pick, class, title }
+            })
+            .collect()
+    }
+
     /// The window to put beside Syn: the topmost Office window, else the
     /// topmost ordinary one. Office first because Syn works on those, so
     /// "beside Syn" means beside what it is doing; the window just behind
     /// Syn otherwise, which is where the person was before they came to it.
-    fn partner(ours: &[isize]) -> Option<(isize, String)> {
-        let mut seen = Seen { top: Vec::new() };
-        // SAFETY: `seen` outlives the call.
-        unsafe { EnumWindows(collect, &mut seen as *mut Seen as isize) };
-        let mut ordinary = None;
-        for h in seen.top {
-            let (class, title) = (shared::class(h), shared::title(h));
-            // SAFETY: plain calls on a window handle.
-            let (minimized, owned, ex) = unsafe { (IsIconic(h) != 0, GetWindow(h, GW_OWNER) != 0, GetWindowLongW(h, GWL_EXSTYLE)) };
-            let facts = Facts {
-                class: &class,
-                title: &title,
-                visible: true,
-                minimized,
-                cloaked: cloaked(h),
-                owned,
-                tool: ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) != 0,
-                ours: ours.contains(&h),
-            };
-            match classify(&facts) {
-                Pick::Office(app) => return Some((h, app.to_string())),
-                Pick::Ordinary if ordinary.is_none() => {
-                    let shown: String = title.chars().take(40).collect();
-                    ordinary = Some((h, format!("\u{201c}{shown}\u{201d}")));
-                }
-                _ => {}
+    fn partner(ours: &[isize], anything: bool) -> Option<(isize, String)> {
+        let all = candidates(ours);
+        for c in &all {
+            if let Pick::Office(app) = c.pick {
+                return Some((c.h, app.to_string()));
             }
         }
-        ordinary
+        if !anything {
+            return None;
+        }
+        all.iter().find(|c| c.pick == Pick::Ordinary).map(|c| {
+            let shown: String = c.title.chars().take(40).collect();
+            (c.h, format!("\u{201c}{shown}\u{201d}"))
+        })
     }
 
-    pub fn apply(req: Request) -> Result<String, String> {
+    /// The topmost window of `class` that a person could be looking at.
+    fn window_of(class: &str, ours: &[isize]) -> Option<(isize, String)> {
+        candidates(ours).into_iter().find_map(|c| match c.pick {
+            Pick::Office(app) if c.class == class => Some((c.h, app.to_string())),
+            _ => None,
+        })
+    }
+
+    /// Which application's window goes beside Syn.
+    pub enum Partner {
+        /// The topmost Office window, else the topmost ordinary one: what a
+        /// side or a share clicked in the menu means.
+        Pick,
+        /// The topmost Office window, else none: what turning automatic on
+        /// means, which is no request to move anything but Syn and Office.
+        Office,
+        /// This one, which Syn has just opened a document in.
+        Window(isize, String),
+        /// None: only Syn takes its place.
+        Alone,
+    }
+
+    pub fn apply_with(req: Request, with: Partner) -> Result<String, String> {
         let _px = Pixels::real();
         let ours = shared::syn_windows();
         let Some(&syn) = ours.first() else {
@@ -431,7 +668,12 @@ mod win {
             got = place(syn, split_at(work, req.side, got.width()).0);
         }
         let (_, rest) = split_at(work, req.side, got.width());
-        let beside = partner(&ours);
+        let beside = match with {
+            Partner::Pick => partner(&ours, true),
+            Partner::Office => partner(&ours, false),
+            Partner::Window(h, name) => Some((h, name)),
+            Partner::Alone => None,
+        };
         let mut crowded = 0;
         if let Some((h, _)) = &beside {
             let landed = place(*h, rest);
@@ -444,6 +686,76 @@ mod win {
         shared::raise(syn);
         Ok(describe(req, beside.as_ref().map(|(_, who)| who.as_str()), crowded))
     }
+
+    /// Windows already given their place this run; a person who moves one
+    /// afterwards is not argued with.
+    static PLACED: std::sync::Mutex<Vec<isize>> = std::sync::Mutex::new(Vec::new());
+
+    fn first_time(h: isize) -> bool {
+        let Ok(mut placed) = PLACED.lock() else { return false };
+        if placed.contains(&h) {
+            return false;
+        }
+        placed.push(h);
+        true
+    }
+
+    pub fn follow(app: &str) {
+        use std::time::{Duration, Instant};
+        let Some(class) = office_class(app) else { return };
+        // Never from this crate's own tests: they open documents through
+        // fake hands, and on a developer's machine with Syn and Excel on the
+        // screen would move the real windows.
+        if cfg!(test) || !load().auto {
+            return;
+        }
+        std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(12);
+            while Instant::now() < until {
+                // Read again each time: it may have been turned off since.
+                let prefs = load();
+                if !prefs.auto {
+                    return;
+                }
+                if available() {
+                    let _px = Pixels::real();
+                    if let Some((h, name)) = window_of(class, &shared::syn_windows()) {
+                        if first_time(h) {
+                            let _ = apply_with(prefs.request(), Partner::Window(h, name));
+                        }
+                        return;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        });
+    }
+
+    pub fn settle_self() {
+        use std::time::{Duration, Instant};
+        if cfg!(test) {
+            return;
+        }
+        std::thread::spawn(|| {
+            let until = Instant::now() + Duration::from_secs(25);
+            while Instant::now() < until {
+                if !load().auto {
+                    return;
+                }
+                if available() {
+                    // The window program puts itself where it was last closed
+                    // as it starts; wait that out, then take the slot.
+                    std::thread::sleep(Duration::from_millis(700));
+                    let prefs = load();
+                    if prefs.auto {
+                        let _ = apply_with(prefs.request(), Partner::Alone);
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -452,8 +764,12 @@ mod tests {
 
     const WORK: Rect = Rect { left: 0, top: 0, right: 1920, bottom: 1032 };
 
-    fn req(body: &str) -> Result<Request, String> {
+    fn req(body: &str) -> Result<Ask, String> {
         parse(body)
+    }
+
+    fn placed(side: Side, share: f64) -> Option<Request> {
+        Some(Request { side, share })
     }
 
     #[test]
@@ -543,9 +859,14 @@ mod tests {
     }
 
     #[test]
-    fn a_request_names_a_side_and_a_share_and_nothing_else() {
-        assert_eq!(req(r#"{"side":"right","share":0.33}"#).unwrap(), Request { side: Side::Right, share: 0.33 });
-        assert_eq!(req(r#"{"share":0.5,"side":"left"}"#).unwrap().side, Side::Left);
+    fn a_request_names_a_side_and_a_share_or_whether_to_arrange_by_itself() {
+        assert_eq!(req(r#"{"side":"right","share":0.33}"#).unwrap(), Ask { place: placed(Side::Right, 0.33), auto: None });
+        assert_eq!(req(r#"{"share":0.5,"side":"left"}"#).unwrap().place, placed(Side::Left, 0.5));
+        assert_eq!(req(r#"{"auto":false}"#).unwrap(), Ask { place: None, auto: Some(false) });
+        assert_eq!(
+            req(r#"{"side":"left","share":0.4,"auto":true}"#).unwrap(),
+            Ask { place: placed(Side::Left, 0.4), auto: Some(true) }
+        );
         // The ends are layouts; either side of them is a slip.
         assert!(req(r#"{"side":"left","share":0.2}"#).is_ok());
         assert!(req(r#"{"side":"left","share":0.8}"#).is_ok());
@@ -557,6 +878,8 @@ mod tests {
             r#"{"share":0.5}"#,
             r#"{"side":"top","share":0.5}"#,
             r#"{"side":"left","share":0.5,"monitor":2}"#,
+            r#"{"auto":"yes"}"#,
+            r#"{}"#,
             r#"[1]"#,
             "not json",
             "",
@@ -564,7 +887,110 @@ mod tests {
             let e = req(bad).unwrap_err();
             // Each refusal says what a good call looks like.
             assert!(e.contains(r#"{"side":"left"|"right","share":0.2 to 0.8}"#), "{bad}: {e}");
+            assert!(e.contains(r#"{"auto":true|false}"#), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn syn_arranges_by_itself_unless_told_not_to_and_a_bad_file_is_never_a_reason_to_stop() {
+        let d = Prefs::default();
+        assert_eq!((d.auto, d.side, d.share), (true, Side::Right, DEFAULT_SHARE));
+        // A third of a 1920 screen is 640 exactly, not 634.
+        assert_eq!(split(WORK, d.side, d.share).0.width(), 640);
+        let saved = Prefs { auto: false, side: Side::Left, share: 0.5 };
+        assert_eq!(parse_prefs(&saved.to_json()), saved, "what is written is what is read");
+        // Fields that are missing or wrong are the default for that field only.
+        assert_eq!(parse_prefs(r#"{"auto":false}"#), Prefs { auto: false, ..d });
+        assert_eq!(parse_prefs(r#"{"side":"left","share":9}"#), Prefs { side: Side::Left, ..d });
+        assert_eq!(parse_prefs(r#"{"side":"up","auto":"maybe"}"#), d);
+        for junk in ["", "not json", "[1,2]", "null"] {
+            assert_eq!(parse_prefs(junk), d, "{junk:?}");
+        }
+    }
+
+    /// A folder of its own for a test that writes the choice.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("syn-layout-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn a_click_arranges_and_is_remembered_and_the_toggle_alone_only_changes_the_choice() {
+        let dir = scratch("handle");
+        let file = dir.join("layout.json");
+        let moved = std::cell::RefCell::new(Vec::new());
+        let arrange = |r: Request, anything: bool| {
+            moved.borrow_mut().push((r, anything));
+            Ok::<_, String>("Syn is on the left with 50% of the screen, and Excel has the rest.".to_string())
+        };
+
+        // Turning it off is a setting, not a move.
+        let said = handle_with(r#"{"auto":false}"#, &file, Prefs::default(), arrange).unwrap();
+        assert!(said.contains("leave the windows"), "{said}");
+        assert!(moved.borrow().is_empty());
+        assert!(!parse_prefs(&std::fs::read_to_string(&file).unwrap()).auto);
+
+        // A side and a share arrange now, and are kept, with automatic as it was.
+        let off = parse_prefs(&std::fs::read_to_string(&file).unwrap());
+        let said = handle_with(r#"{"side":"left","share":0.5}"#, &file, off, arrange).unwrap();
+        assert!(said.starts_with("Syn is on the left with 50%"), "{said}");
+        assert!(!said.contains("keep to this"), "automatic is off, so nothing is promised: {said}");
+        assert_eq!(moved.borrow().as_slice(), [(Request { side: Side::Left, share: 0.5 }, true)], "by hand, any window will do");
+        assert_eq!(parse_prefs(&std::fs::read_to_string(&file).unwrap()), Prefs { auto: false, side: Side::Left, share: 0.5 });
+
+        // Turning it on is asking for it: it arranges at the remembered place.
+        let kept = parse_prefs(&std::fs::read_to_string(&file).unwrap());
+        let said = handle_with(r#"{"auto":true}"#, &file, kept, arrange).unwrap();
+        assert!(said.ends_with("Syn and the apps it opens will keep to this."), "{said}");
+        assert_eq!(
+            moved.borrow().last(),
+            Some(&(Request { side: Side::Left, share: 0.5 }, false)),
+            "turning it on moves Syn and Office, not the person's browser"
+        );
+        assert!(parse_prefs(&std::fs::read_to_string(&file).unwrap()).auto);
+
+        // A refused request changes nothing.
+        let before = std::fs::read_to_string(&file).unwrap();
+        assert!(handle_with(r#"{"share":0.9,"side":"left"}"#, &file, Prefs::default(), arrange).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_layout_that_could_not_be_done_is_not_remembered_as_if_it_had_been() {
+        // The menu shows the button that was pressed only when the console
+        // did it, and the file the next start reads must say the same.
+        let dir = scratch("nowindow");
+        let file = dir.join("layout.json");
+        let e = handle_with(r#"{"side":"left","share":0.4}"#, &file, Prefs::default(), |_, _| Err("no window".to_string())).unwrap_err();
+        assert_eq!(e, "no window");
+        assert!(!file.exists(), "nothing was saved");
+        let e = handle_with(r#"{"auto":true}"#, &file, Prefs { auto: false, ..Prefs::default() }, |_, _| Err("no window".to_string())).unwrap_err();
+        assert_eq!(e, "no window");
+        assert!(!file.exists());
+        // Turning it off needs no window, and is kept.
+        handle_with(r#"{"auto":false}"#, &file, Prefs::default(), |_, _| Err("not called".to_string())).unwrap();
+        assert!(!parse_prefs(&std::fs::read_to_string(&file).unwrap()).auto);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_menu_is_told_what_can_be_done_and_what_is_remembered() {
+        let p = Prefs { auto: true, side: Side::Left, share: 0.5 };
+        assert_eq!(status_json(true, &p), r#"{"can":true,"auto":true,"side":"left","share":0.5}"#);
+        assert_eq!(status_json(false, &Prefs::default()), r#"{"can":false,"auto":true,"side":"right","share":0.3333}"#);
+    }
+
+    #[test]
+    fn the_office_apps_syn_opens_documents_in_are_found_by_their_main_window() {
+        assert_eq!(office_class("excel"), Some("XLMAIN"));
+        assert_eq!(office_class("word"), Some("OpusApp"));
+        assert_eq!(office_class("ppt"), Some("PPTFrameClass"));
+        // A page or a window of someone else's is not an application Syn
+        // gives a place to by itself.
+        assert_eq!(office_class("web"), None);
+        assert_eq!(office_class("ui"), None);
     }
 
     #[test]
@@ -581,6 +1007,8 @@ mod tests {
     #[test]
     fn off_windows_there_is_nothing_to_arrange_and_the_page_is_not_offered_it() {
         assert!(!available());
-        assert!(apply(Request { side: Side::Right, share: 0.33 }).unwrap_err().contains("only done on Windows"));
+        assert!(apply(Request { side: Side::Right, share: 0.33 }, true).unwrap_err().contains("only done on Windows"));
+        // Following an application off Windows is nothing at all, not an error.
+        follow("excel");
     }
 }

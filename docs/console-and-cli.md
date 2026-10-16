@@ -85,33 +85,52 @@ web page you happen to visit can send it commands.
 
 ### Windows side by side
 
-The status menu has a **Windows** section for watching Syn work: Syn on
-one side of the screen, Excel, Word or PowerPoint on the rest, edge to edge.
-Choose the side Syn takes (Left or Right) and its share of the screen's width
-(25%, 33%, 40%, 50% or 67%); a click moves the windows at once, and the menu
-says what was done. The last choice is remembered, but never re-applied
-without a click.
+Watching Syn work means Syn down one side of the screen and Excel, Word or
+PowerPoint on the rest, edge to edge. Syn does that by itself:
+
+- **When Syn starts**, its window goes to its place: the right third of the
+  screen, unless you chose otherwise.
+- **When Syn opens a document**, the application's window goes to the rest
+  of the screen, touching Syn's: no gap, no overlap, both filling the
+  screen top to bottom. A maximized window is restored first and one in the
+  taskbar is brought up. Each window is placed once, the first time Syn
+  meets it: move it afterwards and it stays where you put it.
+
+The status menu has a **Windows** section to change that:
+
+- **Arrange by itself**, On or Off. Off leaves every window where it opens.
+  Turning it On puts Syn in its place at once (and any Excel, Word or
+  PowerPoint already open beside it).
+- **Syn takes the** Left or Right, and its **share** of the screen's width
+  (25%, 33%, 40%, 50% or 67%). A click arranges at once, and the menu says
+  what was done. With no Office application open, a side or a share put
+  the window you were in before you came to Syn beside it; turning
+  Arrange by itself on never moves anything but Syn and Office.
+
+Details:
 
 - It measures the working area of the screen Syn is on (the screen less the
-  taskbar), puts Syn's window at the share asked for, and gives the Office
-  window all that is left, touching it: no gap, no overlap. Both fill the
-  working area top to bottom. The invisible resize border every Windows
-  window has is taken out, so the drawn edges are what meet.
-- The window beside Syn is the topmost Excel, Word or PowerPoint window;
-  when none is open, the topmost ordinary window (the one you were in before
-  you came to Syn). A maximized window is restored first, and an Office
-  window in the taskbar is brought up. Nothing else moves, and nothing is
-  closed.
+  taskbar). The invisible resize border every Windows window has is taken
+  out, so the drawn edges are what meet.
 - Syn's window has a smallest width. If the share asked for is narrower
   (a quarter of a small screen), Syn stays at its smallest and the other
   window gets what is left, as the menu says; an application that will not
   go as narrow as it is given reaches under Syn, and the menu says by how
   much.
+- Only Excel, Word and PowerPoint are placed by themselves. A browser Syn
+  opens, or a window it drives by title, is not: put one beside Syn with a
+  side or a share from the menu.
+- The choice is kept in `layout.json` in Syn's data folder (`AGENT_HOME`,
+  beside the chats and keys), not in the page, because the program that opens
+  Excel is another process and reads the same file.
 - It needs Syn in a window of its own (the shortcut). In a browser tab
   there is nothing to move, so the section is not shown; the same on a
-  machine that is not Windows. The page asks the console to do it
-  (`POST /layout`, with `{"side":"left"|"right","share":0.2 to 0.8}`, and
-  the same `Origin` rule as every other command).
+  machine that is not Windows, and when Syn is run only as an MCP server
+  (nothing to put the application beside). The page asks the console
+  (`GET /layout` for what is remembered, `POST /layout` with
+  `{"side":"left"|"right","share":0.2 to 0.8}` to arrange now and/or
+  `{"auto":true|false}`, behind the same `Origin` rule as every other
+  command).
 
 ### Appearance
 

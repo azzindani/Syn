@@ -110,7 +110,7 @@ and programs are added for a session with the CLI's `shellallow` command.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AGENT_HOME` | `.agent` beside the `.env` in use | Where Syn keeps its own state: `chats/` (conversations, one JSON Lines file each), `live/` (progress logs the console follows) and `models.json` (the cached model list). Gitignored. |
+| `AGENT_HOME` | `.agent` beside the `.env` in use | Where Syn keeps its own state: `chats/` (conversations, one JSON Lines file each), `live/` (progress logs the console follows) `models.json` (the cached model list) and `layout.json` (where Syn and the apps it opens go on the screen; see [the console](console-and-cli.md#windows-side-by-side)). Gitignored. |
 
 Keys saved in Settings live in `auth.json` in the same folder (or come from
 `AGENT_AUTH_CONTENT`); see [API keys](#api-keys).

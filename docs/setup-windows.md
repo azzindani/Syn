@@ -114,6 +114,7 @@ powershell -File scripts\live-excel-smoke.ps1   # attach to Excel, read, write, 
 powershell -File scripts\live-office-peak.ps1   # every Excel, Word and PowerPoint verb through mcpgate
 powershell -File scripts\live-helper-exit.ps1   # what Excel does when Syn ends (close Excel first)
 powershell -File scripts\live-layout.ps1        # Syn beside Excel at several ratios (Syn running in its window)
+powershell -File scripts\live-layout-auto.ps1   # Syn and Excel take their places by themselves (Syn running; Excel closed)
 ```
 
 `live-office-peak.ps1` prints one PASS or FAIL line per step and exits with

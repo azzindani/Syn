@@ -358,7 +358,12 @@ fn open_app_window(url: &str) -> bool {
     // Beside the program, with the chats and keys: `.agent` is what the
     // launcher's working directory holds.
     let profile = std::env::current_dir().unwrap_or_default().join(".agent").join("app-profile");
-    core::appwin::open(url, &profile, true)
+    let shown = core::appwin::open(url, &profile, true);
+    if shown {
+        // Its place on the screen, by itself, unless the person turned that off.
+        core::layout::settle_self();
+    }
+    shown
 }
 
 fn respond(s: &mut TcpStream, status: &str, ctype: &str, body: &str) -> std::io::Result<()> {
@@ -841,7 +846,7 @@ fn main() {
             // Asked of the machine each time the menu opens, because it is
             // true only while Syn's own window is on screen.
             ("GET", "/layout") => {
-                let body = format!("{{\"can\":{}}}", core::layout::available());
+                let body = core::layout::status_json(core::layout::available(), &core::layout::load());
                 let _ = respond(&mut s, "200 OK", "application/json", &body);
             }
             // Move this machine's windows: Origin required, like `/stop`,
@@ -851,7 +856,7 @@ fn main() {
                     let _ = respond(&mut s, "403 Forbidden", "text/plain", "POST /layout needs an Origin header");
                     return;
                 }
-                match core::layout::parse(&req.body).and_then(core::layout::apply) {
+                match core::layout::handle(&req.body) {
                     Ok(text) => {
                         let body = format!("{{\"text\":\"{}\"}}", json_escape(&text));
                         let _ = respond(&mut s, "200 OK", "application/json", &body);

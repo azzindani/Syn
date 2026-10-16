@@ -21,8 +21,12 @@
 //!
 //! Never used for `shell`: a program the human approved, an application
 //! among them, is theirs and must outlive Syn. And none of this reaches an
-//! Office application, which COM starts outside this process tree; killing
-//! a helper releases its hold and leaves the documents where they are.
+//! Office application, which COM starts outside this process tree; the
+//! documents stay where they are. Killing the Office helper is not the
+//! gentle release it looks like, though: it never lets go of its references,
+//! and Excel then cannot exit (still running after 25 minutes). So on
+//! Windows that one helper is not put in the job; it watches its launcher
+//! itself (`--parent`) and drains before it goes (desk.rs `start`).
 
 use std::process::{Child, Command};
 

@@ -905,6 +905,16 @@ impl EnvConnector {
         if app != "ui" {
             cmd.arg("--app").arg(if app == "ppt" { "powerpoint" } else { app });
         }
+        // The Office helper on Windows is told who started it, and ends itself
+        // gently when that program goes. It is kept out of the job object
+        // below for that reason: the job ends it at the instant its launcher
+        // dies, and an Office helper ended that way leaves Excel unable to
+        // exit (more than 25 minutes, measured). It still cannot outlive its
+        // launcher: it drains and then leaves, in ten seconds at the most.
+        let watches_parent = cfg!(windows) && app != "ui";
+        if watches_parent {
+            cmd.arg("--parent").arg(std::process::id().to_string());
+        }
         // No inherited stdio. A helper that holds this server's stdout keeps
         // the MCP client's pipe open after the server exits, and the client
         // waits on it forever -- the same trap scripts/console.ps1 documents
@@ -915,7 +925,9 @@ impl EnvConnector {
         // clean exit, and Stop, Stop-Process and Ctrl+C are not clean.
         crate::tether::bind(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("could not start {}: {e}", argv[0].to_string_lossy()))?;
-        crate::tether::adopt(&child);
+        if !watches_parent {
+            crate::tether::adopt(&child);
+        }
         self.started.push(child);
         Ok(())
     }

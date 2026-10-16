@@ -6,13 +6,16 @@
   on counting it as a client: a plain Quit() left an invisible EXCEL.EXE
   running for more than twelve minutes, which a double-clicked workbook
   could open into without a window. Now the helper is asked to stop first
-  (desk.rs ask_to_stop), lets go of Office, and exits.
+  (desk.rs ask_to_stop), lets go of Office, and exits; and if Syn is ended
+  outright it notices (--parent) and does the same.
 
-  Two cases, each through the real mcpgate.exe:
+  Three cases, each through the real mcpgate.exe:
     1. Syn starts Excel, opens a workbook, closes it, ends. Excel was
        Syn's own and has nothing open, so it must go by itself.
     2. Syn starts Excel, opens a workbook, ends. Excel must stay, showing
        the workbook, and a plain Quit() afterwards must really end it.
+    3. As 1, but mcpgate is killed instead of ending: the helper must go
+       within seconds, and Excel with it.
 
   Only a copy under testbed\docs is opened (new-testbed-docs.ps1 makes
   them). Excel must not be running when this starts: a person's own Excel
@@ -141,6 +144,22 @@ if ($excel) {
         Verdict 'a plain Quit() ends Excel afterwards' ($took -ge 0) $(if ($took -ge 0) { "gone {0:N1} s after Quit()" -f $took } else { 'EXCEL.EXE still running 40 s after Quit()' })
     }
 }
+# --- 3. Syn ended outright: nobody gets to ask the helper anything ---------
+# Task Manager, a crash, a client that kills its server. The helper notices
+# its launcher has gone and lets go of Office by itself.
+$p = Start-Gate
+$opened = Call $p 'open' @{ app = 'excel'; path = $plan }
+$handle = [regex]::Match($opened, 'Handle: (\S+)').Groups[1].Value
+$null = Call $p 'struct' @{ handle = $handle; verb = 'close' }
+$p.Kill()
+$p.WaitForExit()
+$clock = [Diagnostics.Stopwatch]::StartNew()
+while ((Get-Process office-host -ErrorAction SilentlyContinue) -and $clock.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 250 }
+$hostGone = -not (Get-Process office-host -ErrorAction SilentlyContinue)
+Verdict 'the helper goes when Syn is killed outright' $hostGone $(if ($hostGone) { "gone {0:N1} s after the kill" -f $clock.Elapsed.TotalSeconds } else { 'office-host.exe still running 20 s after the kill' })
+$took = Wait-ExcelGone 20
+Verdict 'Excel Syn started goes too, with nothing open' ($took -ge 0) $(if ($took -ge 0) { "gone {0:N1} s after the kill" -f $took } else { 'EXCEL.EXE still running 20 s after the kill' })
+if (Get-Process EXCEL -ErrorAction SilentlyContinue) { Get-Process EXCEL | Stop-Process -Force; Start-Sleep -Seconds 2 }
 if (Get-Process office-host -ErrorAction SilentlyContinue) { Verdict 'no office-host is left' $false 'office-host.exe is still running' }
 
 Write-Host ''

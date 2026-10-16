@@ -285,9 +285,16 @@ C# helper is written the way it is:
     has nothing open then exits by itself 2 to 3 s later; Excel with a
     workbook open stays, showing it, and a plain `Quit()` ends it in 3 s,
     also when the helper was started by the console (`cli` given `open`
-    and `quit`, which is what closing the window does). A helper that is killed
-    for any other reason (Syn's own process killed, the job object) still
-    cannot do this; that case is no worse than before.
+    and `quit`, which is what closing the window does).
+    Ending Syn outright (Task Manager, a crash, a client that kills its
+    server) sets no event, and the job object that ties helpers to Syn used
+    to end the helper at that instant: Excel was then still running 25
+    minutes later. The Office helper on Windows is now kept out of the job
+    and is told who started it (`--parent <pid>`, desk.rs `start`); it waits
+    for that process, drains and lets go as above, and leaves after ten
+    seconds whatever Office is doing, so it still cannot outlive Syn. Killed
+    that way it was gone 0.2 to 0.3 s later and Excel with nothing open 2 s
+    after that; a workbook the person had open stayed open.
     `scripts\live-helper-exit.ps1` checks it, and fails against the older
     helper. Word and PowerPoint go through the same code: after the whole
     peak run, a plain `Quit()` on all three ended Word and Excel within 25 s

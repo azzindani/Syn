@@ -21,6 +21,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.CSharp.RuntimeBinder;
 using System.IO;
@@ -39,6 +40,9 @@ namespace Syn.Sidecar
         private static string _app = "excel";
         private static volatile bool _stop;
         private static bool _trace;
+        /// <summary>The launcher's process id (`--parent`), or 0 when the
+        /// helper was started by hand and answers to nobody.</summary>
+        private static int _parent;
 
         /// <summary>How many clients may be connected at once: the console,
         /// a few MCP clients, a terminal.</summary>
@@ -72,6 +76,7 @@ namespace Syn.Sidecar
             {
                 if (args[i] == "--pipe") _pipe = args[i + 1];
                 if (args[i] == "--app") _app = args[i + 1].ToLowerInvariant();
+                if (args[i] == "--parent" && int.TryParse(args[i + 1], out var parent)) _parent = parent;
             }
             if (_app is not ("word" or "excel" or "powerpoint"))
             {
@@ -102,6 +107,28 @@ namespace Syn.Sidecar
                 stopEvent.WaitOne();
                 RequestStop("stop requested by the program that started this helper: draining");
             }) { IsBackground = true, Name = "stop-listener" }.Start();
+            // The same release when the launcher is ended outright (Task
+            // Manager, a crash, a client that kills its server): no event is
+            // set then, and the job object that used to end this helper with
+            // it left Excel unable to exit for more than 25 minutes. The
+            // launcher says who it is; this waits for it to go, drains, and
+            // gives the drain ten seconds before leaving anyway, because a
+            // helper must not outlive Syn however Office behaves.
+            if (_parent > 0)
+            {
+                new Thread(() =>
+                {
+                    try
+                    {
+                        using var parent = Process.GetProcessById(_parent);
+                        parent.WaitForExit();
+                    }
+                    catch (ArgumentException) { /* already gone */ }
+                    RequestStop("the program that started this helper has gone: draining");
+                    Thread.Sleep(10000);
+                    Environment.Exit(0);
+                }) { IsBackground = true, Name = "parent-watch" }.Start();
+            }
             var sta = new Thread(Run) { IsBackground = true };
             sta.SetApartmentState(ApartmentState.STA);
             sta.Start();

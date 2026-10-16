@@ -62,8 +62,9 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
 - [ ] Run it a second time: it passes again (it clears its own old
       exports; an export never replaces a file the session did not write).
 - [ ] `powershell -File scripts\live-helper-exit.ps1` (Excel closed first)
-      exits 0: an Excel that Syn started goes when Syn ends, one with a
-      workbook open stays, and a plain `Quit()` ends either.
+      exits 0: an Excel that Syn started goes when Syn ends (also when Syn
+      is killed), one with a workbook open stays, and a plain `Quit()` ends
+      either.
 
 ## 3. What this round changed and only Windows can show
 
@@ -74,7 +75,9 @@ powershell -File scripts\live-office-peak.ps1     # one PASS/FAIL line per step
 - [ ] **Nothing left behind.** With the console running and a turn going
       (ask for something long), end `ui.exe` in Task Manager. Within a few
       seconds `cli.exe`, `office-host.exe` and `curl.exe` are gone too
-      (the job object). Office and its documents stay.
+      (the job object; the Office helper watches its launcher and lets
+      go of Office itself, which is what lets Excel exit later). Office and
+      its documents stay.
 - [ ] **Stop button.** During a long turn, press Stop. The run ends; if it
       had to restart the CLI, the page reloads onto the same chat.
 - [ ] **Exports stay home.** Pick a workspace folder above the message box,

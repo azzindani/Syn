@@ -35,10 +35,12 @@ port).
   sent to it is refused until a key is added in Settings, or
   `AGENT_API_KEY_OPENCODE` (Zen), `AGENT_API_KEY_OPENCODE_GO` (Go) or
   `AGENT_API_KEY_OPENROUTER` is set.
-  The exception is Zen's free models (tagged free): with no Zen key they go
-  with the key `public`, as OpenCode sends them. Zen keeps some of them to
-  OpenCode's own app, and refuses those with "OpenCode's free tier can only
-  be used from within OpenCode".
+  Zen's free models (tagged free) are sent with the key `public` when there
+  is no Zen key, as OpenCode sends them, but they do not run that way: Zen
+  keeps them to OpenCode's own app and refuses Syn with "OpenCode's free tier
+  can only be used from within OpenCode". All nine it offered on 2026-10-18
+  did. Syn does not pretend to be OpenCode to get past that, so a first start
+  needs a key like any other.
   "Automatic" means the model in `.env`.
 - **The thinking level** (auto, low, medium, high) sets how hard the model
   reasons before it answers.

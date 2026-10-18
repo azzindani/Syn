@@ -379,9 +379,12 @@ pub fn explain_error(status: u16, body: &str) -> String {
     match status {
         429 => format!("rate limited (429): {note}"),
         // Zen, asked for a free model it keeps to OpenCode's own app. Not a
-        // bad key, so "check your key" sent people to the wrong place.
+        // bad key, so "check your key" sent people to the wrong place. Nor is
+        // "pick another free model" any help: on 2026-10-18 all nine of Zen's
+        // free models refused a keyless request from Syn this way, and a
+        // person following that advice went from one refusal to the next.
         403 if note.contains("free tier can only be used from within OpenCode") => format!(
-            "rejected ({status}): {note}. OpenCode keeps this free model to its own app: pick another model tagged free, or set AGENT_API_KEY_OPENCODE."
+            "rejected ({status}): {note}. OpenCode keeps its free models to its own app, so with no key of your own Syn is refused: add a key in Settings (AGENT_API_KEY_OPENCODE for Zen), or use a model from a provider you have a key for."
         ),
         // Where the key lives depends on how Syn was started: Settings in
         // the console, an AGENT_API_KEY* line in .env for a slot. Naming one
@@ -1194,7 +1197,8 @@ mod tests {
         let body = r#"{"type":"error","error":{"type":"ForbiddenError","message":"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"}}"#;
         let m = explain_error(403, body);
         assert!(m.contains("can only be used from within OpenCode"), "{m}");
-        assert!(m.contains("pick another model tagged free"), "{m}");
+        assert!(m.contains("add a key in Settings"), "{m}");
+        assert!(!m.contains("pick another model tagged free"), "another free model is refused the same way: {m}");
         assert!(!m.contains("Check AGENT_API_KEY."), "{m}");
     }
 

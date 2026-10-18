@@ -1597,10 +1597,12 @@ function paintModels() {
     }
     if (!prov.ready) {
       foot.appendChild(el("br"));
-      // Zen's free models go without a key, as OpenCode sends them; the
-      // provider can still keep some to its own app, and says so if it does.
+      // Zen's free models are sent with no key, as OpenCode sends them, but
+      // OpenCode keeps them to its own app: on 2026-10-18 every one of them
+      // refused Syn with a 403. This said they "can be tried now", and the
+      // first person to try one met the refusal. Say what to expect.
       const w = el("span", "warn", prov.free_without_key
-        ? "No key yet: models tagged free can be tried now (OpenCode may keep some to its own app). Add a key for the rest."
+        ? "No key yet. OpenCode keeps its free models to its own app, so Syn is usually refused without a key. Add one."
         : "No key for this provider yet.");
       foot.appendChild(w);
       const add = el("button", "addkey", "Add key");
@@ -1883,14 +1885,15 @@ function openSettings(focus) {
   void paintKeys(focus);
 }
 
-// Nothing can answer without a key, except the free models that need none;
-// a first start says so where the person is about to type.
+// Nothing can answer without a key (OpenRouter's free models want one, and
+// OpenCode Zen refuses its own to Syn without one); a first start says so
+// where the person is about to type.
 function noKeyBanner(keys) {
   const none = !keys.some(k => k.source !== "none");
   setBanner("nokey", none ? {
     variant: "warning",
     title: "Add an API key to start",
-    description: "Syn needs a key from a model provider to answer. Models tagged free work without one.",
+    description: "Syn needs a key from a model provider to answer. Paste one in Settings: free models need one too.",
     action: { label: "Open settings", run: () => openSettings() },
   } : null);
 }

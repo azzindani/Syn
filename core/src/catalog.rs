@@ -128,10 +128,13 @@ pub fn is_free_id(id: &str) -> bool {
 /// `public` when no key is set (`provider.ts`, its `opencode` loader), and so
 /// does this. Only Zen, and only its `-free` models -- a paid model answers
 /// "Missing API key", and OpenRouter's `:free` models still want an
-/// OpenRouter key. Zen may still refuse a free model to anything that is not
-/// OpenCode ("OpenCode's free tier can only be used from within OpenCode"),
-/// which reaches the person as Zen said it: Syn does not pretend to be
-/// OpenCode to get past that.
+/// OpenRouter key. Zen refuses a free model to anything that is not OpenCode
+/// ("OpenCode's free tier can only be used from within OpenCode"), which
+/// reaches the person as Zen said it: Syn does not pretend to be OpenCode to
+/// get past that. In practice that is every one of them: on 2026-10-18 all
+/// nine of Zen's `-free` models answered a keyless request with that 403
+/// (HTTP, FreeTierError), so this keeps the request honest, not working. The
+/// UI must not promise that a free model runs with no key.
 pub fn keyless(base_url: &str, model: &str) -> bool {
     base_url.trim().trim_end_matches('/') == OPENCODE_BASE_URL && model.ends_with("-free")
 }

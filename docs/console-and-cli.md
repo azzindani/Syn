@@ -85,6 +85,31 @@ The console binds 127.0.0.1 only, and refuses any command whose `Origin` is
 not its own page (and any with no `Origin`), so neither another machine nor a
 web page you happen to visit can send it commands.
 
+### The window follows the work
+
+Syn changes documents through the applications' own interfaces, which never
+move their windows, so a column filled at row 50,000 or a chart put at S3 used
+to happen out of sight. After a change, the application's window now goes to
+what Syn made:
+
+- **Excel**: the sheet it changed is brought up, and the cells, table, pivot,
+  chart or slicer are scrolled to the middle of the window and selected (a
+  drawing by its handles). A block larger than the window is put at its
+  top-left edge instead, and cells inside frozen rows or columns are already
+  in view on that axis.
+- **Word**: the paragraph or table it wrote is scrolled into view, a third of
+  the way down the window, and selected.
+- **PowerPoint**: the window goes to the slide it made, changed, duplicated or
+  moved.
+
+It only moves the view. Nothing in the document changes, and a window that is
+hidden or busy is left alone; the call it follows has already succeeded.
+
+An Office window Syn opens does not raise a taskbar set to hide itself: the
+helper shows the application's frame without activating it and stops the
+taskbar button flashing, which Windows would otherwise do for a window that
+cannot take the focus from the one you are typing in.
+
 ### Windows side by side
 
 Watching Syn work means Syn down one side of the screen and Excel, Word or

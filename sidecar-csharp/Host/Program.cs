@@ -299,6 +299,11 @@ namespace Syn.Sidecar
             // Visible is an MsoTriState and DisplayAlerts is ppAlertsNone,
             // so the boolean form fails the cast rather than the call.
             var ppt = _app == "powerpoint";
+            // Word and PowerPoint are shown without activation first and their
+            // taskbar flash stopped (Calm.cs); Excel's frame comes with its
+            // first workbook.
+            CalmFrames(20);
+            if (_app != "excel") ShowFrameQuietly();
             Settle(() => { if (ppt) app.Visible = -1; else app.Visible = true; }, "Visible");
             Settle(() => { if (ppt) app.DisplayAlerts = 1; else app.DisplayAlerts = false; }, "DisplayAlerts");
             if (_app == "excel") SweepOrphanScratch((object)app);
@@ -773,7 +778,7 @@ namespace Syn.Sidecar
             {
                 var doc = FindWordDoc(app, handle) ?? throw new InvalidOperationException($"doc not open for {handle}");
                 var args = JsonField(line, "args");
-                return method switch
+                var reply = method switch
                 {
                     "read" => Ok(WordRead((object)doc, selector)),
                     "write" when selector.StartsWith("p") && int.TryParse(selector[1..], out var m) =>
@@ -804,6 +809,8 @@ namespace Syn.Sidecar
                     "close" => CloseWord(doc),
                     _ => throw new InvalidOperationException($"unsupported word.{method} sel={selector}"),
                 };
+                if (IsOk(reply)) RevealWord(app, doc, method, selector, args);
+                return reply;
             });
 
         /// <summary>Paragraphs a read may return before it stops and says
@@ -1421,7 +1428,7 @@ namespace Syn.Sidecar
             {
                 var wb = FindWorkbook(app, handle) ?? throw new InvalidOperationException($"workbook not open for {handle}");
                 var args = JsonField(line, "args");
-                return method switch
+                var reply = method switch
                 {
                     "read" => Ok(ReadRange(wb, selector)),
                     "write" => WriteRange(wb, handle, selector, JsonField(line, "payload")),
@@ -1463,6 +1470,10 @@ namespace Syn.Sidecar
                     "close" => CloseExcel(wb),
                     _ => throw new InvalidOperationException($"unsupported excel.{method}"),
                 };
+                // After the change, so a failed call moves nothing and an
+                // undo record is already taken (Reveal.cs).
+                if (IsOk(reply)) Reveal(app, wb, method, selector, args);
+                return reply;
             });
 
         private static dynamic? FindWorkbook(dynamic app, string handle)
@@ -2568,7 +2579,7 @@ namespace Syn.Sidecar
                 dynamic pres = FindPresentation(app, handle)
                     ?? throw new InvalidOperationException($"presentation not open for {handle}");
                 var args = JsonField(line, "args");
-                return method switch
+                var reply = method switch
                 {
                     "read" when selector is "deck" or "" => Ok(ReadDeck(pres)),
                     "read" => Ok(ReadSlide(pres, selector)),
@@ -2595,6 +2606,8 @@ namespace Syn.Sidecar
                     "close" => ClosePres(pres),
                     _ => throw new InvalidOperationException($"unsupported ppt.{method} sel={selector}"),
                 };
+                if (IsOk(reply)) RevealPpt(app, pres, method, selector, args);
+                return reply;
             });
 
         // By name, like the workbook and the document. ActivePresentation is

@@ -453,6 +453,32 @@ mod win {
         fn MonitorFromWindow(h: isize, flags: u32) -> isize;
         fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
         fn SetThreadDpiAwarenessContext(ctx: isize) -> isize;
+        fn FlashWindowEx(info: *const FlashInfo) -> i32;
+    }
+
+    /// FLASHWINFO. `flags` 0 is FLASHW_STOP.
+    #[repr(C)]
+    struct FlashInfo {
+        size: u32,
+        hwnd: isize,
+        flags: u32,
+        count: u32,
+        timeout: u32,
+    }
+
+    /// Stop `h`'s taskbar button from flashing. An Office window opened by
+    /// the helper, while the person types in Syn, cannot take the foreground,
+    /// so Windows flashes its button instead, and a taskbar set to hide
+    /// itself slides up and stays up until the window is used: it ruined a
+    /// recording (measured: it rose 2 s after the open and was still up 20 s
+    /// later). Stopping the flash puts the taskbar back and leaves focus
+    /// where the person is typing. A window that is not flashing is
+    /// unaffected.
+    fn calm(h: isize) {
+        let info = FlashInfo { size: std::mem::size_of::<FlashInfo>() as u32, hwnd: h, flags: 0, count: 0, timeout: 0 };
+        // SAFETY: `info` is a FLASHWINFO with its size set, as the call needs;
+        // a window that has gone makes the call fail, which is not a fault.
+        unsafe { FlashWindowEx(&info) };
     }
 
     #[link(name = "dwmapi")]
@@ -748,6 +774,7 @@ mod win {
         // Placed again at once, so a window that already moved since `arrange`
         // is caught, and a window that is in place is left alone.
         let mut landed = place(h, want);
+        calm(h);
         let until = Instant::now() + HOLD;
         while Instant::now() < until {
             std::thread::sleep(Duration::from_millis(300));
@@ -755,6 +782,7 @@ mod win {
             if unsafe { IsWindow(h) } == 0 {
                 return;
             }
+            calm(h);
             let now = drawn_rect(h);
             if now != landed {
                 landed = place(h, want);
@@ -795,6 +823,9 @@ mod win {
                 if available() {
                     let _px = Pixels::real();
                     if let Some((h, name)) = window_of(class, &shared::syn_windows()) {
+                        // First thing, before anything is measured: every
+                        // moment the button flashes the taskbar is up.
+                        calm(h);
                         if first_time(h)
                             && let Ok(Done { partner: Some((p, rest)), .. }) = arrange(prefs.request(), Partner::Window(h, name))
                         {
@@ -803,7 +834,9 @@ mod win {
                         return;
                     }
                 }
-                std::thread::sleep(Duration::from_millis(250));
+                // Short: the window is looked for the moment it can exist, so
+                // its flash is stopped before the taskbar has finished rising.
+                std::thread::sleep(Duration::from_millis(40));
             }
         });
     }

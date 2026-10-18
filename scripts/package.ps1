@@ -141,6 +141,13 @@ WEB PAGES
   number: it asks you to. The browser goes when Syn does. To turn it off,
   add AGENT_BROWSER=off to .env.
 
+WINDOWS SAYS "WINDOWS PROTECTED YOUR PC"?
+  Syn is not code-signed yet, so SmartScreen calls it an unknown publisher.
+  Click More info, then Run anyway. To not be asked, unblock the file
+  first: right-click it, Properties, tick Unblock, OK. With the zip, unblock
+  the zip before you unzip it, or every program in it is asked about.
+  See docs\code-signing.md.
+
 NEEDS
   Windows 10 or 11, and desktop Microsoft Office (Microsoft 365 or a
   perpetual version) for documents. Nothing else: the Office helper carries

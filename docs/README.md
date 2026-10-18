@@ -9,6 +9,7 @@
 - [Configuration](configuration.md) — every setting.
 - [Security](security.md) — what a model can and cannot do, and what stays with you.
 - [Troubleshooting](troubleshooting.md) — errors, setup problems, diagnostics.
+- [Code signing](code-signing.md) — why Windows warns about the installer, and how signing is wired.
 
 **Working on Syn**
 

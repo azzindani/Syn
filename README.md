@@ -57,8 +57,10 @@ default, and any MCP client can use the same tools.
 **The installer**, needing only Windows 10/11 and desktop Office: download
 `Syn-<version>-setup.exe` from Releases and run it (no administrator
 rights needed), start Syn from the Start menu, and add an API key with the
-key icon in the sidebar. A zip of the same files is there too, for anyone
-who would rather not install. To build both yourself:
+key icon in the sidebar. The installer is not code-signed yet, so Windows
+SmartScreen says "Unknown publisher": choose *More info*, then *Run anyway*
+(see [Troubleshooting](docs/troubleshooting.md)). A zip of the same files is
+there too, for anyone who would rather not install. To build both yourself:
 `powershell -File scripts\package.ps1` (with NSIS for the installer).
 
 **From source**, needing Rust and the .NET 8 SDK as well:
@@ -116,6 +118,26 @@ documents, reading and writing, the gates, and a 217-operation scripted run
 across Excel, Word and PowerPoint (`tests/capability/`). The complete verb
 set, undo and exports are verified live against LibreOffice on every push;
 `scripts\live-office-peak.ps1` is the check that proves them on Office.
+
+## Code signing policy
+
+Syn's Windows installer is **not code-signed yet**, which is why Windows
+SmartScreen shows "Unknown publisher". This is the policy under which
+releases will be signed once a certificate is in place; how it is wired is in
+[docs/code-signing.md](docs/code-signing.md).
+
+- **What is signed:** `Syn-<version>-setup.exe` of a tagged release, built by
+  this repository's GitHub Actions workflow from the tagged commit. Nothing
+  built anywhere else is signed.
+- **Who:** the maintainer, [@azzindani](https://github.com/azzindani), is the
+  committer, the reviewer and the approver. A release is signed only from a
+  `v*` tag in this repository, and the maintainer approves each signing
+  request.
+- **Privacy:** Syn collects no telemetry, analytics or crash reports and does
+  not check for updates. What you ask it to work on, document content
+  included, goes only to the model endpoint you configure (OpenRouter by
+  default), and it asks that endpoint for its list of models; its browser
+  loads only the pages you ask it to open. Nothing else is sent anywhere.
 
 ## License
 

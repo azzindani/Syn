@@ -18,6 +18,15 @@ ones:
 
 ## Setup problems
 
+**Windows says "Windows protected your PC" when I run the installer.** The
+installer is not code-signed yet, and SmartScreen warns about any program it
+has no history of: the screen reads "Unknown publisher". Click *More info*,
+then *Run anyway*. To not be asked at all, unblock the file first: right-click
+the downloaded `Syn-<version>-setup.exe`, choose Properties, tick *Unblock*
+under Security and press OK, or run `Unblock-File .\Syn-<version>-setup.exe`
+in PowerShell. For the zip, unblock the zip *before* extracting it: files
+taken out of a blocked zip are blocked too. See [code signing](code-signing.md).
+
 **`office-host.exe` does not attach to my open workbook.** The helper and
 Office must run as the same user, at the same privilege level: an elevated
 (administrator) helper cannot see a normal Excel, and vice versa. Office COM

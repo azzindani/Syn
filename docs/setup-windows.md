@@ -14,7 +14,9 @@ appears in Settings > Apps to uninstall; uninstalling asks before it
 deletes your chats and saved keys. The same files come as
 `Syn-<version>-win-x64.zip` for anyone who would rather unzip and
 double-click `syn.exe`. The installer is not code-signed yet, so Windows
-SmartScreen warns the first time: More info, then Run anyway. Syn opens in
+SmartScreen warns the first time ("Unknown publisher"): More info, then Run
+anyway, or unblock the file first (see Troubleshooting and
+[code signing](code-signing.md)). Syn opens in
 a window of its own, titled Syn, with no tabs, no address bar and no
 terminal window, and with its own icon and taskbar button. The Start menu
 runs `syn.exe`, which starts the console (`ui.exe`) with none, and

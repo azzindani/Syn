@@ -171,7 +171,15 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME (Get-Item dist/*-setup.exe).FullName (Get-Item dist/*.zip).FullName --title "Syn $env:GITHUB_REF_NAME" --generate-notes
+        # The notes are docs/releases/<tag>.md when that file exists, so they
+        # are written, reviewed and tagged with the code; generated notes
+        # only list pull requests, and this project works on main.
+        run: |
+          $notes = "docs/releases/$env:GITHUB_REF_NAME.md"
+          # Typed as an array: a one-item result would otherwise be a plain
+          # string, and splatting a string passes it one letter at a time.
+          [string[]]$body = if (Test-Path $notes) { '--notes-file', $notes } else { '--generate-notes' }
+          gh release create $env:GITHUB_REF_NAME (Get-Item dist/*-setup.exe).FullName (Get-Item dist/*.zip).FullName --title "Syn $env:GITHUB_REF_NAME" @body
 
   # The fixture, the scorers and the smoke scripts are PowerShell, and a
   # parse error in one of them is silent: the shell reports it and carries

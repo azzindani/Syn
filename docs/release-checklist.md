@@ -163,5 +163,8 @@ cd tests\ui && npm install && npm test && npm run audit
 ## 6. Tag
 
 - [ ] Every box above ticked, CI green on the commit.
-- [ ] `git tag v0.1.0 && git push origin v0.1.0`. CI builds the package
-      again and publishes it as the `v0.1.0` release with generated notes.
+- [ ] The version in `core/Cargo.toml` is the one being tagged, and the notes
+      are written in `docs/releases/<tag>.md`.
+- [ ] `git tag -a v0.1.0 -m "Syn 0.1.0" && git push origin v0.1.0`. CI builds
+      the package again and publishes it as the `v0.1.0` release, with the
+      notes file as its notes (generated notes only if there is none).

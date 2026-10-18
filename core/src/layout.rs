@@ -747,7 +747,14 @@ mod win {
         // the person is still talking to.
         // SAFETY: plain calls on a window handle.
         unsafe { SetWindowPos(syn, HWND_TOP, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE) };
-        shared::raise(syn);
+        // Not `shared::raise(syn)` (SetForegroundWindow) as it was: this runs in
+        // Syn's helper, which is not the process the person is typing in, so
+        // Windows refuses to hand it the foreground and flashes Syn's taskbar
+        // button instead, and a taskbar set to hide itself slid up at every
+        // Excel or Word open (and again each time Syn started). Syn is already
+        // in front where the two meet, from the call above; what the helper may
+        // do is only make sure its button is not flashing.
+        calm(syn);
         Ok(Done {
             text: describe(req, beside.as_ref().map(|(_, who)| who.as_str()), crowded),
             partner: beside.map(|(h, _)| (h, rest)),

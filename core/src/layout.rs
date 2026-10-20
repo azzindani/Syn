@@ -674,12 +674,17 @@ mod win {
         })
     }
 
-    /// The topmost window of `class` that a person could be looking at.
-    fn window_of(class: &str, ours: &[isize]) -> Option<(isize, String)> {
-        candidates(ours).into_iter().find_map(|c| match c.pick {
-            Pick::Office(app) if c.class == class => Some((c.h, app.to_string())),
-            _ => None,
-        })
+    /// Every window of `class` that a person could be looking at, topmost
+    /// first. Excel gives each workbook a window of its own, so one `open`
+    /// of four files is four windows, not one.
+    fn windows_of(class: &str, ours: &[isize]) -> Vec<(isize, String)> {
+        candidates(ours)
+            .into_iter()
+            .filter_map(|c| match c.pick {
+                Pick::Office(app) if c.class == class => Some((c.h, app.to_string())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Which application's window goes beside Syn.
@@ -829,15 +834,28 @@ mod win {
                 }
                 if available() {
                     let _px = Pixels::real();
-                    if let Some((h, name)) = window_of(class, &shared::syn_windows()) {
+                    // Every window of the application, not the topmost one: a
+                    // turn that opens four workbooks at once starts four of
+                    // these threads while the windows are still coming up, and
+                    // they all saw the same topmost window. The other three
+                    // were never placed and stayed on whatever screen Excel
+                    // put them (the logistics recording, 2026-10-20). A window
+                    // already placed is skipped by `first_time`, so each thread
+                    // takes the ones no one has.
+                    let mut placed_any = false;
+                    for (h, name) in windows_of(class, &shared::syn_windows()) {
                         // First thing, before anything is measured: every
                         // moment the button flashes the taskbar is up.
                         calm(h);
-                        if first_time(h)
-                            && let Ok(Done { partner: Some((p, rest)), .. }) = arrange(prefs.request(), Partner::Window(h, name))
-                        {
-                            hold(p, rest);
+                        if first_time(h) {
+                            placed_any = true;
+                            if let Ok(Done { partner: Some((p, rest)), .. }) = arrange(prefs.request(), Partner::Window(h, name)) {
+                                // Held on its own thread, so the next window is not waiting for this one's seconds.
+                                std::thread::spawn(move || hold(p, rest));
+                            }
                         }
+                    }
+                    if placed_any {
                         return;
                     }
                 }

@@ -62,7 +62,18 @@ jobs:
           # sandbox is built on. This is a throwaway profile on fixtures.
           SYN_BROWSER_NO_SANDBOX: "1"
       - name: live test of an attached browser through mcpgate
-        run: /usr/bin/python3 -m unittest discover -s tests -p test_cdp_live.py -v
+        # The failure is also written as an annotation: a run's log needs a
+        # GitHub sign-in to read, the annotations do not, and "Process completed
+        # with exit code 1" (the 2026-10-20 run) said nothing about why.
+        run: |
+          set +e
+          /usr/bin/python3 -m unittest discover -s tests -p test_cdp_live.py -v > cdp.log 2>&1
+          code=$?
+          cat cdp.log
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=test_cdp_live failed::$(tail -c 1800 cdp.log | tr -d '\r' | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+          fi
+          exit "$code"
         env:
           SYN_REQUIRE_BROWSER: "1"
           # Newer runner images restrict the user namespaces Chrome's
